@@ -1,0 +1,1095 @@
+{
+  "environment": {
+    "arch": "aarch64",
+    "cpu": "Apple M4 Pro",
+    "driver's event permissions": "post true, listen true. When run from a terminal these are that terminal's grants, not Orbit's",
+    "e2e data set": "empty",
+    "hyper test": "F19 as the trigger, under the grants the driver inherits, not Orbit.app's own",
+    "load average at start": "3.26 3.51 3.58",
+    "logical processors": "12",
+    "macos": "27.2 (26B123)",
+    "memory free at start": "79%",
+    "model": "Mac16,8",
+    "orbit version": "0.1.0",
+    "os": "macos",
+    "power": "AC Power",
+    "profile": "release",
+    "ram": "24 GB",
+    "screen locked at start": "no"
+  },
+  "metrics": [
+    {
+      "name": "binary size: Orbit",
+      "value": 3343.765625,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "app index: scan in its own process",
+      "value": 25.668042,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "app index: that process's peak RSS (wait4 ru_maxrss)",
+      "value": 24272.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "app index: apps found",
+      "value": 122.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "startup: process spawned to shortcut registered and ready (warm disk cache) p50",
+      "value": 125.33408333333333,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "startup: process spawned to shortcut registered and ready (warm disk cache) p95",
+      "value": 130.56433333333334,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "startup: process spawned to shortcut registered and ready (warm disk cache) p99",
+      "value": 130.56433333333334,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "startup: process spawned to shortcut registered and ready (warm disk cache) max",
+      "value": 130.56433333333334,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "startup: process spawned to shortcut registered and ready (warm disk cache) samples",
+      "value": 5.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "memory at idle after start: footprint (task_info phys_footprint)",
+      "value": 14816.9140625,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory at idle after start: resident (task_info resident_size, includes shared frameworks)",
+      "value": 81040.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory at idle after start: peak footprint so far",
+      "value": 14832.9140625,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "threads at idle after start",
+      "value": 15.0,
+      "unit": "count",
+      "gated": true
+    },
+    {
+      "name": "no key path: notification to on screen (CGWindowList polling) p50",
+      "value": 9.6085,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: notification to on screen (CGWindowList polling) p95",
+      "value": 13.690166666666666,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: notification to on screen (CGWindowList polling) p99",
+      "value": 52.340583333333335,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: notification to on screen (CGWindowList polling) max",
+      "value": 52.340583333333335,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: notification to on screen (CGWindowList polling) samples",
+      "value": 30.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 callback to T1 frame prepared p50",
+      "value": 4.479166666666666,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 callback to T1 frame prepared p95",
+      "value": 6.3531249999999995,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 callback to T1 frame prepared p99",
+      "value": 16.782791666666665,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 callback to T1 frame prepared max",
+      "value": 16.782791666666665,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 callback to T1 frame prepared samples",
+      "value": 30.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T2 ordered front and committed p50",
+      "value": 5.226208333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T2 ordered front and committed p95",
+      "value": 7.2203333333333335,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T2 ordered front and committed p99",
+      "value": 36.96341666666667,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T2 ordered front and committed max",
+      "value": 36.96341666666667,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T2 ordered front and committed samples",
+      "value": 30.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T2b window server reports visible p50",
+      "value": 17.405,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T2b window server reports visible p95",
+      "value": 22.981916666666667,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T2b window server reports visible p99",
+      "value": 70.47808333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T2b window server reports visible max",
+      "value": 70.47808333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T2b window server reports visible samples",
+      "value": 30.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T3 panel key and editing p50",
+      "value": 11.924416666666666,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T3 panel key and editing p95",
+      "value": 15.737583333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T3 panel key and editing p99",
+      "value": 63.466874999999995,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T3 panel key and editing max",
+      "value": 63.466874999999995,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T0 to T3 panel key and editing samples",
+      "value": 30.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "memory after opens: footprint (task_info phys_footprint)",
+      "value": 30817.0078125,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after opens: resident (task_info resident_size, includes shared frameworks)",
+      "value": 103248.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after opens: peak footprint so far",
+      "value": 35841.0078125,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "no key path: T4 query seen to T5 results built p50",
+      "value": 0.088875,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "no key path: T4 query seen to T5 results built p95",
+      "value": 0.14691666666666667,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "no key path: T4 query seen to T5 results built p99",
+      "value": 5.9941249999999995,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T4 query seen to T5 results built max",
+      "value": 5.9941249999999995,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T4 query seen to T5 results built samples",
+      "value": 53.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "no key path: T5 to T6 row view drawn p50",
+      "value": 2.946625,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "no key path: T5 to T6 row view drawn p95",
+      "value": 4.843166666666667,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "no key path: T5 to T6 row view drawn p99",
+      "value": 5.247791666666666,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T5 to T6 row view drawn max",
+      "value": 5.247791666666666,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T5 to T6 row view drawn samples",
+      "value": 53.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "no key path: T4 to T6 total p50",
+      "value": 3.036,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "no key path: T4 to T6 total p95",
+      "value": 5.143375,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "no key path: T4 to T6 total p99",
+      "value": 9.410833333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T4 to T6 total max",
+      "value": 9.410833333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: T4 to T6 total samples",
+      "value": 53.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "memory after typing: footprint (task_info phys_footprint)",
+      "value": 34305.0078125,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after typing: resident (task_info resident_size, includes shared frameworks)",
+      "value": 116112.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after typing: peak footprint so far",
+      "value": 48945.03125,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "memory after 500 searches: footprint (task_info phys_footprint)",
+      "value": 36033.0078125,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after 500 searches: resident (task_info resident_size, includes shared frameworks)",
+      "value": 118448.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after 500 searches: peak footprint so far",
+      "value": 55825.03125,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "no key path: Enter to new process running p50",
+      "value": 9.026375,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: Enter to new process running p95",
+      "value": 52.26208333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: Enter to new process running p99",
+      "value": 52.26208333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: Enter to new process running max",
+      "value": 52.26208333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: Enter to new process running samples",
+      "value": 10.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "no key path: Enter received to action dispatched p50",
+      "value": 4.365625,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "no key path: Enter received to action dispatched p95",
+      "value": 5.429791666666667,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "no key path: Enter received to action dispatched p99",
+      "value": 5.429791666666667,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: Enter received to action dispatched max",
+      "value": 5.429791666666667,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "no key path: Enter received to action dispatched samples",
+      "value": 10.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "memory after 10 launches: footprint (task_info phys_footprint)",
+      "value": 36049.0078125,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after 10 launches: resident (task_info resident_size, includes shared frameworks)",
+      "value": 118992.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after 10 launches: peak footprint so far",
+      "value": 55825.03125,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to on screen (external, CGWindowList polling) p50",
+      "value": 17.946916666666667,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: key injected to on screen (external, CGWindowList polling) p95",
+      "value": 24.468875,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: key injected to on screen (external, CGWindowList polling) p99",
+      "value": 36.562041666666666,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to on screen (external, CGWindowList polling) max",
+      "value": 36.562041666666666,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to on screen (external, CGWindowList polling) samples",
+      "value": 30.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 hotkey callback to T1 frame prepared p50",
+      "value": 4.187416666666667,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 hotkey callback to T1 frame prepared p95",
+      "value": 6.51875,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 hotkey callback to T1 frame prepared p99",
+      "value": 6.659416666666666,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 hotkey callback to T1 frame prepared max",
+      "value": 6.659416666666666,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 hotkey callback to T1 frame prepared samples",
+      "value": 30.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2 ordered front and committed p50",
+      "value": 5.033791666666667,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 to T2 ordered front and committed p95",
+      "value": 7.544833333333333,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 to T2 ordered front and committed p99",
+      "value": 7.637458333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2 ordered front and committed max",
+      "value": 7.637458333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2 ordered front and committed samples",
+      "value": 30.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2b window server reports visible p50",
+      "value": 20.75358333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2b window server reports visible p95",
+      "value": 23.708291666666664,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2b window server reports visible p99",
+      "value": 25.287333333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2b window server reports visible max",
+      "value": 25.287333333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2b window server reports visible samples",
+      "value": 30.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T3 panel key and editing p50",
+      "value": 15.154333333333334,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 to T3 panel key and editing p95",
+      "value": 21.155625,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 to T3 panel key and editing p99",
+      "value": 21.233166666666666,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T3 panel key and editing max",
+      "value": 21.233166666666666,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T3 panel key and editing samples",
+      "value": 30.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to T0 (OS delivery) p50",
+      "value": 5.352458333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to T0 (OS delivery) p95",
+      "value": 9.143416666666667,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to T0 (OS delivery) p99",
+      "value": 28.694333333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to T0 (OS delivery) max",
+      "value": 28.694333333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to T0 (OS delivery) samples",
+      "value": 30.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "memory after warm opens: footprint (task_info phys_footprint)",
+      "value": 34673.03125,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after warm opens: resident (task_info resident_size, includes shared frameworks)",
+      "value": 120144.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after warm opens: peak footprint so far",
+      "value": 55825.03125,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "typing 0 ms after the shortcut: rounds with all keys captured, of 10",
+      "value": 0.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "typing 0 ms after the shortcut: rounds with no leaked keys, of 10",
+      "value": 0.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 query seen to T5 results built p50",
+      "value": 0.08554166666666667,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T4 query seen to T5 results built p95",
+      "value": 0.11166666666666666,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T4 query seen to T5 results built p99",
+      "value": 0.11599999999999999,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 query seen to T5 results built max",
+      "value": 0.11599999999999999,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 query seen to T5 results built samples",
+      "value": 53.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "typing: T5 to T6 row view drawn p50",
+      "value": 2.5949999999999998,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T5 to T6 row view drawn p95",
+      "value": 3.415375,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T5 to T6 row view drawn p99",
+      "value": 3.644708333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T5 to T6 row view drawn max",
+      "value": 3.644708333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T5 to T6 row view drawn samples",
+      "value": 53.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 to T6 total p50",
+      "value": 2.6718333333333333,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T4 to T6 total p95",
+      "value": 3.5192083333333333,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T4 to T6 total p99",
+      "value": 3.7332916666666667,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 to T6 total max",
+      "value": 3.7332916666666667,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 to T6 total samples",
+      "value": 53.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "typing: key injected to T6 row view drawn p50",
+      "value": 4.99975,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: key injected to T6 row view drawn p95",
+      "value": 8.902125,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: key injected to T6 row view drawn p99",
+      "value": 9.859083333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: key injected to T6 row view drawn max",
+      "value": 9.859083333333333,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: key injected to T6 row view drawn samples",
+      "value": 53.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter injected to new process running p50",
+      "value": 5.9249583333333335,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter injected to new process running p95",
+      "value": 7.971,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter injected to new process running p99",
+      "value": 7.971,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter injected to new process running max",
+      "value": 7.971,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter injected to new process running samples",
+      "value": 10.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter received to launch dispatched p50",
+      "value": 1.5405416666666667,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "launch: Enter received to launch dispatched p95",
+      "value": 1.7500416666666667,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "launch: Enter received to launch dispatched p99",
+      "value": 1.7500416666666667,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter received to launch dispatched max",
+      "value": 1.7500416666666667,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter received to launch dispatched samples",
+      "value": 10.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "launch: Calculator, Enter to process present (pgrep polling, coarse)",
+      "value": 39.029209,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "idle: measured for",
+      "value": 60.003567875,
+      "unit": "s",
+      "gated": false
+    },
+    {
+      "name": "idle: CPU time per minute (proc_pid_rusage)",
+      "value": 31.71398914084977,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "idle: CPU percent of one core",
+      "value": 0.052856648568082955,
+      "unit": "%",
+      "gated": false
+    },
+    {
+      "name": "idle: package idle wakeups per minute",
+      "value": 0.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "idle: interrupt wakeups per minute",
+      "value": 10.999345928477423,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "idle: context switches per minute",
+      "value": 893.9468418235288,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "idle: disk bytes written",
+      "value": 0.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "idle: logical bytes written",
+      "value": 0.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "idle: threads",
+      "value": 4.0,
+      "unit": "count",
+      "gated": true
+    },
+    {
+      "name": "memory after idle: footprint (proc_pid_rusage phys_footprint)",
+      "value": 30497.03125,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after idle: resident (proc_pid_rusage, includes shared frameworks)",
+      "value": 120944.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory peak: footprint this run",
+      "value": 55825.03125,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after idle, self-reported: footprint (task_info phys_footprint)",
+      "value": 30497.03125,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "memory after idle, self-reported: resident (task_info resident_size, includes shared frameworks)",
+      "value": 120944.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "memory after idle, self-reported: peak footprint so far",
+      "value": 55825.03125,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "shutdown: quit to process gone",
+      "value": 12.61275,
+      "unit": "ms",
+      "gated": false
+    }
+  ],
+  "checks": [
+    {
+      "name": "the test chord registers with RegisterEventHotKey",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "notification opens the panel (on screen per CGWindowList)",
+      "passed": 30,
+      "total": 30
+    },
+    {
+      "name": "every character reached the search box",
+      "passed": 53,
+      "total": 53
+    },
+    {
+      "name": "the selected custom command runs, without a shell",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "hotkey opens the panel",
+      "passed": 30,
+      "total": 30
+    },
+    {
+      "name": "the panel holds the keyboard after the hotkey",
+      "passed": 30,
+      "total": 30
+    },
+    {
+      "name": "Esc hides the panel",
+      "passed": 30,
+      "total": 30
+    },
+    {
+      "name": "the previous app is active and its window key after Esc",
+      "passed": 30,
+      "total": 30
+    },
+    {
+      "name": "typing 15 ms after the shortcut: no keys lost",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "typing 15 ms after the shortcut: no keys reach the old window",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "typing 30 ms after the shortcut: no keys lost",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "typing 30 ms after the shortcut: no keys reach the old window",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "a key typed after Esc reaches the previous app",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "real Enter launches the selected command",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "launch real app Calculator",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "survives 40 rapid shortcut presses",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "quit exits cleanly within 5 s",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the event tap starts",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Hyper+K dispatches exactly once",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "Hyper+K leaves no stray k in the focused app",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "a plain k still types with the tap on",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Leader: tap then K dispatches exactly once",
+      "passed": 5,
+      "total": 5
+    },
+    {
+      "name": "Leader: the trigger and K leave nothing in the focused app",
+      "passed": 5,
+      "total": 5
+    },
+    {
+      "name": "Leader: an unmapped key types and ends the wait",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Leader: a key after 2 s types normally",
+      "passed": 1,
+      "total": 1
+    }
+  ],
+  "not_tested": [
+    "true reopening under memory pressure: off by default because it slows the whole machine. Use --pressure-mb N. Not run on the owner's machine.",
+    "after 100 note opens: each opens and activates a window, too disruptive for a shared machine"
+  ]
+}

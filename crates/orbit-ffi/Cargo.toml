@@ -1,0 +1,16 @@
+[package]
+name = "orbit-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C ABI over Orbit's shared crates, for the macOS host. See include/orbit.h for ownership and threading rules."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+orbit-core.workspace = true
+orbit-hotkeys.workspace = true
+orbit-data.workspace = true
+serde.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,4 @@
+module COrbit [system] {
+    header "../../../../crates/orbit-ffi/include/orbit.h"
+    export *
+}

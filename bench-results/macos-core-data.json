@@ -1,0 +1,352 @@
+{
+  "environment": {
+    "arch": "aarch64",
+    "cpu": "Apple M4 Pro",
+    "driver's event permissions": "post true, listen true. When run from a terminal these are that terminal's grants, not Orbit's",
+    "load average at start": "2.76 3.43 3.56",
+    "logical processors": "12",
+    "macos": "27.2 (26B123)",
+    "memory free at start": "78%",
+    "model": "Mac16,8",
+    "orbit version": "0.1.0",
+    "os": "macos",
+    "power": "AC Power",
+    "profile": "release",
+    "ram": "24 GB",
+    "screen locked at start": "no"
+  },
+  "metrics": [
+    {
+      "name": "search 1k: build index",
+      "value": 0.36866699999999997,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 1k: index heap",
+      "value": 171.875,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "search 1k: query p50",
+      "value": 0.0054589999999999994,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 1k: query p95",
+      "value": 0.012833,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 1k: query p99",
+      "value": 0.017292,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 1k: query max",
+      "value": 0.031083,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 1k: query samples",
+      "value": 5000.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "search 10k: build index",
+      "value": 2.7168330000000003,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 10k: index heap",
+      "value": 1718.75,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "search 10k: query p50",
+      "value": 0.059625,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 10k: query p95",
+      "value": 0.158333,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 10k: query p99",
+      "value": 0.20875000000000002,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 10k: query max",
+      "value": 0.237167,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 10k: query samples",
+      "value": 5000.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "search 100k: build index",
+      "value": 26.45425,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 100k: index heap",
+      "value": 17187.5,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "search 100k: query p50",
+      "value": 0.551542,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 100k: query p95",
+      "value": 1.541292,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 100k: query p99",
+      "value": 2.124708,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 100k: query max",
+      "value": 2.136084,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 100k: query samples",
+      "value": 500.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data: open store (new)",
+      "value": 2.3710419999999996,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data: seed 10k notes + 10k clips",
+      "value": 12313.92475,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data: open store (10k)",
+      "value": 0.5205000000000001,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: note search p50",
+      "value": 3.307625,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: note search p95",
+      "value": 4.434457999999999,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: note search p99",
+      "value": 4.4990000000000006,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: note search max",
+      "value": 4.527166,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: note search samples",
+      "value": 320.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: clipboard search p50",
+      "value": 1.641083,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: clipboard search p95",
+      "value": 3.631875,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: clipboard search p99",
+      "value": 3.694791,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: clipboard search max",
+      "value": 3.716916,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: clipboard search samples",
+      "value": 320.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent clipboard list p50",
+      "value": 0.064292,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: recent clipboard list p95",
+      "value": 0.065209,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: recent clipboard list p99",
+      "value": 0.075458,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent clipboard list max",
+      "value": 0.08858300000000001,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent clipboard list samples",
+      "value": 100.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent notes list p50",
+      "value": 2.903791,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: recent notes list p95",
+      "value": 2.980958,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: recent notes list p99",
+      "value": 3.12975,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent notes list max",
+      "value": 3.164791,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent notes list samples",
+      "value": 100.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: add clip p50",
+      "value": 2.3695,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: add clip p95",
+      "value": 3.12825,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: add clip p99",
+      "value": 3.231583,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: add clip max",
+      "value": 3.449958,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: add clip samples",
+      "value": 200.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: note autosave p50",
+      "value": 0.024375,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: note autosave p95",
+      "value": 0.074292,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: note autosave p99",
+      "value": 0.5065,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: note autosave max",
+      "value": 0.561958,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: note autosave samples",
+      "value": 200.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: SQLite heap after queries",
+      "value": 2696.890625,
+      "unit": "KB",
+      "gated": true
+    }
+  ],
+  "checks": [],
+  "not_tested": []
+}

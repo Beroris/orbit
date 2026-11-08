@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["crates/orbit-hotkeys", "crates/orbit-core", "crates/orbit-data", "crates/orbit-bench", "crates/orbit-ffi", "platforms/windows"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+orbit-core = { path = "crates/orbit-core" }
+orbit-hotkeys = { path = "crates/orbit-hotkeys" }
+orbit-data = { path = "crates/orbit-data" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.41", features = ["bundled"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+# Keep unwinding: a panic on an optional worker thread must not take the hotkey path down.
+panic = "unwind"
+
+[profile.dev]
+opt-level = 1

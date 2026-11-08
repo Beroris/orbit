@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "onboarded": true,
+  "launch_at_login": false,
+  "low_resource_mode": false,
+  "launcher": {
+    "hotkey": null,
+    "focus_running_app": true,
+    "preserve_query": false
+  },
+  "shortcuts": [
+    {
+      "chord": "Ctrl+Alt+N",
+      "action": { "kind": "builtin", "command": "new_note" },
+      "enabled": true
+    }
+  ],
+  "hyper": {
+    "enabled": true,
+    "trigger": "CapsLock",
+    "mode": "internal",
+    "tap": "escape",
+    "tap_timeout_ms": 250,
+    "suspend_in_fullscreen": true,
+    "bindings": [
+      {
+        "key": "Space",
+        "action": { "kind": "builtin", "command": "toggle_launcher" },
+        "enabled": true
+      }
+    ],
+    "excluded_apps": []
+  },
+  "clipboard": {
+    "enabled": false,
+    "persist": true,
+    "capture_images": false,
+    "max_items": 250,
+    "retention_days": 30,
+    "excluded_apps": ["keepass.exe"]
+  },
+  "snippets": {
+    "expansion_enabled": false,
+    "excluded_apps": []
+  },
+  "links": [
+    { "id": "default-search", "name": "Search Google", "url": "https://www.google.com/search?q={query}", "alias": "g" }
+  ]
+}

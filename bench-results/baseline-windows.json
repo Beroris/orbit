@@ -1,0 +1,1164 @@
+{
+  "environment": {
+    "arch": "x86_64",
+    "cpu": "AMD Ryzen 5 5600X 6-Core Processor",
+    "data drive": "C:\\ fixed, NTFS, 294 GB free of 930 GB",
+    "display": "2560x1440 at 300 Hz (primary)",
+    "e2e data set": "10000 notes, 10000 clips",
+    "logical processors": "12",
+    "orbit version": "0.1.0",
+    "os": "windows",
+    "power at end": "AC, no battery reading",
+    "power at start": "AC, no battery reading",
+    "profile": "release",
+    "ram": "15.9 GB total, 10.3 GB free at start, 35% load",
+    "ram at end": "10.3 GB free, 35% load",
+    "windows": "Microsoft Windows [Version 10.0.26200.9711]"
+  },
+  "metrics": [
+    {
+      "name": "search 1k: build index",
+      "value": 0.8011,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 1k: index heap",
+      "value": 171.875,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "search 1k: query p50",
+      "value": 0.0117,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 1k: query p95",
+      "value": 0.027200000000000002,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 1k: query p99",
+      "value": 0.036000000000000004,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 1k: query max",
+      "value": 0.039799999999999995,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 1k: query samples",
+      "value": 5000.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "search 10k: build index",
+      "value": 8.3018,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 10k: index heap",
+      "value": 1718.75,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "search 10k: query p50",
+      "value": 0.1155,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 10k: query p95",
+      "value": 0.2731,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 10k: query p99",
+      "value": 0.3585,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 10k: query max",
+      "value": 0.3631,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 10k: query samples",
+      "value": 5000.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "search 100k: build index",
+      "value": 81.4125,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 100k: index heap",
+      "value": 17187.5,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "search 100k: query p50",
+      "value": 1.0843999999999998,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 100k: query p95",
+      "value": 2.5543,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "search 100k: query p99",
+      "value": 3.4584,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 100k: query max",
+      "value": 3.4613,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "search 100k: query samples",
+      "value": 500.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data: open store (new)",
+      "value": 15.550899999999999,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data: seed 10k notes + 10k clips",
+      "value": 33466.081099999996,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data: open store (10k)",
+      "value": 1.9946,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: note search p50",
+      "value": 12.5976,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: note search p95",
+      "value": 15.4904,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: note search p99",
+      "value": 15.690900000000001,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: note search max",
+      "value": 16.438000000000002,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: note search samples",
+      "value": 320.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: clipboard search p50",
+      "value": 7.3649,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: clipboard search p95",
+      "value": 11.016,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: clipboard search p99",
+      "value": 11.138,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: clipboard search max",
+      "value": 11.3015,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: clipboard search samples",
+      "value": 320.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent clipboard list p50",
+      "value": 0.1698,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: recent clipboard list p95",
+      "value": 0.1815,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: recent clipboard list p99",
+      "value": 0.1835,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent clipboard list max",
+      "value": 0.245,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent clipboard list samples",
+      "value": 100.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent notes list p50",
+      "value": 0.3799,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: recent notes list p95",
+      "value": 0.39780000000000004,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: recent notes list p99",
+      "value": 0.4095,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent notes list max",
+      "value": 0.44630000000000003,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: recent notes list samples",
+      "value": 100.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: add clip p50",
+      "value": 6.1961,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: add clip p95",
+      "value": 8.905100000000001,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: add clip p99",
+      "value": 9.3945,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: add clip max",
+      "value": 9.934800000000001,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: add clip samples",
+      "value": 200.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: note autosave p50",
+      "value": 0.0624,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: note autosave p95",
+      "value": 0.3663,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "data 10k: note autosave p99",
+      "value": 2.4831,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: note autosave max",
+      "value": 2.6431,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "data 10k: note autosave samples",
+      "value": 200.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "data 10k: SQLite heap after queries",
+      "value": 2352.2734375,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "binary size: orbit.exe",
+      "value": 3721.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "app index: helper duration",
+      "value": 1426.4972,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "app index: helper peak working set (sampled)",
+      "value": 98044.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "app index: apps found",
+      "value": 125.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "startup: launch to message loop",
+      "value": 24.77,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "memory at idle after start: private",
+      "value": 5180.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory at idle after start: working set",
+      "value": 16460.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "warm open: key injected to window visible (external) p50",
+      "value": 1.3687,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: key injected to window visible (external) p95",
+      "value": 1.4772,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: key injected to window visible (external) p99",
+      "value": 5.7911,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to window visible (external) max",
+      "value": 5.7911,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to window visible (external) samples",
+      "value": 60.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to foreground (external) p50",
+      "value": 3.2525,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: key injected to foreground (external) p95",
+      "value": 3.4479,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: key injected to foreground (external) p99",
+      "value": 12.7883,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to foreground (external) max",
+      "value": 12.7883,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to foreground (external) samples",
+      "value": 60.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 hotkey message to T1 frame ready p50",
+      "value": 1.1133,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 hotkey message to T1 frame ready p95",
+      "value": 1.1893,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 hotkey message to T1 frame ready p99",
+      "value": 5.3817,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 hotkey message to T1 frame ready max",
+      "value": 5.3817,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 hotkey message to T1 frame ready samples",
+      "value": 60.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2 window shown and painted p50",
+      "value": 5.4644,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 to T2 window shown and painted p95",
+      "value": 5.8396,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 to T2 window shown and painted p99",
+      "value": 12.5649,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2 window shown and painted max",
+      "value": 12.5649,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2 window shown and painted samples",
+      "value": 60.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T3 input focused p50",
+      "value": 6.2903,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 to T3 input focused p95",
+      "value": 6.7324,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "warm open: T0 to T3 input focused p99",
+      "value": 17.3812,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T3 input focused max",
+      "value": 17.3812,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T3 input focused samples",
+      "value": 60.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2b DwmFlush returned (compositor ack) p50",
+      "value": 8.3509,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2b DwmFlush returned (compositor ack) p95",
+      "value": 10.2399,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2b DwmFlush returned (compositor ack) p99",
+      "value": 20.1098,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2b DwmFlush returned (compositor ack) max",
+      "value": 20.1098,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: T0 to T2b DwmFlush returned (compositor ack) samples",
+      "value": 60.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to T0 (OS delivery) p50",
+      "value": 0.2102,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to T0 (OS delivery) p95",
+      "value": 0.2336,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to T0 (OS delivery) p99",
+      "value": 0.251,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to T0 (OS delivery) max",
+      "value": 0.251,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "warm open: key injected to T0 (OS delivery) samples",
+      "value": 60.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "memory after warm opens: private",
+      "value": 5772.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after warm opens: working set",
+      "value": 21364.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "typing 0 ms after the shortcut: rounds with all keys captured, of 20",
+      "value": 0.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "typing 5 ms after the shortcut: rounds with all keys captured, of 20",
+      "value": 20.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 query seen to T5 results built p50",
+      "value": 0.0221,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T4 query seen to T5 results built p95",
+      "value": 0.4061,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T4 query seen to T5 results built p99",
+      "value": 0.4117,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 query seen to T5 results built max",
+      "value": 0.4117,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 query seen to T5 results built samples",
+      "value": 53.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "typing: T5 to T6 frame drawn p50",
+      "value": 1.0835,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T5 to T6 frame drawn p95",
+      "value": 1.7213,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T5 to T6 frame drawn p99",
+      "value": 1.8261,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T5 to T6 frame drawn max",
+      "value": 1.8261,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T5 to T6 frame drawn samples",
+      "value": 53.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 to T6 total p50",
+      "value": 1.2108,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T4 to T6 total p95",
+      "value": 1.8503,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: T4 to T6 total p99",
+      "value": 1.8662,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 to T6 total max",
+      "value": 1.8662,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: T4 to T6 total samples",
+      "value": 53.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "typing: key injected to T6 frame drawn p50",
+      "value": 1.7182,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: key injected to T6 frame drawn p95",
+      "value": 2.3485,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "typing: key injected to T6 frame drawn p99",
+      "value": 2.545,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: key injected to T6 frame drawn max",
+      "value": 2.545,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "typing: key injected to T6 frame drawn samples",
+      "value": 53.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "memory after typing: private",
+      "value": 7332.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after typing: working set",
+      "value": 23192.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory launcher open with results: private",
+      "value": 8552.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory launcher open with results: working set",
+      "value": 24408.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "500 searches: query events seen by Orbit",
+      "value": 1843.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "500 searches: longest wait for a sampled query to reach the box, after 20 ms",
+      "value": 4.9515,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "500 searches: duration",
+      "value": 12242.542200000002,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "memory after 500 searches: private",
+      "value": 7268.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after 500 searches: working set",
+      "value": 23364.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "typing during live results: result updates drawn",
+      "value": 665.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter injected to new process running p50",
+      "value": 14.935,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter injected to new process running p95",
+      "value": 61.6925,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter injected to new process running p99",
+      "value": 61.6925,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter injected to new process running max",
+      "value": 61.6925,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter injected to new process running samples",
+      "value": 10.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter received to launch dispatched p50",
+      "value": 1.4894,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "launch: Enter received to launch dispatched p95",
+      "value": 1.8316,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "launch: Enter received to launch dispatched p99",
+      "value": 1.8316,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter received to launch dispatched max",
+      "value": 1.8316,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "launch: Enter received to launch dispatched samples",
+      "value": 10.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "memory after 10 launches: private",
+      "value": 9216.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after 10 launches: working set",
+      "value": 31752.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "launch: Calculator, Enter to process present (tasklist polling, coarse)",
+      "value": 261.88090000000005,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "memory after real app launch: private",
+      "value": 9956.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "memory after real app launch: working set",
+      "value": 42564.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "memory trim: working set before",
+      "value": 42564.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "memory trim: working set after",
+      "value": 160.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory trim: private after",
+      "value": 9956.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "after trim: key injected to window visible (soft faults) p50",
+      "value": 1.8027,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "after trim: key injected to window visible (soft faults) p95",
+      "value": 1.9374,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "after trim: key injected to window visible (soft faults) p99",
+      "value": 1.9374,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "after trim: key injected to window visible (soft faults) max",
+      "value": 1.9374,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "after trim: key injected to window visible (soft faults) samples",
+      "value": 15.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "after trim: key injected to foreground (soft faults) p50",
+      "value": 2.5457,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "after trim: key injected to foreground (soft faults) p95",
+      "value": 2.6962,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "after trim: key injected to foreground (soft faults) p99",
+      "value": 2.6962,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "after trim: key injected to foreground (soft faults) max",
+      "value": 2.6962,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "after trim: key injected to foreground (soft faults) samples",
+      "value": 15.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "after trim: page faults per open (median)",
+      "value": 1296.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "after trim: T0 to T3 input focused p50",
+      "value": 5.9873,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "after trim: T0 to T3 input focused p95",
+      "value": 6.1877,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "after trim: T0 to T3 input focused p99",
+      "value": 6.1877,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "after trim: T0 to T3 input focused max",
+      "value": 6.1877,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "after trim: T0 to T3 input focused samples",
+      "value": 15.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "idle: measured for",
+      "value": 60.0004086,
+      "unit": "s",
+      "gated": false
+    },
+    {
+      "name": "idle: CPU time per minute",
+      "value": 0.0,
+      "unit": "ms/min",
+      "gated": true
+    },
+    {
+      "name": "idle: bytes written per minute",
+      "value": 0.0,
+      "unit": "bytes/min",
+      "gated": true
+    },
+    {
+      "name": "idle: write operations per minute",
+      "value": 0.0,
+      "unit": "writes/min",
+      "gated": true
+    },
+    {
+      "name": "idle: CPU cycles per minute",
+      "value": 5741250.902081356,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "idle: page faults per minute",
+      "value": 694.9952670822312,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "idle: context switches per minute (threads still alive at the end)",
+      "value": 3.999972760185503,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "idle: threads",
+      "value": 6.0,
+      "unit": "count",
+      "gated": true
+    },
+    {
+      "name": "processes: Orbit and its children at idle",
+      "value": 1.0,
+      "unit": "count",
+      "gated": true
+    },
+    {
+      "name": "memory after idle: private",
+      "value": 9776.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after idle: working set",
+      "value": 3844.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory peak: working set this run",
+      "value": 43776.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "processes: Orbit and its children while indexing (most seen)",
+      "value": 2.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "shutdown: quit to process gone",
+      "value": 21.8648,
+      "unit": "ms",
+      "gated": false
+    }
+  ],
+  "checks": [
+    {
+      "name": "hotkey opens the launcher and focuses it",
+      "passed": 60,
+      "total": 60
+    },
+    {
+      "name": "Esc returns focus to the previous window",
+      "passed": 60,
+      "total": 60
+    },
+    {
+      "name": "typing 15 ms after the shortcut: no keys lost",
+      "passed": 20,
+      "total": 20
+    },
+    {
+      "name": "typing 15 ms after the shortcut: no keys reach the old window",
+      "passed": 20,
+      "total": 20
+    },
+    {
+      "name": "typing 30 ms after the shortcut: no keys lost",
+      "passed": 20,
+      "total": 20
+    },
+    {
+      "name": "typing 30 ms after the shortcut: no keys reach the old window",
+      "passed": 20,
+      "total": 20
+    },
+    {
+      "name": "typing during live results: no character dropped",
+      "passed": 50,
+      "total": 50
+    },
+    {
+      "name": "typing during live results: the caret stays at the end",
+      "passed": 50,
+      "total": 50
+    },
+    {
+      "name": "typing during live results: no key reaches the old window",
+      "passed": 50,
+      "total": 50
+    },
+    {
+      "name": "Enter launches the selected command",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "launch real app Calculator",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "survives 40 rapid shortcut presses",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "quit command exits cleanly within 5 s",
+      "passed": 1,
+      "total": 1
+    }
+  ],
+  "not_tested": [
+    "true hard-fault reopening under memory pressure: off by default because it slows the whole machine. Use --pressure-mb N. The trim test only exercises soft faults from the standby list."
+  ]
+}

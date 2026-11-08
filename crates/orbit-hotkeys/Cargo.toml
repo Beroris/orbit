@@ -1,0 +1,9 @@
+[package]
+name = "orbit-hotkeys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Platform-neutral shortcut model and the HyperKey state machine."
+
+[dependencies]
+serde.workspace = true

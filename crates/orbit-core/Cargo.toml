@@ -1,0 +1,11 @@
+[package]
+name = "orbit-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Orbit shared domain logic: search, ranking, calculator, actions, settings. No OS or C dependencies."
+
+[dependencies]
+orbit-hotkeys.workspace = true
+serde.workspace = true
+serde_json.workspace = true

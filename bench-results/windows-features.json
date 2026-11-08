@@ -1,0 +1,1202 @@
+{
+  "environment": {
+    "arch": "x86_64",
+    "cpu": "AMD Ryzen 5 5600X 6-Core Processor",
+    "data drive": "C:\\ fixed, NTFS, 286 GB free of 930 GB",
+    "display": "2560x1440 at 300 Hz (primary)",
+    "logical processors": "12",
+    "orbit version": "0.1.0",
+    "os": "windows",
+    "power at end": "AC, no battery reading",
+    "power at start": "AC, no battery reading",
+    "profile": "release",
+    "ram": "15.9 GB total, 6.5 GB free at start, 59% load",
+    "ram at end": "6.7 GB free, 57% load",
+    "windows": "Microsoft Windows [Version 10.0.26200.9711]"
+  },
+  "metrics": [
+    {
+      "name": "notes: private memory after small notes closed",
+      "value": 4448.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "notes: open a 5 MB note, Enter to text loaded",
+      "value": 574.1037,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "notes: 5 MB note, one edit plus autosave, wall clock including 400 ms debounce",
+      "value": 702.6999000000001,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "notes: private memory before opening any note",
+      "value": 3104.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "notes: private memory after editors closed",
+      "value": 17700.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "snippets: 3099-unit snippet, trigger to text in place",
+      "value": 7382.1389,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "snippets: password check, first in the session",
+      "value": 18.7386,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "snippets: password check, later ones p50",
+      "value": 3.0448,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "snippets: password check, later ones p95",
+      "value": 12.3341,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "snippets: password check, later ones p99",
+      "value": 12.3341,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "snippets: password check, later ones max",
+      "value": 12.3341,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "snippets: password check, later ones samples",
+      "value": 13.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "snippets: private memory with the keyboard hook on",
+      "value": 5744.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "hyper: chord key injected to launcher focused p50",
+      "value": 3.1531,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "hyper: chord key injected to launcher focused p95",
+      "value": 4.7026,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "hyper: chord key injected to launcher focused p99",
+      "value": 9.3098,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "hyper: chord key injected to launcher focused max",
+      "value": 9.3098,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "hyper: chord key injected to launcher focused samples",
+      "value": 20.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "hyper: hook callback to UI thread p50",
+      "value": 0.0128,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "hyper: hook callback to UI thread p95",
+      "value": 0.0208,
+      "unit": "ms",
+      "gated": true
+    },
+    {
+      "name": "hyper: hook callback to UI thread p99",
+      "value": 0.0464,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "hyper: hook callback to UI thread max",
+      "value": 0.0464,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "hyper: hook callback to UI thread samples",
+      "value": 20.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "settings: private memory after closing the window",
+      "value": 4664.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "memory after 100 note opens: private",
+      "value": 4840.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory after 100 note opens: working set",
+      "value": 28368.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "memory before any note opens: private",
+      "value": 3116.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "memory after the first note open: private",
+      "value": 4500.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "100 note opens: private growth per open after the first",
+      "value": 3.4343434343434343,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "100 note opens: duration",
+      "value": 27443.4915,
+      "unit": "ms",
+      "gated": false
+    },
+    {
+      "name": "footprint, optional features off, 3 s idle: private",
+      "value": 3108.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "footprint, optional features off, 3 s idle: working set",
+      "value": 17996.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "footprint, optional features off, 3 s idle: threads",
+      "value": 6.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "footprint, HyperKey, expansion and clipboard on, 3 s idle: private",
+      "value": 3212.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "footprint, HyperKey, expansion and clipboard on, 3 s idle: working set",
+      "value": 18248.0,
+      "unit": "KB",
+      "gated": true
+    },
+    {
+      "name": "footprint, HyperKey, expansion and clipboard on, 3 s idle: threads",
+      "value": 7.0,
+      "unit": "count",
+      "gated": false
+    },
+    {
+      "name": "footprint: what the optional features add, private",
+      "value": 104.0,
+      "unit": "KB",
+      "gated": false
+    },
+    {
+      "name": "footprint: what the optional features add, working set",
+      "value": 252.0,
+      "unit": "KB",
+      "gated": false
+    }
+  ],
+  "checks": [
+    {
+      "name": "Alt+Space opens the launcher",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "Alt+Space leaves the input ready to type",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "when Alt+Space is taken, Ctrl+Alt+Space works instead",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "New Note opens a focused editor",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "note editor uses RichEdit",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "note autosaves while the editor is open, with accents and emoji intact",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Esc closes the editor",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "closing right after typing keeps every character",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a note found from the launcher reopens with its text",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "note undo is multi-level",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a 5 MB note opens whole",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "notes: clean exit",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a snippet chosen in the launcher is typed into the previous window",
+      "passed": 5,
+      "total": 5
+    },
+    {
+      "name": "typing a trigger replaces it with the snippet",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "{cursor} leaves the caret in the right place",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "an unfinished trigger is left alone",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a long snippet arrives whole, emoji intact",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "typing a long snippet leaves the clipboard alone",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a snippet too long to type goes on the clipboard instead",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "that keeps the typed trigger, since nothing was inserted",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a trigger typed in a password field isn't expanded",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "UI Automation is what recognised that password field",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a trigger typed into Orbit's own search box isn't expanded",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a long pause inside a trigger stops it matching",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a {clipboard} snippet asks before inserting",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "approving it inserts the clipboard text",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a {clipboard} snippet doesn't use a copy marked sensitive",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "keys injected by another program don't trigger expansion",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "copied text appears in history",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "copies marked sensitive are not recorded",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "copying the same text again doesn't duplicate it",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Enter on a history item pastes it into the previous window",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "no clipboard text in Orbit's log files",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the sensitive copy isn't anywhere in Orbit's databases",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Hyper+Space opens the launcher",
+      "passed": 20,
+      "total": 20
+    },
+    {
+      "name": "Caps Lock's toggle never changed while used as Hyper",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "tapping Caps Lock sends Escape",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the tap doesn't toggle Caps Lock",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Hyper plus an unbound key types nothing",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "ordinary typing passes through",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a hold whose key-up never came ends by itself",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "that recovery doesn't toggle Caps Lock",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "no key stuck after 60 awkward chords",
+      "passed": 60,
+      "total": 60
+    },
+    {
+      "name": "those chords typed nothing",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "HyperKey: clean exit",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "after quitting, Caps Lock is a normal key again",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "if Orbit is killed mid-hold, Caps Lock still works afterwards",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Synthetic mode leaves no modifier held",
+      "passed": 10,
+      "total": 10
+    },
+    {
+      "name": "Synthetic mode: quitting mid-chord releases every modifier",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Orbit Settings opens a focused window",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Esc closes settings",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "saving settings unchanged keeps them identical",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Delete on the Hotkeys page removes that hotkey",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "app picker: Esc clears a search and keeps Settings open",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "app picker: Enter on a match keeps Settings open",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "app picker: searching and pressing Enter adds that app's program",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "app picker: a program that isn't listed can be added by name",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "app picker: Delete removes a chosen app",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "app picker: clicking a match adds it, and Enter then saves",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "app picker: clicking Remove removes that app, and Enter then saves",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "app picker: Browse adds the program chosen",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "clicking Esc Close in the footer closes the launcher",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "clicking Ctrl+K Actions opens the menu, and Esc Back returns from it",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "clicking Esc Clear empties the search, and clicking it again closes",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "clicking Enter in the footer runs the selected result",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Alt+J moves down",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Alt+K moves up, and Alt+L runs the result",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "after Alt+J, letters still type into the box",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Alt+H with nothing to go back to leaves Orbit open",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "with standard keys, Alt+J doesn't move the selection",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: letters don't type when it opens",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: h with nothing to go back to leaves Orbit open",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: i starts typing",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: Esc while typing keeps Orbit open",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: after Esc, letters don't type",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: j moves down and l runs the result",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: Enter while typing runs the result",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: opens navigating again next time",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: Esc while navigating closes Orbit",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: q closes Orbit",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: x deletes under the caret",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: 0 and dw delete the first word",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: u undoes",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: dd clears the box",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: cc clears and starts typing",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: / starts a new search",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: A types at the end",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: I types at the start",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: : starts a commands search",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: the action menu opens navigating, and h goes back to the search",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: Esc while navigating clears the search first",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Vim: Alt+J moves down while typing",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "clipboard text under the size limit is recorded",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a recorded copy names the app it came from",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "clipboard text over max_item_bytes isn't recorded",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a copied file list is recorded with every path",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "an image is recorded when capture_images is on",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the image's pixels are saved",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the oversized copy isn't anywhere in Orbit's databases",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "an image isn't recorded when capture_images is off",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "an excluded app's copies are never recorded",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "an excluded app's copy isn't anywhere in Orbit's databases",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a Hyper chord with autorepeat runs its bound command exactly once",
+      "passed": 5,
+      "total": 5
+    },
+    {
+      "name": "that chord types nothing and leaves no key held",
+      "passed": 5,
+      "total": 5
+    },
+    {
+      "name": "Internal mode: a chord dispatches with a right-hand modifier held",
+      "passed": 6,
+      "total": 6
+    },
+    {
+      "name": "Internal mode: a right-hand modifier during a chord doesn't stick",
+      "passed": 6,
+      "total": 6
+    },
+    {
+      "name": "Synthetic mode: a chord dispatches with a right-hand modifier held",
+      "passed": 6,
+      "total": 6
+    },
+    {
+      "name": "Synthetic mode: a right-hand modifier during a chord doesn't stick",
+      "passed": 6,
+      "total": 6
+    },
+    {
+      "name": "Synthetic mode: a forwarded chord leaves a real right-hand modifier to the user",
+      "passed": 3,
+      "total": 3
+    },
+    {
+      "name": "after a kill mid-chord in Synthetic mode, restarting Orbit clears the modifiers",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "after that restart, a Synthetic chord still lets go of everything",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a missing executable opens no dialog that stays up",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a missing executable doesn't take Orbit down",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Orbit responds normally after a missing executable",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a missing executable is reported to the user",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a query that finds a saved note offers no web search",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a query that finds nothing offers a web search",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "an app with a window open is offered as Switch to",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Move to trash takes a note out of search",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the undo row at the top of Notes brings it back",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Ctrl+K, Set hotkey saves a shortcut you press",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "that shortcut works without restarting",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "holding the HyperKey and pressing a key saves a Hyper hotkey",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "that Hyper hotkey works without restarting",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "and types nothing into the app behind",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "while recording, a plain key does nothing",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Esc cancels recording and changes nothing",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a key already in use isn't taken without asking",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "confirming moves the key: one key runs one item",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Remove hotkey takes it off",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the removed shortcut no longer opens anything",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "an app's Hyper hotkey, pressed while it's in front, minimizes it",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "pressed again, it comes back and has focus",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "with the setting off, the hotkey leaves the app as it is",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "HyperKey keeps working over a fullscreen app that isn't a game",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "and the key stays Hyper, with Caps Lock unchanged",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "HyperKey steps aside for a fullscreen game",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "and the key acts normally in the game",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "HyperKey keeps working over a game in a window",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "and the key stays Hyper, with Caps Lock unchanged",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "with the setting off, HyperKey works over a fullscreen game",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "and the key stays Hyper, with Caps Lock unchanged",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a mistyped search still finds the item, and Enter runs it",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Ctrl+comma in the launcher opens Settings",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the first favourite is selected on opening, below its title",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "without favourites only, the opening list holds more",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "favourites only: Enter on opening runs the favourite",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "favourites only: the opening list holds the title and the favourite and nothing else",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Alt+Left and Alt+Right go to the start and end of the line",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Alt+Backspace deletes back to the start of the line",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Alt+Shift+Right selects to the end of the line",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "no modifier is left held down afterwards",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Alt+H minimizes the app in front",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Alt+Q closes the app in front",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "an app on the list keeps its own Alt keys",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "choosing 1Password asks its tool for the list",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the launcher stays open, in the list",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Enter on an item copies its password",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the right item's password was asked for",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the launcher closes afterwards",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the copy is marked to stay out of clipboard history and the cloud",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a copied password clears itself after about 30 seconds",
+      "passed": 0,
+      "total": 1
+    },
+    {
+      "name": "the list isn't fetched again within a few minutes",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "something copied afterwards isn't cleared",
+      "passed": 0,
+      "total": 1
+    },
+    {
+      "name": "Ctrl+K offers the username",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Ctrl+K offers the one-time code",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Esc while waiting means nothing gets copied",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Refresh asks the tool again",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the launcher stays open while something else has focus during the wait",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "it takes focus back once the tool answers",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "signed out, Enter tries again",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "and then it works",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "choosing Ente Auth asks for what's on this PC first",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Enter on a code copies it",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "codes are read without touching the network",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "no password, code or item name is written to Orbit's files",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "copied passwords stay out of Orbit's own history",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Reset All Shortcuts: Enter on the first row cancels",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Reset All Shortcuts clears the launcher choice, shortcuts and mappings",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Delete All Orbit Data: Enter on the first row cancels",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Delete All Orbit Data: Orbit quits afterwards",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Delete All Orbit Data removes the database, settings and app index",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Delete All Orbit Data leaves files that aren't Orbit's",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "leader: a tap then a mapped key runs its command once",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "leader: that key isn't typed",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "leader: the tap doesn't toggle Caps Lock",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "leader: the window ends, and the key types normally",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a note typed 700 ms before a hard kill is all there",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "after a hard kill, the note reopens in a new Orbit",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a note opens and closes 100 times in a row",
+      "passed": 100,
+      "total": 100
+    }
+  ],
+  "not_tested": [
+    "integrations: the Set up row, because Ente's real tool is installed on this PC"
+  ]
+}

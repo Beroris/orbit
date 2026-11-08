@@ -1,0 +1,6 @@
+# Link the C runtime statically on Windows: the portable binary does not need the
+# VC++ redistributable and the process maps fewer DLLs at idle.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
