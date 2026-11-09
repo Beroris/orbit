@@ -109,3 +109,7 @@ Close your own copy of Orbit first, because the feature suite tests Alt+Space an
 ## Support
 
 Orbit is free. If it saves you time, you can [support me on Ko-fi](https://ko-fi.com/beroris).
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE). The Geist font in `assets/fonts` keeps its own SIL Open Font License.

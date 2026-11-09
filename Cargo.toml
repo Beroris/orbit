@@ -6,7 +6,7 @@ members = ["crates/orbit-hotkeys", "crates/orbit-core", "crates/orbit-data", "cr
 version = "1.0.0"
 edition = "2024"
 rust-version = "1.85"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-only"
 
 [workspace.dependencies]
 orbit-core = { path = "crates/orbit-core" }
