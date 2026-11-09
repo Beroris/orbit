@@ -855,8 +855,8 @@ pub fn create_font(face: &str, height_px: i32, weight: i32) -> HFONT {
     }
 }
 
-/// Geist, the Bero Suite's typeface, built into the exe. It's the same file Spotlight and Prism
-/// ship, scaled up 3% so it sits as large as Inter did. See `assets/fonts/Geist-LICENSE.txt`.
+/// Geist, built into the exe. It's the same file Spotlight and Prism ship, scaled up 3% so it
+/// sits as large as Inter did. See `assets/fonts/Geist-LICENSE.txt`.
 pub const GEIST: &[u8] = include_bytes!("../../../assets/fonts/GeistVariable.ttf");
 pub const GEIST_FACE: &str = "Geist";
 

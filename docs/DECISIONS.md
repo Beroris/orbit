@@ -152,9 +152,9 @@ Why Orbit is built the way it is. Figures come from the Windows reference machin
 
 ## The typeface is Geist, built in
 
-**Decision.** Orbit's text is Geist Sans, the Bero Suite's typeface, shared with Spotlight and Prism. It is the same file they ship, with its `head.unitsPerEm` lowered from 1000 to 971 so it draws 3% larger. It is built into `orbit.exe` and never installed on the system. GDI (Settings, forms, notes) gets it from `AddFontMemResourceEx`, private to the process, and checks with `GetTextFaceW` that "Geist" really came back. DirectWrite (the launcher) reads the same bytes as an in-memory font collection and asks it for exact weights. If either can't load it, that side falls back to Segoe UI Variable, then Segoe UI. Letters Geist lacks still come from Windows' fallback fonts. Its licence (SIL Open Font License 1.1, with no reserved font name) ships as `Geist-LICENSE.txt` and is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+**Decision.** Orbit's text is Geist Sans, the typeface Spotlight and Prism use too. It is the same file they ship, with its `head.unitsPerEm` lowered from 1000 to 971 so it draws 3% larger. It is built into `orbit.exe` and never installed on the system. GDI (Settings, forms, notes) gets it from `AddFontMemResourceEx`, private to the process, and checks with `GetTextFaceW` that "Geist" really came back. DirectWrite (the launcher) reads the same bytes as an in-memory font collection and asks it for exact weights. If either can't load it, that side falls back to Segoe UI Variable, then Segoe UI. Letters Geist lacks still come from Windows' fallback fonts. Its licence (SIL Open Font License 1.1, with no reserved font name) ships as `Geist-LICENSE.txt` and is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-**Why.** The owner chose one typeface for every app in the suite on 2026-11-07.
+**Why.** The owner chose one typeface for Orbit, Spotlight and Prism on 2026-11-07.
 
 **Cost.** About 165 KB more in the exe. Geist is a little wider and taller than Segoe, so the Settings page list and window are 12 px wider, and a page's title sits 2 px closer to the line under it.
 

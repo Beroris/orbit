@@ -572,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn the_suite_typeface_is_geist_in_both_kinds_of_text() {
+    fn the_typeface_is_geist_in_both_kinds_of_text() {
         assert_eq!(crate::gfx::ui_face(), crate::gfx::GEIST_FACE, "GDI, for Settings and forms");
         assert!(engine().is_some_and(|engine| engine.geist.is_some()), "DirectWrite, for the launcher");
         // A heavier weight is wider, so the weight axis really reaches the font.
