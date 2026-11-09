@@ -1455,7 +1455,7 @@ impl<'a> Builder<'a> {
 }
 
 
-/// A few choices side by side, one of them chosen, as in Prism's settings. It answers the same
+/// A few choices side by side, one of them chosen. It answers the same
 /// messages as a drop-down list (`CB_GETCURSEL`, `CB_SETCURSEL`, `CB_GETDROPPEDSTATE`) and tells its
 /// parent `CBN_SELCHANGE`, so a form can use either without knowing which it has.
 struct Segmented {

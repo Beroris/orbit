@@ -152,9 +152,9 @@ Why Orbit is built the way it is. Figures come from the Windows reference machin
 
 ## The typeface is Geist, built in
 
-**Decision.** Orbit's text is Geist Sans, the typeface Spotlight and Prism use too. It is the same file they ship, with its `head.unitsPerEm` lowered from 1000 to 971 so it draws 3% larger. It is built into `orbit.exe` and never installed on the system. GDI (Settings, forms, notes) gets it from `AddFontMemResourceEx`, private to the process, and checks with `GetTextFaceW` that "Geist" really came back. DirectWrite (the launcher) reads the same bytes as an in-memory font collection and asks it for exact weights. If either can't load it, that side falls back to Segoe UI Variable, then Segoe UI. Letters Geist lacks still come from Windows' fallback fonts. Its licence (SIL Open Font License 1.1, with no reserved font name) ships as `Geist-LICENSE.txt` and is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+**Decision.** Orbit's text is Geist Sans, the interface typeface. Orbit's copy has its `head.unitsPerEm` lowered from 1000 to 971 so it draws 3% larger, as large as Inter. It is built into `orbit.exe` and never installed on the system. GDI (Settings, forms, notes) gets it from `AddFontMemResourceEx`, private to the process, and checks with `GetTextFaceW` that "Geist" really came back. DirectWrite (the launcher) reads the same bytes as an in-memory font collection and asks it for exact weights. If either can't load it, that side falls back to Segoe UI Variable, then Segoe UI. Letters Geist lacks still come from Windows' fallback fonts. Its licence (SIL Open Font License 1.1, with no reserved font name) ships as `Geist-LICENSE.txt` and is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-**Why.** The owner chose one typeface for Orbit, Spotlight and Prism on 2026-11-07.
+**Why.** The owner chose Geist for Orbit's interface on 2026-11-07.
 
 **Cost.** About 165 KB more in the exe. Geist is a little wider and taller than Segoe, so the Settings page list and window are 12 px wider, and a page's title sits 2 px closer to the line under it.
 
@@ -314,11 +314,11 @@ A click on the alias opens a box over it: Enter keeps it, Esc puts it back, and 
 
 **Why.** The owner asked for the same per-item on and off that Raycast offers, and then for aliases and hotkeys in that list, editable there.
 
-## Settings looks like Prism's, with Spotlight's sidebar
+## Settings has its own title strip and a sidebar
 
-**Decision.** The Settings window has no Windows title bar. Its own strip across the top drags it and has Minimize and Close; Windows still gives it a shadow, rounded corners, snapping and a taskbar button, as Prism's settings do (a normal window that tells Windows it has no frame). The page list sits on a rail a shade off the page, under a "Settings" title, with each page's symbol on a rounded square of its own colour, as macOS's System Settings has, and the version at its foot. Each page opens with a larger square, its name, and a line on what it's for. Rows have their name, a line under it saying what it does, and their control at the right, centred on both, as in Prism. A choice of two to five short options is shown side by side, with the chosen one raised, when it fits; otherwise, and in high contrast, it stays a drop-down. Colours avoid orange, and in high contrast the squares use Windows' own colours.
+**Decision.** The Settings window has no Windows title bar. Its own strip across the top drags it and has Minimize and Close; Windows still gives it a shadow, rounded corners, snapping and a taskbar button, because it is a normal window that tells Windows it has no frame. The page list sits on a rail a shade off the page, under a "Settings" title, with each page's symbol on a rounded square of its own colour, as macOS's System Settings has, and the version at its foot. Each page opens with a larger square, its name, and a line on what it's for. Rows have their name, a line under it saying what it does, and their control at the right, centred on both. A choice of two to five short options is shown side by side, with the chosen one raised, when it fits; otherwise, and in high contrast, it stays a drop-down. Colours avoid orange, and in high contrast the squares use Windows' own colours.
 
-**Why.** The owner asked for the settings to follow Prism's design and macOS Spotlight's settings.
+**Why.** The owner asked for Orbit's settings to look this way.
 
 **Cost.** A frameless window draws its own Close and Minimize. Developer previews keep Windows' frame and are cut to the inside, because an off-screen capture of a frameless window leaves some of its controls out.
 

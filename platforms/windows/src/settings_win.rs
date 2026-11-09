@@ -4641,8 +4641,8 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let px = |v: i32| forms::scale(v, dpi);
         // The size asked for is the client area, so the page layout doesn't depend on the title bar.
         // A normal window to Windows, for its shadow, corners, snapping and taskbar button, which says
-        // it has no frame (WM_NCCALCSIZE). The strip across the top is drawn here and drags it, as
-        // in Prism. A preview keeps the frame, because an off-screen capture leaves a frameless
+        // it has no frame (WM_NCCALCSIZE). The strip across the top is drawn here and drags it.
+        // A preview keeps the frame, because an off-screen capture leaves a frameless
         // window's controls out, and its picture is cut to the inside, which is the same.
         let frame = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
         // The whole window is client area: the strip across the top is drawn here (see WM_NCCALCSIZE).

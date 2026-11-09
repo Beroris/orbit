@@ -332,7 +332,6 @@ A user holds a dedicated HyperKey and presses a letter:
 - `Hyper + N` → open Orbit Notes.
 - `Hyper + V` → open clipboard history.
 - `Hyper + S` → open snippets menu, or a configurable action.
-- `Hyper + M` → send an explicit command to Mia **if an integration has been configured** (later).
 
 These are **example presets, not hardcoded ownership of all keys**. Users may assign Hyper + any permitted key to app launch, focus, URL, command, note, snippet, etc.
 
@@ -400,7 +399,7 @@ Any command can have a shortcut: open application, focus application, create not
 5. Left/right Ctrl/Alt/Shift and keyboard layout differences.
 6. Two physical keyboards connected; test sleep/wake and reconnect.
 7. Locked screen and secure text input: safely do nothing where not allowed.
-8. Conflict with Raycast, Spotlight, PowerToys or other shortcut programs: user sees clear error or precedence explanation.
+8. Conflict with Raycast, macOS Spotlight, PowerToys or other shortcut programs: user sees clear error or precedence explanation.
 9. Toggle HyperKey off, quit Orbit or uninstall Orbit: keyboard returns to normal.
 10. Fullscreen game session: Orbit stays idle/suspended per setting, no input latency or key interference.
 
@@ -557,12 +556,10 @@ The winning experience is “open launcher → type note → dismiss” in secon
 
 ---
 
-## 10. OPTIONAL ORBIT ECOSYSTEM INTEGRATIONS (AFTER CORE IS PROVEN)
+## 10. OPTIONAL INTEGRATIONS (AFTER CORE IS PROVEN)
 
-The developer also has two other projects: **Mia**, a personal assistant, and **Spotlight**, a separate lightweight desktop Spotify client. These are optional integrations, not dependencies.
+These are optional integrations, not dependencies.
 
-- **Mia:** user-configured named commands that call a local authenticated endpoint or bounded CLI with explicit permission. Example: `Hyper + M` opens a text command entry or voice action. No always-on microphone or background connection in Orbit.
-- **Spotlight client:** register actions such as Play/Pause, Next, Previous, Search Song or Focus Player via the client's documented IPC/CLI/protocol if such an interface exists. Do not invent an API or assume an integration already works. Generic system media controls can be supported independently.
 - **Proxmox/OPNsense:** user-added quick links or optional authenticated commands, not continuous status polling.
 - **Developer tooling:** open workspace in selected IDE, open project terminal, run an explicitly configured script. Do not turn Orbit into a resource-hungry agent manager.
 
@@ -779,7 +776,7 @@ Reference: <https://developer.apple.com/documentation/servicemanagement/smappser
 
 ### Later, only if the product is demonstrably light
 
-- File search, advanced window switching, optional plugin SDK, optional settings sync, custom actions, deeper Mia/Spotlight integration, calculator enhancements, optional update channel.
+- File search, advanced window switching, optional plugin SDK, optional settings sync, custom actions, calculator enhancements, optional update channel.
 
 **Do not let later features regress startup latency, hotkey dispatch or idle RAM.**
 
@@ -862,7 +859,7 @@ A launcher with basic hotkeys, HyperKey, snippets and unlimited local notes shou
 
 ### Naming note
 
-“Orbit” is the working name; research trademarks and app-store naming collisions before public release. Avoid using logos or copyrighted assets from Raycast/PowerToys/Alfred. The user's separate Spotify client is also named Spotlight, which collides semantically with Apple Spotlight; keep integrations and naming clear.
+“Orbit” is the working name; research trademarks and app-store naming collisions before public release. Avoid using logos or copyrighted assets from Raycast/PowerToys/Alfred.
 
 ---
 
