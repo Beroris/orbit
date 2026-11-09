@@ -388,6 +388,12 @@ A click on the alias opens a box over it: Enter keeps it, Esc puts it back, and 
 
 **Why.** The owner asked for End task in the action menu rather than a separate list of processes.
 
+## The launcher can open on the main screen or a specific one
+
+**Decision.** General has "Where the launcher opens", with an "Open on" choice: Active window (as before, and the default), Pointer, Main display, or Specific screen. Main display is whichever screen Windows marks as main, so it follows a change in Display settings. Only Specific screen shows a picture of the screens to pick from; the others fold it away. The picture lays them out as Windows does and numbers them as Windows does, from `\\.\DISPLAYn`. A picked screen is kept by Windows' path for that monitor on its connection, which stays the same between starts, and by the monitor's name. If the path isn't connected, the one monitor with that name is used, as when it moves to another port. If there's none, or two share the name, the launcher opens on the active screen and Settings says the picked one isn't connected. The screens are read once, then again only when Windows says they changed, so opening on a picked screen costs a lookup on the hot path, not a display query. A value for this setting that a later version wrote reads as the default, rather than damaging the whole file.
+
+**Why.** The owner asked to pick the launcher's screen from a picture of the monitor layout, as Windows shows it, rather than from a drop-down. They then asked for the main screen as a choice of its own, and for the picture to show only with Specific screen.
+
 ## Window layouts move the window Orbit was opened over
 
 **Decision.** Left, Right, Top and Bottom Half, Maximise, Almost Maximise (5% in from each edge), Centre, and Move to Next Display. They move the window that was in front when the launcher opened, or, from a hotkey, the one in front. They fit the work area, so the taskbar stays clear, and allow for the invisible resize borders Windows 10 and 11 put around windows. A window that covers its whole display without being maximised, such as a game or a full-screen video, is left alone.

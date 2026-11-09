@@ -72,6 +72,41 @@ pub struct LauncherSettings {
     pub pass_through_in_games: bool,
     /// Enter copies a sum's or conversion's answer formatted, "£1,234.50", rather than "1234.50".
     pub copy_formatted: bool,
+    /// Which screen the launcher opens on.
+    #[serde(deserialize_with = "or_default")]
+    pub screen: LauncherScreen,
+}
+
+/// Which screen the launcher opens on.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LauncherScreen {
+    /// The screen with the window being worked in, or the pointer's when there's none.
+    #[default]
+    Active,
+    /// The screen the pointer is on.
+    Pointer,
+    /// The screen Windows marks as the main one, whichever monitor that is.
+    Main,
+    /// One screen picked in Settings, every time while it's connected, and otherwise as `Active`.
+    Specific {
+        /// Windows' path for the monitor on its connection, which stays the same between starts.
+        id: String,
+        /// The monitor's own name, such as "DELL U2720Q", to find it on another connection and to
+        /// say which one it was while it isn't connected.
+        name: String,
+    },
+}
+
+/// A value this version doesn't know, such as a choice added later, gives the default rather than
+/// making the whole file unreadable.
+fn or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(value).unwrap_or_default())
 }
 
 /// Other apps that show up in the launcher, through their own command-line tools.
@@ -281,6 +316,7 @@ impl Default for LauncherSettings {
             fit_results: true,
             excluded_apps: Vec::new(),
             pass_through_in_games: true,
+            screen: LauncherScreen::Active,
         }
     }
 }
@@ -428,6 +464,27 @@ mod tests {
         assert!(s.hyper.enabled);
         assert_eq!(s.hyper.trigger, "CapsLock");
         assert_eq!(s.clipboard.max_items, 500);
+    }
+
+    #[test]
+    fn the_launchers_screen_round_trips_and_an_unknown_one_is_the_default() {
+        let mut s = Settings::default();
+        assert_eq!(s.launcher.screen, LauncherScreen::Active);
+        s.launcher.screen = LauncherScreen::Specific { id: r"\\?\DISPLAY#GSM5B7F#5&1&UID4352#{e6f07b5f}".into(), name: "VG259".into() };
+        let (parsed, _) = Settings::parse(&s.to_json());
+        assert_eq!(parsed.launcher.screen, s.launcher.screen);
+        assert!(s.to_json().contains(r#""specific": {"#), "{}", s.to_json());
+
+        let (parsed, outcome) = Settings::parse(r#"{"launcher":{"screen":"pointer"}}"#);
+        assert!(matches!(outcome, LoadOutcome::Loaded));
+        assert_eq!(parsed.launcher.screen, LauncherScreen::Pointer);
+        let (parsed, _) = Settings::parse(r#"{"launcher":{"screen":"main"}}"#);
+        assert_eq!(parsed.launcher.screen, LauncherScreen::Main);
+        // A choice from a later version loses only itself, never the rest of the file.
+        let (parsed, outcome) = Settings::parse(r#"{"launcher":{"screen":"largest","preserve_query":true}}"#);
+        assert!(matches!(outcome, LoadOutcome::Loaded));
+        assert_eq!(parsed.launcher.screen, LauncherScreen::Active);
+        assert!(parsed.launcher.preserve_query);
     }
 
     #[test]

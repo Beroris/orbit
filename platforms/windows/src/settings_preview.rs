@@ -63,6 +63,21 @@ fn stand_in_snippet() -> orbit_data::Snippet {
     }
 }
 
+/// Three screens instead of this machine's: a 1440p main one, a 1080p one to its right, and one
+/// standing on end at its left. Their paths are `\\?\DISPLAY#STANDIN1` and so on, to choose one in
+/// the preview's settings.json. With `hover`, the pointer is over the one on end.
+fn stand_in_screens(hover: bool) {
+    use crate::displays::Display;
+    use windows::Win32::Foundation::RECT;
+    let rect = |left: i32, top: i32, width: i32, height: i32| RECT { left, top, right: left + width, bottom: top + height };
+    crate::displays::use_stand_ins(vec![
+        Display::stand_in(3, "Screen 3", rect(-1080, -300, 1080, 1920), false),
+        Display::stand_in(1, "H27E6", rect(0, 0, 2560, 1440), true),
+        Display::stand_in(2, "VG259", rect(2560, 360, 1920, 1080), false),
+    ]);
+    crate::screen_picker::preview_hover(hover.then_some(0));
+}
+
 /// Handles waiting messages for a moment, so everything has painted.
 fn settle(milliseconds: u64) {
     let until = std::time::Instant::now() + std::time::Duration::from_millis(milliseconds);
@@ -233,6 +248,10 @@ pub fn run(preview: SettingsPreview, dir: Option<PathBuf>) -> i32 {
                 "hotkeys-text" => ("hotkeys", true, true),
                 "hotkeys-recording" | "hotkeys-held" | "hotkeys-replace" | "hotkeys-hover" | "hotkeys-narrow" | "hotkeys-replace-narrow" | "hotkeys-search" | "hotkeys-bad-text" => ("hotkeys", true, false),
                 "general-listening" | "general-problem" | "general-saved" | "general-failed" | "general-narrow" => ("general", false, false),
+                "general-screens" | "general-screens-hover" | "general-screens-narrow" => {
+                    stand_in_screens(kind.ends_with("-hover"));
+                    ("general", false, false)
+                }
                 "data-armed" | "data-narrow" => ("data", false, false),
                 "search-filled" | "search-alias" | "search-record" => ("search", false, false),
                 other => (other, false, false),

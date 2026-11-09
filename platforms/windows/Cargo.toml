@@ -23,6 +23,7 @@ version = "0.62"
 features = [
     "ApplicationModel",
     "Devices_Radios",
+    "Win32_Devices_Display",
     "Foundation",
     "Foundation_Collections",
     "Foundation_Numerics",

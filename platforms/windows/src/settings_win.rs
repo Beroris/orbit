@@ -15,6 +15,7 @@ use crate::worker::{DataRow, Req};
 use crate::gfx::Backbuffer;
 use crate::keys;
 use crate::integrations::{self, Tool};
+use crate::screen_picker;
 use crate::rows::{GLYPH_SEARCH, GLYPH_CLIPBOARD, GLYPH_COMMAND, GLYPH_FOLDER, GLYPH_KEY, GLYPH_KEYBOARD, GLYPH_LINK, GLYPH_NOTE, GLYPH_SNIPPET};
 use crate::util::{SendHwnd, wide};
 use orbit_core::bindings_text::*;
@@ -233,6 +234,9 @@ struct Controls {
     appearance: HWND,
     keyboard: HWND,
     keyboard_note: HWND,
+    /// What the launcher follows to choose its screen, and the picture of the screens.
+    screen_mode: HWND,
+    screen: HWND,
     low_resource: HWND,
     link_icons: HWND,
     exchange_rates: HWND,
@@ -3843,6 +3847,9 @@ fn collect(state: &State) -> (Settings, Option<String>) {
     s.launcher.excluded_apps = state.pickers[PICKER_LAUNCHER].chosen.clone();
     s.appearance = APPEARANCE[selected(c.appearance).min(APPEARANCE.len() - 1)].1;
     s.launcher.keyboard = KEYBOARD[selected(c.keyboard).min(KEYBOARD.len() - 1)].1;
+    if let Some(screen) = screen_picker::choice(c.screen) {
+        s.launcher.screen = screen;
+    }
     s.low_resource_mode = is_checked(c.low_resource);
     s.fetch_link_icons = is_checked(c.link_icons);
     s.fetch_exchange_rates = is_checked(c.exchange_rates);
@@ -4315,6 +4322,7 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
                     clicked_away(s)
                 }
                 WM_ENTERSIZEMOVE => s.moving = true,
+                WM_DISPLAYCHANGE => screen_picker::refresh(s.controls.screen),
                 WM_EXITSIZEMOVE => {
                     s.moving = false;
                     if std::mem::take(&mut s.dpi_change_waiting) {
@@ -4479,6 +4487,12 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
                         if control == s.controls.keyboard {
                             let mode = KEYBOARD[selected(control).min(KEYBOARD.len() - 1)].1;
                             set_status(s.controls.keyboard_note, keyboard_description(mode));
+                        }
+                        if control == s.controls.screen_mode {
+                            // Only a specific screen shows the picture. The card grows or closes up.
+                            let screen = s.controls.screen;
+                            screen_picker::set_mode(screen, selected(control));
+                            resize_on_page(s, screen, screen_picker::height(screen));
                         }
                         // Arrowing through an open list isn't choosing. Closing it is, below.
                         if SendMessageW(control, CB_GETDROPPEDSTATE, None, None).0 == 0 {
@@ -4792,6 +4806,15 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         b.line();
         let fit_results = b.switch("Shrink to fit results", settings.launcher.fit_results, 0);
         b.note("Off keeps the launcher one height, so it doesn't move while you type.");
+        b.end_card();
+
+        b.heading("Where the launcher opens");
+        b.begin_card();
+        let screen_at = screen_picker::mode_of(&settings.launcher.screen);
+        let screen_mode = b.combo("Open on", &screen_picker::MODES, screen_at, 0);
+        let screen_note = b.note(screen_picker::mode_note(screen_at));
+        // The picture draws the line above itself, so the line folds away with it.
+        let screen = screen_picker::create(&mut b, &settings.launcher.screen, screen_note);
         b.end_card();
 
         b.heading("Launcher shortcut");
@@ -5110,6 +5133,8 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
             appearance,
             keyboard,
             keyboard_note,
+            screen_mode,
+            screen,
             low_resource,
             link_icons,
             exchange_rates,
@@ -5962,6 +5987,50 @@ pub fn preview_selfcheck() -> Vec<String> {
         s.pickers[PICKER_HYPER].just_added = true;
         let _ = eats_key_text(&MSG { hwnd: s.controls.hotkey, message: WM_KEYDOWN, wParam: WPARAM(VK_DOWN.0 as usize), ..Default::default() });
         check("the next key ends the light on an added row", !s.pickers[PICKER_HYPER].just_added, format!("was {lit}"));
+
+        // The row says what the launcher opens on, and only "Specific screen" shows the picture.
+        {
+            use orbit_core::settings::LauncherScreen;
+            select_page(s, PAGE_GENERAL);
+            let screens = crate::displays::list();
+            let specific = |at: usize| LauncherScreen::Specific { id: screens[at].id.clone(), name: screens[at].name.clone() };
+            let (screen, screen_mode, below) = (s.controls.screen, s.controls.screen_mode, s.controls.hotkey);
+            // As choosing in the row does, whether it's side by side or a drop-down.
+            let pick = |mode: usize| {
+                SendMessageW(screen_mode, CB_SETCURSEL, Some(WPARAM(mode)), None);
+                SendMessageW(root, WM_COMMAND, Some(WPARAM((CBN_SELCHANGE as usize) << 16)), Some(LPARAM(screen_mode.0 as isize)));
+            };
+            let folded = |s: &State| place_on_page(s, screen).2 == 0 && !IsWindowEnabled(screen).as_bool();
+            pick(0);
+            let (page_before, below_before) = (s.page_heights[PAGE_GENERAL], place_on_page(s, below).1);
+            check("the active window's screen hides the picture", s.last_saved.launcher.screen == LauncherScreen::Active && folded(s), format!("{:?}, {} high", s.last_saved.launcher.screen, place_on_page(s, screen).2));
+            pick(2);
+            check("Main display opens on Windows' main screen, with no picture", s.last_saved.launcher.screen == LauncherScreen::Main && folded(s), format!("{:?}", s.last_saved.launcher.screen));
+            pick(3);
+            let tall = screen_picker::height(screen);
+            check("Specific screen picks one and shows the picture", matches!(s.last_saved.launcher.screen, LauncherScreen::Specific { .. }) && tall > 0 && place_on_page(s, screen).2 == tall && IsWindowEnabled(screen).as_bool(), format!("{:?}, {} high", s.last_saved.launcher.screen, place_on_page(s, screen).2));
+            check("and the page grows to fit it", s.page_heights[PAGE_GENERAL] == page_before + tall && place_on_page(s, below).1 == below_before + tall, format!("{} then {}", page_before, s.page_heights[PAGE_GENERAL]));
+            if screens.len() >= 2 {
+                let last = screens.len() - 1;
+                let (x, y) = screen_picker::preview_point(screen, last).unwrap_or((-1, -1));
+                SendMessageW(screen, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(LPARAM(((y as isize) << 16) | (x as isize & 0xFFFF))));
+                check("clicking a screen picks it", s.last_saved.launcher.screen == specific(last), format!("{:?}", s.last_saved.launcher.screen));
+                check("and the line under the picture names it", get_text(screen) == screens[last].describe(), get_text(screen));
+                SendMessageW(screen, WM_KEYDOWN, Some(WPARAM(VK_LEFT.0 as usize)), None);
+                check("Left picks the screen to its left", s.last_saved.launcher.screen == specific(last - 1), format!("{:?}", s.last_saved.launcher.screen));
+            } else {
+                check("the picture shows the one screen", screens.len() == 1 && screen_picker::preview_point(screen, 0).is_some(), format!("{} screens", screens.len()));
+            }
+            let picked = s.last_saved.launcher.screen.clone();
+            pick(1);
+            check("Pointer hides the picture again", s.last_saved.launcher.screen == LauncherScreen::Pointer && folded(s), format!("{:?}", s.last_saved.launcher.screen));
+            check("and the page closes up", s.page_heights[PAGE_GENERAL] == page_before && place_on_page(s, below).1 == below_before, format!("{} then {}", page_before, s.page_heights[PAGE_GENERAL]));
+            pick(3);
+            check("Specific screen again brings back the screen picked before", s.last_saved.launcher.screen == picked, format!("{:?}", s.last_saved.launcher.screen));
+            SendMessageW(root, WM_DISPLAYCHANGE, None, None);
+            let _ = save_now(s);
+            check("the screens changing keeps it", s.last_saved.launcher.screen == picked, format!("{:?}", s.last_saved.launcher.screen));
+        }
 
         // The last good text is what a later mistake falls back to.
         select_page(s, PAGE_HOTKEYS);

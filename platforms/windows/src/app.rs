@@ -1091,6 +1091,7 @@ impl App {
                 None
             }
             WM_DISPLAYCHANGE => {
+                crate::displays::changed();
                 if self.visible {
                     self.hide(false);
                 }
@@ -1593,16 +1594,11 @@ impl App {
         }
     }
 
-    /// Places the window on the monitor the user is working on, in the upper part of the screen.
+    /// Places the window on the screen the setting says, the one the user is working on unless
+    /// they chose otherwise, in the upper part of the screen.
     fn position_window(&mut self) -> (i32, i32) {
         unsafe {
-            let monitor = if self.prev_foreground.is_invalid() {
-                let mut point = POINT::default();
-                let _ = GetCursorPos(&mut point);
-                MonitorFromPoint(point, MONITOR_DEFAULTTOPRIMARY)
-            } else {
-                MonitorFromWindow(self.prev_foreground, MONITOR_DEFAULTTONEAREST)
-            };
+            let monitor = crate::displays::launcher_monitor(&self.settings.launcher.screen, self.prev_foreground);
             let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
             let _ = GetMonitorInfoW(monitor, &mut info);
             let area = info.rcWork;

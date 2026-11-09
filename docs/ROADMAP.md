@@ -20,6 +20,7 @@ What's built, and what's next by impact. "Tested" below means the automated suit
 | Set a hotkey from the action menu | tested | not built |
 | Keycap badges and redesigned look | checked by screenshots, before the rounder design above | not built |
 | An app's hotkey, pressed again, minimizes it | tested | not built |
+| Opening the launcher on the main screen, or on a specific one picked from a picture of the screens | unit tested, read this PC's one real screen, checked by driving the hidden window with messages over three stand-in screens, and seen in off-screen frames. **Not tried with a real second monitor, a real click or plugging one in** | not built |
 | HyperKey | tested with injected keys, used by the owner with a physical key | tested with injected F-keys only; real Caps Lock remap not tested |
 | Game detection | tested with a test window in a game folder; no real game tried | not built: still the older fullscreen rule |
 | Clipboard history | tested | tested |
