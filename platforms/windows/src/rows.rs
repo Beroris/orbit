@@ -5,6 +5,7 @@ use crate::integrations::{Field, Tool};
 use crate::util::format_bytes;
 use crate::worker::{ClipPreview, PreviewBody};
 use orbit_core::extension::{ActionKind, ItemAction};
+use orbit_core::settings::IconStyle;
 use orbit_core::{Action, Builtin};
 use orbit_data::ClipKind;
 
@@ -108,9 +109,8 @@ pub fn extension_glyph(ext: orbit_core::builtin_ext::BuiltinExt) -> char {
     }
 }
 
-/// The two colours of a command's tile, light at the top left and deep at the bottom right. Colour
-/// tells them apart at a glance, as app icons do, and the second shifts a little in hue so the tile
-/// has some life in it rather than one colour getting darker.
+/// A command's colour, as a light shade for dark backgrounds and a deep one for light. Coloured
+/// symbols and tinted tiles are drawn in it, so commands can be told apart at a glance.
 pub fn tile_colors(glyph: char) -> (Rgb, Rgb) {
     const BLUE: (Rgb, Rgb) = (Rgb(96, 165, 250), Rgb(37, 84, 220));
     const SKY: (Rgb, Rgb) = (Rgb(56, 196, 248), Rgb(14, 104, 206));
@@ -160,6 +160,28 @@ pub fn tile_colors(glyph: char) -> (Rgb, Rgb) {
     }
 }
 
+/// How Orbit's own commands' symbols are drawn: the setting, kept where every window draws from.
+static ICON_STYLE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+const ICON_STYLES: [IconStyle; 4] = [IconStyle::Plain, IconStyle::Coloured, IconStyle::GreyTiles, IconStyle::TintedTiles];
+
+pub fn icon_style() -> IconStyle {
+    ICON_STYLES[ICON_STYLE.load(std::sync::atomic::Ordering::Relaxed) as usize % ICON_STYLES.len()]
+}
+
+pub fn set_icon_style(style: IconStyle) {
+    let at = ICON_STYLES.iter().position(|each| *each == style).unwrap_or(0);
+    ICON_STYLE.store(at as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A symbol drawn in its colour, light enough to read on dark and deep enough on light.
+pub fn coloured_symbol((light, deep): (Rgb, Rgb), dark: bool) -> Rgb {
+    if dark { light.mix(Rgb(255, 255, 255), 0.15) } else { deep.mix(Rgb(0, 0, 0), 0.1) }
+}
+
+/// A tinted tile's fill, how opaque it is, and its symbol's colour.
+pub fn tinted_tile(colours: (Rgb, Rgb), dark: bool) -> (Rgb, u8, Rgb) {
+    (colours.0.mix(colours.1, 0.35), if dark { 52 } else { 40 }, coloured_symbol(colours, dark))
+}
 
 /// How an answer is shown when it's the only result: the question and the answer side by side,
 /// with what each is in, and a note under them.

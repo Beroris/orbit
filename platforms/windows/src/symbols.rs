@@ -99,13 +99,19 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
         ],
         // Snippet
         '\u{E943}' => vec![brace(false), brace(true)],
-        // Clipboard
-        '\u{E77F}' => vec![
-            Frame(5.0, 4.5, 14.0, 17.0, 2.8),
-            Frame(8.75, 2.5, 6.5, 4.0, 1.5),
-            line((8.75, 12.0), (15.25, 12.0)),
-            line((8.75, 16.0), (13.0, 16.0)),
-        ],
+        // Clipboard: the board stops either side of its clip, so the two don't run together
+        '\u{E77F}' => {
+            let mut board = vec![(8.0, 4.5), (7.5, 4.5)];
+            curve((7.5, 4.5), (4.5, 4.5), (4.5, 7.5), &mut board);
+            board.push((4.5, 18.5));
+            curve((4.5, 18.5), (4.5, 21.5), (7.5, 21.5), &mut board);
+            board.push((16.5, 21.5));
+            curve((16.5, 21.5), (19.5, 21.5), (19.5, 18.5), &mut board);
+            board.push((19.5, 7.5));
+            curve((19.5, 7.5), (19.5, 4.5), (16.5, 4.5), &mut board);
+            board.push((16.0, 4.5));
+            vec![Path(board, false), Frame(8.5, 2.5, 7.0, 4.0, 1.4), line((8.5, 11.5), (15.5, 11.5)), line((8.5, 15.5), (13.0, 15.5))]
+        }
         // Calculator
         '\u{E8EF}' => {
             let mut out = vec![Frame(5.0, 2.5, 14.0, 19.0, 3.2), Frame(8.25, 5.75, 7.5, 3.5, 1.0)];
@@ -150,13 +156,27 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             let meridian: Vec<P> = (0..48).map(|k| at((0.0, 0.0), 1.0, k as f32 * 7.5)).map(|(x, y)| (12.0 + x * 4.2, 12.0 + y * 9.0)).collect();
             vec![Ring((12.0, 12.0), 9.0), line((3.0, 12.0), (21.0, 12.0)), Path(meridian, true)]
         }
-        // Copy
-        '\u{E8C8}' => vec![Frame(8.5, 8.5, 12.5, 12.5, 2.6), open(&[(15.5, 8.5), (15.5, 3.0), (3.0, 3.0), (3.0, 15.5), (8.5, 15.5)])],
-        // Pin
-        '\u{E718}' => vec![
-            line((12.0, 15.5), (12.0, 21.5)),
-            closed(&[(8.5, 3.0), (15.5, 3.0), (14.6, 8.8), (18.0, 12.2), (18.0, 15.5), (6.0, 15.5), (6.0, 12.2), (9.4, 8.8)]),
-        ],
+        // Copy: the copy in front, and the corners of the one behind rounded like it
+        '\u{E8C8}' => {
+            let mut behind = vec![(15.5, 8.5), (15.5, 5.6)];
+            curve((15.5, 5.6), (15.5, 3.0), (12.9, 3.0), &mut behind);
+            behind.push((5.6, 3.0));
+            curve((5.6, 3.0), (3.0, 3.0), (3.0, 5.6), &mut behind);
+            behind.push((3.0, 12.9));
+            curve((3.0, 12.9), (3.0, 15.5), (5.6, 15.5), &mut behind);
+            behind.push((8.5, 15.5));
+            vec![Frame(8.5, 8.5, 12.5, 12.5, 2.6), Path(behind, false)]
+        }
+        // Pin: a push pin, with a rounded cap, a waist that flares out to its base, and the needle
+        '\u{E718}' => {
+            let mut left = vec![(9.0, 6.0), (9.0, 10.0)];
+            curve((9.0, 10.0), (9.0, 11.8), (7.4, 12.6), &mut left);
+            curve((7.4, 12.6), (5.0, 13.8), (5.0, 16.0), &mut left);
+            left.push((5.0, 16.5));
+            let mut body = left.clone();
+            body.extend(left.iter().rev().map(|&(x, y)| (24.0 - x, y)));
+            vec![Path(body, false), Frame(7.5, 2.5, 9.0, 3.5, 1.75), line((12.0, 16.5), (12.0, 21.5))]
+        }
         // Delete
         '\u{E74D}' => vec![
             line((3.5, 6.0), (20.5, 6.0)),
@@ -176,7 +196,12 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             let mut eye = vec![(2.5, 12.0)];
             curve((2.5, 12.0), (12.0, 3.0), (21.5, 12.0), &mut eye);
             curve((21.5, 12.0), (12.0, 21.0), (2.5, 12.0), &mut eye);
-            vec![Path(eye, true), Ring((12.0, 12.0), 3.0), line((4.0, 4.0), (20.0, 20.0))]
+            // The eye stops short of the line across it, and only half the pupil shows, so it
+            // stays clear when small.
+            let (from, to) = ((3.5, 3.5), (20.5, 20.5));
+            let mut out = cut_around(&eye, true, from, to, 3.0);
+            out.extend([Arc((12.0, 12.0), 3.2, 80.0, 190.0), line(from, to)]);
+            out
         }
         // Shield
         '\u{E83D}' => {
@@ -239,10 +264,11 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             line((17.0, 7.0), (19.75, 9.75)),
             line((14.25, 9.75), (16.5, 12.0)),
         ],
-        // Refresh
+        // Refresh: round clockwise, then straight on into a corner that points the way
         '\u{E72C}' => {
-            let tip = at((12.0, 12.0), 8.0, 290.0);
-            vec![Arc((12.0, 12.0), 8.0, 20.0, 290.0), head(tip, 20.0, 4.0)]
+            let end = at((12.0, 12.0), 8.5, 315.0);
+            let tip = (end.0 + 2.6, end.1 + 2.6);
+            vec![Arc((12.0, 12.0), 8.5, 0.0, 315.0), line(end, tip), open(&[(tip.0, tip.1 - 5.0), tip, (tip.0 - 5.0, tip.1)])]
         }
         // Emoji
         '\u{E76E}' => vec![Ring((12.0, 12.0), 9.0), Dot((9.0, 9.75), 1.3), Dot((15.0, 9.75), 1.3), Arc((12.0, 12.0), 5.0, 30.0, 150.0)],
@@ -292,10 +318,13 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
         '\u{F105}' => window_in(&[(5.5, 7.5), (18.5, 7.5), (18.5, 16.5), (5.5, 16.5)]),
         '\u{F106}' => window_in(&[(7.0, 9.0), (17.0, 9.0), (17.0, 15.0), (7.0, 15.0)]),
         '\u{F107}' => window_in(&[(9.0, 10.0), (15.0, 10.0), (15.0, 14.0), (9.0, 14.0)]),
+        // To the next display: a screen on its stand, with an arrow across it
         '\u{F108}' => vec![
-            Frame(2.0, 4.0, 13.0, 10.0, 2.0),
-            Frame(9.0, 10.0, 13.0, 10.0, 2.0),
-            Fill(vec![(11.0, 12.0), (20.0, 12.0), (20.0, 18.0), (11.0, 18.0)]),
+            Frame(2.5, 3.5, 19.0, 13.0, 2.6),
+            line((12.0, 16.5), (12.0, 20.5)),
+            line((8.0, 20.5), (16.0, 20.5)),
+            line((7.0, 10.0), (16.5, 10.0)),
+            head((16.5, 10.0), 0.0, 3.8),
         ],
         // Light and dark: a circle, half filled
         '\u{F109}' => {
@@ -317,8 +346,21 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             Arc((13.0, 12.0), 3.75, 305.0, 415.0),
             Arc((13.0, 12.0), 7.75, 305.0, 415.0),
         ],
-        // Timer
-        '\u{F10D}' => vec![Ring((12.0, 13.5), 8.0), line((12.0, 13.5), (12.0, 9.0)), line((9.5, 2.5), (14.5, 2.5)), line((12.0, 2.5), (12.0, 5.5))],
+        // Timer: an hourglass, with sand run into the bottom, so it isn't taken for the stopwatch
+        '\u{F10D}' => {
+            let mut left = vec![(7.5, 3.5), (7.5, 6.0)];
+            curve((7.5, 6.0), (7.5, 9.6), (11.2, 12.0), &mut left);
+            curve((11.2, 12.0), (7.5, 14.4), (7.5, 18.0), &mut left);
+            left.push((7.5, 20.5));
+            let right: Vec<P> = left.iter().map(|&(x, y)| (24.0 - x, y)).collect();
+            vec![
+                line((5.0, 3.5), (19.0, 3.5)),
+                line((5.0, 20.5), (19.0, 20.5)),
+                Path(left, false),
+                Path(right, false),
+                Fill(vec![(9.0, 20.0), (15.0, 20.0), (12.0, 16.6)]),
+            ]
+        }
         // Stopwatch
         '\u{F10E}' => vec![
             Ring((12.0, 13.5), 8.0),
@@ -327,13 +369,43 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             line((12.0, 2.5), (12.0, 5.5)),
             line((18.0, 6.5), (19.5, 5.0)),
         ],
-        // Eyedropper
-        '\u{F10F}' => vec![
-            line((4.5, 19.5), (12.5, 11.5)),
-            line((9.5, 8.5), (15.5, 14.5)),
-            closed(&[(12.0, 8.0), (15.5, 4.5), (19.5, 8.5), (16.0, 12.0)]),
-            Dot((4.0, 20.0), 1.4),
+        // Eyedropper: a glass tube from the tip, a collar, and the bulb you squeeze
+        '\u{F10F}' => {
+            let (base, top, radius) = ((15.3, 8.7), (18.6, 5.4), 2.4);
+            let mut bulb: Vec<P> = (0..=12).map(|k| at(top, radius, 45.0 - k as f32 * 15.0)).collect();
+            bulb.extend((0..=12).map(|k| at(base, radius, 225.0 - k as f32 * 15.0)));
+            vec![
+                open(&[(12.0, 9.0), (3.5, 17.5), (3.5, 20.5), (6.5, 20.5), (15.0, 12.0)]),
+                line((10.5, 7.5), (16.5, 13.5)),
+                Path(bulb, true),
+            ]
+        }
+        // Extension: blocks, with one more being added, turned as it goes in. A puzzle piece read as
+        // a mug when small.
+        '\u{EA86}' => vec![
+            Frame(3.0, 3.0, 7.5, 7.5, 1.8),
+            Frame(3.0, 13.0, 7.5, 7.5, 1.8),
+            Frame(13.0, 13.0, 7.5, 7.5, 1.8),
+            closed(&[(16.75, 2.85), (20.65, 6.75), (16.75, 10.65), (12.85, 6.75)]),
         ],
+        // Import: an arrow going into a box from the left
+        '\u{E8B5}' => {
+            let mut box_side = vec![(12.5, 3.5), (17.5, 3.5)];
+            curve((17.5, 3.5), (20.5, 3.5), (20.5, 6.5), &mut box_side);
+            box_side.push((20.5, 17.5));
+            curve((20.5, 17.5), (20.5, 20.5), (17.5, 20.5), &mut box_side);
+            box_side.push((12.5, 20.5));
+            vec![Path(box_side, false), line((3.0, 12.0), (14.0, 12.0)), head((14.0, 12.0), 0.0, 4.5)]
+        }
+        // Update: an arrow coming down into a tray, as a download is drawn
+        '\u{E896}' => {
+            let mut tray = vec![(3.5, 14.5), (3.5, 17.5)];
+            curve((3.5, 17.5), (3.5, 20.5), (6.5, 20.5), &mut tray);
+            tray.push((17.5, 20.5));
+            curve((17.5, 20.5), (20.5, 20.5), (20.5, 17.5), &mut tray);
+            tray.push((20.5, 14.5));
+            vec![Path(tray, false), line((12.0, 3.5), (12.0, 15.0)), head((12.0, 15.0), 90.0, 4.5)]
+        }
         // Branch, for GitHub
         '\u{F110}' => {
             let mut joint = vec![(17.0, 9.0)];
@@ -349,6 +421,41 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
 /// A window, with the part of the screen it goes to filled in.
 fn window_in(part: &[P]) -> Vec<Shape> {
     vec![Frame(2.5, 4.5, 19.0, 15.0, 2.6), Fill(part.to_vec())]
+}
+
+/// The line through `points`, less the parts within `gap` of the segment from `a` to `b`, as
+/// separate strokes: for one line crossing another with room either side.
+fn cut_around(points: &[P], closed: bool, a: P, b: P, gap: f32) -> Vec<Shape> {
+    // A point every quarter of a unit, so the cut falls where it should.
+    let mut fine = Vec::new();
+    let sides = if closed { points.len() } else { points.len().saturating_sub(1) };
+    for k in 0..sides {
+        let (p, q) = (points[k], points[(k + 1) % points.len()]);
+        let steps = ((q.0 - p.0).hypot(q.1 - p.1) * 4.0).ceil().max(1.0) as usize;
+        fine.extend((0..steps).map(|step| {
+            let t = step as f32 / steps as f32;
+            (p.0 + (q.0 - p.0) * t, p.1 + (q.1 - p.1) * t)
+        }));
+    }
+    if !closed {
+        fine.extend(points.last());
+    }
+    let kept = |p: &P| segment_distance(*p, a, b) > gap;
+    let mut runs: Vec<Vec<P>> = vec![Vec::new()];
+    for p in &fine {
+        match (kept(p), runs.last_mut()) {
+            (true, Some(run)) => run.push(*p),
+            (false, Some(run)) if !run.is_empty() => runs.push(Vec::new()),
+            _ => {}
+        }
+    }
+    // Round a closed line, the last part carries on into the first.
+    if closed && runs.len() > 1 && fine.first().is_some_and(kept) && fine.last().is_some_and(kept) {
+        let mut last = runs.pop().unwrap_or_default();
+        last.append(&mut runs[0]);
+        runs[0] = last;
+    }
+    runs.into_iter().filter(|run| run.len() > 1).map(|run| Path(run, false)).collect()
 }
 
 /// Whether Orbit draws this symbol itself.
@@ -423,7 +530,23 @@ fn coverage(shape: &Shape, p: P, half: f32, unit: f32) -> f32 {
 /// a symbol on a coloured tile. Returns false, having drawn nothing, for a symbol Orbit doesn't
 /// draw itself.
 pub fn draw(buffer: &Backbuffer, glyph: char, size: f32, heavy: bool, ink: Rgb, rect: RECT, align: crate::text::Align) -> bool {
+    draw_turned(buffer, glyph, size, heavy, 0.0, ink, rect, align)
+}
+
+/// Draws `glyph` as [`draw`] does, turned clockwise about its middle by `degrees`, such as a
+/// chevron that turns as what it opens slides out.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_turned(buffer: &Backbuffer, glyph: char, size: f32, heavy: bool, degrees: f32, ink: Rgb, rect: RECT, align: crate::text::Align) -> bool {
     let Some(shapes) = shapes(glyph) else { return false };
+    // Each pixel is turned back the other way to find where it falls on the grid.
+    let (sin, cos) = (-degrees).to_radians().sin_cos();
+    let turn = |p: P| {
+        if degrees == 0.0 {
+            return p;
+        }
+        let (x, y) = (p.0 - 12.0, p.1 - 12.0);
+        (12.0 + x * cos - y * sin, 12.0 + x * sin + y * cos)
+    };
     // The grid leaves room around each symbol, as the icon font does, but a little less.
     let size = size * 1.12;
     let unit = size / 24.0;
@@ -443,7 +566,7 @@ pub fn draw(buffer: &Backbuffer, glyph: char, size: f32, heavy: bool, ink: Rgb, 
     let (y0, y1) = (((top - reach).floor() as i32).max(0), ((top + size + reach).ceil() as i32).min(height_px));
     for py in y0..y1 {
         for px in x0..x1 {
-            let p = ((px as f32 + 0.5 - left) / unit, (py as f32 + 0.5 - top) / unit);
+            let p = turn(((px as f32 + 0.5 - left) / unit, (py as f32 + 0.5 - top) / unit));
             let mut amount = 0.0f32;
             for shape in &shapes {
                 amount = amount.max(coverage(shape, p, half, unit));
@@ -469,14 +592,17 @@ mod tests {
 
     #[test]
     fn every_symbol_orbit_uses_is_drawn() {
-        use crate::rows::*;
-        for glyph in [
-            GLYPH_SEARCH, GLYPH_NOTE, GLYPH_SNIPPET, GLYPH_CLIPBOARD, GLYPH_CALC, GLYPH_CURRENCY, GLYPH_WEATHER, GLYPH_SPEED, GLYPH_LINK, GLYPH_WEB,
-            GLYPH_COPY, GLYPH_PIN, GLYPH_DELETE, GLYPH_EDIT, GLYPH_FOLDER, GLYPH_HIDE, GLYPH_SHIELD, GLYPH_TAG, GLYPH_PLAY, GLYPH_ADD, GLYPH_INFO,
-            GLYPH_WARNING, GLYPH_BACK, GLYPH_CHECK, GLYPH_IMAGE, GLYPH_COMMAND, GLYPH_KEYBOARD, GLYPH_STAR, GLYPH_STAR_FILLED, GLYPH_UP, GLYPH_DOWN,
-            GLYPH_KEY, GLYPH_REFRESH, GLYPH_EMOJI, GLYPH_SETTINGS, GLYPH_POWER, GLYPH_DIAGNOSTICS, GLYPH_HELP, GLYPH_GITHUB, GLYPH_AI,
-        ] {
-            assert!(has(glyph), "{:X}", glyph as u32);
+        // Every symbol named in rows.rs, so a new one can't quietly come from the thin icon font.
+        let named: Vec<(&str, char)> = include_str!("rows.rs")
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.trim().strip_prefix("pub const GLYPH_")?.split_once(": char = '\\u{")?;
+                Some((name, char::from_u32(u32::from_str_radix(value.split('}').next()?, 16).ok()?)?))
+            })
+            .collect();
+        assert!(named.len() > 50, "found {}", named.len());
+        for (name, glyph) in named {
+            assert!(has(glyph), "GLYPH_{name} ({:X}) isn't drawn", glyph as u32);
         }
         for glyph in ['\u{E72E}', '\u{E708}', '\u{E751}', '\u{E74A}', '\u{E74B}', '\u{E72A}', '\u{E8A5}'] {
             assert!(has(glyph), "{:X}", glyph as u32);

@@ -264,46 +264,6 @@ impl Backbuffer {
         }
     }
 
-    /// A rounded rectangle whose colour runs from `top` to `bottom`.
-    #[allow(clippy::too_many_arguments)]
-
-    /// A command's tile, lit the way an app icon is: `light` at the top left deepening to `deep` at
-    /// the bottom right, a soft gloss from above, and a `rim` wide edge that catches the light along
-    /// the top and falls into shade along the bottom.
-    #[allow(clippy::too_many_arguments)]
-    pub fn fill_tile(&mut self, x: i32, y: i32, size: i32, radius: f32, rim: f32, light: Rgb, deep: Rgb) {
-        const WHITE: Rgb = Rgb(255, 255, 255);
-        const BLACK: Rgb = Rgb(0, 0, 0);
-        let side = size as f32;
-        for py in y.max(0)..(y + size).min(self.height) {
-            let cy = (py - y) as f32 + 0.5;
-            let v = cy / side;
-            for px in x.max(0)..(x + size).min(self.width) {
-                let cx = (px - x) as f32 + 0.5;
-                let coverage = corner_coverage(cx, cy, side, side, radius);
-                if coverage <= 0.0 {
-                    continue;
-                }
-                let u = cx / side;
-                let mut color = light.mix(deep, (u * 0.35 + v * 0.65).clamp(0.0, 1.0));
-                // The gloss: a broad, soft light just above the top left.
-                let (gx, gy) = (u - 0.3, v + 0.2);
-                let gloss = (1.0 - (gx * gx + gy * gy).sqrt() / 0.95).clamp(0.0, 1.0);
-                color = color.mix(WHITE, gloss * gloss * 0.32);
-                // The rim, lit at the top and shaded at the bottom.
-                let inside = -round_rect_distance(cx, cy, side, side, radius);
-                let edge = (rim + 0.5 - inside).clamp(0.0, 1.0);
-                if edge > 0.0 {
-                    let lit = (1.0 - v * 1.8).clamp(0.0, 1.0);
-                    let shade = ((v - 0.5) * 2.0).clamp(0.0, 1.0);
-                    color = color.mix(WHITE, edge * lit * 0.5).mix(BLACK, edge * shade * 0.22);
-                }
-                let pixel = &mut self.row(py)[px as usize];
-                *pixel = blend_alpha(*pixel, color, coverage);
-            }
-        }
-    }
-
     /// A one-pixel line just inside a rounded rectangle's edge, over what is already there.
     #[allow(clippy::too_many_arguments)]
     pub fn stroke_round_rect_alpha(&mut self, x: i32, y: i32, w: i32, h: i32, radius: f32, thickness: f32, color: Rgb, alpha: u8) {
@@ -454,8 +414,13 @@ impl Backbuffer {
     }
 
     pub fn copy_to_dc_at(&self, target: HDC, x: i32, y: i32) {
+        self.copy_top_to_dc_at(target, x, y, self.height);
+    }
+
+    /// Copies only the top `height` rows, for something drawn whole that shows only in part.
+    pub fn copy_top_to_dc_at(&self, target: HDC, x: i32, y: i32, height: i32) {
         unsafe {
-            let _ = BitBlt(target, x, y, self.width, self.height, Some(self.dc), 0, 0, SRCCOPY);
+            let _ = BitBlt(target, x, y, self.width, height.min(self.height), Some(self.dc), 0, 0, SRCCOPY);
         }
     }
 
@@ -1111,16 +1076,6 @@ mod tests {
         assert_ne!(pixel(&buffer, 20, 39), 0, "bottom edge");
         assert_eq!(pixel(&buffer, 20, 20), 0, "middle");
         assert_eq!(pixel(&buffer, 20, 2), 0, "just inside");
-        assert_eq!(pixel(&buffer, 0, 0), 0, "outside the rounded corner");
-    }
-
-    #[test]
-    fn a_tile_runs_from_its_light_colour_to_its_deep_one_and_rounds_its_corners() {
-        let mut buffer = Backbuffer::new(40, 40).unwrap();
-        buffer.fill_tile(0, 0, 40, 8.0, 1.0, Rgb(200, 0, 0), Rgb(0, 0, 200));
-        let (near_top, near_bottom) = (pixel(&buffer, 8, 6), pixel(&buffer, 32, 33));
-        assert!((near_top >> 16) & 0xff > (near_bottom >> 16) & 0xff, "redder at the top left");
-        assert!(near_bottom & 0xff > near_top & 0xff, "bluer at the bottom right");
         assert_eq!(pixel(&buffer, 0, 0), 0, "outside the rounded corner");
     }
 

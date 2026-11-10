@@ -21,7 +21,7 @@ use crate::rows::{GLYPH_SEARCH, GLYPH_CLIPBOARD, GLYPH_COMMAND, GLYPH_FOLDER, GL
 use crate::util::{SendHwnd, wide};
 use orbit_core::bindings_text::*;
 use orbit_core::hotkeys::{self, Hotkey, same_target};
-use orbit_core::settings::Appearance;
+use orbit_core::settings::{Appearance, IconStyle};
 use orbit_core::{Action, Builtin, Settings};
 use orbit_hotkeys::chord::{is_reserved_on_windows, is_usable_global};
 use orbit_hotkeys::{Chord, HyperMode, Mods, TapBehavior};
@@ -213,6 +213,9 @@ const ARM_TIMER: usize = 3;
 /// Takes away the outline round a setting that a search went to.
 const FLASH_TIMER: usize = 4;
 const FLASH_MS: u32 = 1800;
+/// Moves an extension's accordion along as it opens or closes.
+const UNFOLD_TIMER: usize = 5;
+const UNFOLD_FRAME_MS: u32 = 10;
 /// How long typing has to pause before a text box saves.
 const TEXT_SAVE_DELAY_MS: u32 = 500;
 const SAVED_MS: u32 = 2200;
@@ -262,6 +265,7 @@ struct Controls {
     fit_results: HWND,
     launcher_games: HWND,
     appearance: HWND,
+    icon_style: HWND,
     keyboard: HWND,
     keyboard_note: HWND,
     /// What the launcher follows to choose its screen, and the picture of the screens.
@@ -612,6 +616,56 @@ const EXT_TITLES_DIP: i32 = 30;
 const EXT_ROW_DIP: i32 = 56;
 const EXT_COMMAND_DIP: i32 = 40;
 const EXT_TILE_DIP: i32 = 30;
+/// The chevron at the start of an extension's row, which shows whether it's open.
+const EXT_CHEVRON_DIP: i32 = 22;
+/// How long an extension takes to open or close: a little longer for more commands, never slow.
+const UNFOLD_BASE_MS: f32 = 150.0;
+const UNFOLD_PER_ROW_MS: f32 = 22.0;
+const UNFOLD_MOST_MS: f32 = 260.0;
+
+/// An extension's commands sliding out from under it, or back in.
+struct Unfold {
+    /// Its place in the Extensions table.
+    entry: usize,
+    opening: bool,
+    started: std::time::Instant,
+    ms: f32,
+    /// A preview's still frame, this far through.
+    held: Option<f32>,
+}
+
+impl Unfold {
+    /// How much of its commands show, from 0 to 1.
+    fn shown(&self) -> f32 {
+        unfold_shown(self.held.unwrap_or_else(|| self.started.elapsed().as_secs_f32() * 1000.0 / self.ms), self.opening)
+    }
+
+    fn done(&self) -> bool {
+        self.held.is_none() && self.started.elapsed().as_secs_f32() * 1000.0 >= self.ms
+    }
+}
+
+/// How much of an extension's commands show this far through a slide: quick at first, easing in
+/// to rest.
+fn unfold_shown(through: f32, opening: bool) -> f32 {
+    let eased = 1.0 - (1.0 - through.clamp(0.0, 1.0)).powi(3);
+    if opening { eased } else { 1.0 - eased }
+}
+
+/// How far through a slide this way starts, for one turned back part way with `shown` showing,
+/// so that it carries on from there.
+fn unfold_resume(shown: f32, opening: bool) -> f32 {
+    let left = if opening { 1.0 - shown } else { shown };
+    1.0 - left.clamp(0.0, 1.0).cbrt()
+}
+
+/// How tall one of `count` commands sliding out is, at `place` among them, each `full` tall,
+/// while `shown` of them all shows: those nearer the extension come out first, as one sheet.
+fn slide_height(shown: f32, full: i32, place: usize, count: usize) -> i32 {
+    let out = shown * (full * count as i32) as f32 - (full * place as i32) as f32;
+    // A list row can't be nothing at all.
+    (out.round() as i32).clamp(1, full)
+}
 
 /// Something that can come up when searching in Orbit, which the Search page can turn off, give
 /// an alias, or give a hotkey.
@@ -789,6 +843,8 @@ enum SearchRow {
 /// The parts of a row that do something, left to right.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum SearchCell {
+    /// An extension's chevron, which opens and closes it.
+    Expand,
     Alias,
     Hotkey,
     Switch,
@@ -918,25 +974,199 @@ fn search_rows(items: &[SearchItem], entries: &[ExtEntry], settings: &Settings, 
     rows
 }
 
+/// Whether one of an extension's commands is found by what's typed: by its name, or its alias.
+fn command_matches(settings: &Settings, item: &SearchItem, query: &str) -> bool {
+    item.name.to_lowercase().contains(query) || alias_of(settings, item).to_lowercase() == query
+}
+
 /// The Extensions table's rows for what's typed in its filter: the column titles, then each
-/// extension that matches. One that's on and has more than one command has them under it.
-fn extension_rows(items: &[SearchItem], entries: &[ExtEntry], settings: &Settings, query: &str) -> Vec<SearchRow> {
+/// extension that matches. Each one is an accordion: one that's open has its commands under it,
+/// all of them, or with a filter, those it finds.
+fn extension_rows(items: &[SearchItem], entries: &[ExtEntry], settings: &Settings, query: &str, open: impl Fn(usize) -> bool) -> Vec<SearchRow> {
     let query = query.trim().to_lowercase();
     let mut rows = vec![SearchRow::Header(COLUMN_TITLES)];
     for (e, entry) in entries.iter().enumerate() {
         let commands = ext_commands(items, e);
         let named = query.is_empty() || entry.name.to_lowercase().contains(&query) || entry.about.to_lowercase().contains(&query);
-        let matching: Vec<usize> =
-            commands.iter().copied().filter(|&at| named || items[at].name.to_lowercase().contains(&query) || alias_of(settings, &items[at]).to_lowercase() == query).collect();
+        let matching: Vec<usize> = commands.iter().copied().filter(|&at| named || command_matches(settings, &items[at], &query)).collect();
         if !named && matching.is_empty() {
             continue;
         }
         rows.push(SearchRow::Extension(e));
-        if ext_is_on(settings, entry) && commands.len() > 1 {
+        if open(e) {
             rows.extend(matching.into_iter().map(SearchRow::Item));
         }
     }
     if rows.len() == 1 { Vec::new() } else { rows }
+}
+
+/// The extensions with a command that what's typed finds by its own name or alias, so that the
+/// filter can open them to show it.
+fn extensions_found_by_command(items: &[SearchItem], entries: &[ExtEntry], settings: &Settings, query: &str) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    (0..entries.len()).filter(|&e| ext_commands(items, e).into_iter().any(|at| command_matches(settings, &items[at], &query))).collect()
+}
+
+/// The extension a row belongs to in the Extensions table: its own, or the one a command is under.
+fn row_extension(s: &State, t: usize, at: usize) -> Option<usize> {
+    match *s.tables[t].rows.get(at)? {
+        SearchRow::Extension(e) => Some(e),
+        SearchRow::Item(item) if t == TABLE_EXTENSIONS => s.search_items[item].group.checked_sub(GROUP_EXTENSIONS),
+        _ => None,
+    }
+}
+
+fn ext_open(s: &State, e: usize) -> bool {
+    s.ext_entries.get(e).is_some_and(|entry| s.ext_open.contains(&entry.id))
+}
+
+/// Opens an extension's accordion, or closes it, sliding unless Windows' animations are off.
+fn set_ext_open(s: &mut State, e: usize, open: bool) {
+    let Some(id) = s.ext_entries.get(e).map(|entry| entry.id.clone()) else { return };
+    if s.ext_open.contains(&id) == open {
+        return;
+    }
+    let t = TABLE_EXTENSIONS;
+    // What's being changed in a row that's about to go is kept, or put back.
+    finish_alias_edit(s, t, true);
+    finish_alias_edit(s, t, false);
+    if search_recording_row(s).is_some_and(|(table, at)| table == t && row_extension(s, t, at) == Some(e)) {
+        stop_hotkey_record(s);
+    }
+    if open {
+        s.ext_open.insert(id);
+    } else {
+        s.ext_open.remove(&id);
+    }
+    let commands = ext_commands(&s.search_items, e).len();
+    // Where it already was, from a slide still going the other way.
+    let from = s.unfolding.iter().position(|u| u.entry == e).map(|at| s.unfolding.remove(at).shown());
+    if commands > 0 && animations_on() {
+        let ms = (UNFOLD_BASE_MS + UNFOLD_PER_ROW_MS * commands as f32).min(UNFOLD_MOST_MS);
+        let mut unfold = Unfold { entry: e, opening: open, started: std::time::Instant::now(), ms, held: None };
+        // Turning back part way carries on from where it was, rather than jumping.
+        if let Some(from) = from {
+            unfold.started -= std::time::Duration::from_secs_f32(unfold_resume(from, open) * ms / 1000.0);
+        }
+        s.unfolding.push(unfold);
+        unsafe {
+            SetTimer(Some(window_of(s)), UNFOLD_TIMER, UNFOLD_FRAME_MS, None);
+        }
+    }
+    // Its row's words, which a screen reader hears, say whether it's open.
+    refresh_table(s, t);
+}
+
+/// The Extensions table again for what's typed in its filter. An extension with a command it
+/// finds by name or alias opens to show it, at once, and stays open after.
+fn filter_extensions(s: &mut State) {
+    let query = get_text(s.tables[TABLE_EXTENSIONS].filter);
+    for e in extensions_found_by_command(&s.search_items, &s.ext_entries, &s.base, &query) {
+        s.unfolding.retain(|u| u.entry != e);
+        s.ext_open.insert(s.ext_entries[e].id.clone());
+    }
+    refresh_table(s, TABLE_EXTENSIONS);
+}
+
+/// Opens an extension that's closed and closes one that's open.
+fn toggle_ext_open(s: &mut State, e: usize) {
+    let open = !ext_open(s, e);
+    set_ext_open(s, e, open);
+}
+
+/// Whether Windows is set to show animations, as Settings → Accessibility → Visual effects says.
+fn animations_on() -> bool {
+    if forms::is_preview() {
+        return false;
+    }
+    let mut on = windows::core::BOOL(1);
+    unsafe {
+        let _ = SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, Some(&mut on as *mut _ as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0));
+    }
+    on.as_bool()
+}
+
+/// A frame of the extensions sliding open or shut: each command's row as tall as it shows, the
+/// table sized to match, and the page following one that opens below the bottom of the window.
+fn step_unfold(s: &mut State) {
+    let t = TABLE_EXTENSIONS;
+    let list = s.tables[t].list;
+    // Which have finished is read once, so none can finish between deciding and dropping it.
+    let (done, going): (Vec<Unfold>, Vec<Unfold>) = std::mem::take(&mut s.unfolding).into_iter().partition(Unfold::done);
+    s.unfolding = going;
+    let finished_closing = done.iter().any(|u| !u.opening);
+    let opening: Vec<usize> = s.unfolding.iter().chain(&done).filter(|u| u.opening).map(|u| u.entry).collect();
+    if s.unfolding.is_empty() {
+        unsafe {
+            let _ = KillTimer(Some(window_of(s)), UNFOLD_TIMER);
+        }
+    }
+    if finished_closing {
+        // Their rows go, which sizes the table too.
+        refresh_table(s, t);
+    } else {
+        let heights: Vec<i32> = (0..s.tables[t].rows.len()).map(|at| table_row_px(s, t, at)).collect();
+        // The list is made its new height first, so its rows always fit and it never scrolls
+        // within itself.
+        resize_on_page(s, list, heights.iter().sum::<i32>().max(1));
+        unsafe {
+            for (at, height) in heights.into_iter().enumerate() {
+                if SendMessageW(list, LB_GETITEMHEIGHT, Some(WPARAM(at)), None).0 != height as isize {
+                    SendMessageW(list, LB_SETITEMHEIGHT, Some(WPARAM(at)), Some(LPARAM(height as isize)));
+                }
+            }
+            SendMessageW(list, LB_SETTOPINDEX, Some(WPARAM(0)), None);
+            let _ = InvalidateRect(Some(list), None, false);
+        }
+    }
+    for e in opening {
+        follow_unfold(s, e);
+    }
+}
+
+/// Scrolls the page down as far as an opening extension's last command, but never so far that its
+/// own row goes off the top.
+fn follow_unfold(s: &mut State, e: usize) {
+    let t = TABLE_EXTENSIONS;
+    let rows = &s.tables[t].rows;
+    let Some(first) = rows.iter().position(|row| *row == SearchRow::Extension(e)) else { return };
+    let last = (first + 1..rows.len()).take_while(|&at| matches!(rows[at], SearchRow::Item(_))).last().unwrap_or(first);
+    let (Some(top), Some(bottom)) = (row_on_page(s, t, first).map(|r| r.0), row_on_page(s, t, last).map(|r| r.1)) else { return };
+    let margin = forms::scale(16, s.style.dpi);
+    let view = view_height(s);
+    if bottom + margin > s.scroll + view {
+        let wanted = (bottom + margin - view).min(top - margin);
+        if wanted > s.scroll {
+            scroll_to(s, wanted);
+        }
+    }
+}
+
+/// A row's top and bottom, in the page's own coordinates.
+fn row_on_page(s: &State, t: usize, at: usize) -> Option<(i32, i32)> {
+    let list = s.tables[t].list;
+    let mut row = RECT::default();
+    unsafe {
+        if SendMessageW(list, LB_GETITEMRECT, Some(WPARAM(at)), Some(LPARAM(&mut row as *mut RECT as isize))).0 < 0 {
+            return None;
+        }
+        let mut top_left = POINT { x: row.left, y: row.top };
+        let _ = ClientToScreen(list, &mut top_left);
+        let _ = ScreenToClient(s.content, &mut top_left);
+        Some((top_left.y, top_left.y + row.bottom - row.top))
+    }
+}
+
+/// How far an extension's chevron has turned, from closed (0) to open (1).
+fn chevron_turn(s: &State, e: usize) -> f32 {
+    match s.unfolding.iter().find(|u| u.entry == e) {
+        Some(unfold) => unfold.shown(),
+        None if ext_open(s, e) => 1.0,
+        None => 0.0,
+    }
 }
 
 /// The alias an item answers to: a quicklink's or command's own, or one given to it since.
@@ -988,37 +1218,46 @@ fn search_cell_at(dpi: u32, width: i32, x: i32) -> Option<SearchCell> {
     }
 }
 
-/// The command whose alias and hotkey a row shows: its own, or an extension's only one.
+/// The command whose alias and hotkey a row shows.
 fn row_command(s: &State, t: usize, at: usize) -> Option<usize> {
     match *s.tables[t].rows.get(at)? {
         SearchRow::Item(item) => Some(item),
-        SearchRow::Extension(e) => {
-            let commands = ext_commands(&s.search_items, e);
-            (commands.len() == 1).then(|| commands[0])
-        }
-        SearchRow::Header(_) => None,
+        _ => None,
     }
 }
 
-/// The command a row changes, which an extension's row has only while the extension is on.
+/// The command a row changes, which one under an extension has only while the extension is on.
 fn row_item(s: &State, t: usize, at: usize) -> Option<usize> {
     let item = row_command(s, t, at)?;
-    match s.tables[t].rows[at] {
-        SearchRow::Extension(e) if !ext_is_on(&s.base, &s.ext_entries[e]) => None,
+    match row_extension(s, t, at) {
+        Some(e) if t == TABLE_EXTENSIONS && !ext_is_on(&s.base, &s.ext_entries[e]) => None,
         _ => Some(item),
     }
 }
 
 /// The parts of a row that do something, left to right. A command under an extension has no
-/// switch, since the extension's own turns it on and off.
+/// switch, since the extension's own turns it on and off, and the extension's row opens and
+/// closes with its chevron, or a click anywhere along it.
 fn row_cells(s: &State, t: usize, at: usize) -> &'static [SearchCell] {
     const ALL: &[SearchCell] = &[SearchCell::Alias, SearchCell::Hotkey, SearchCell::Switch];
+    const EXTENSION: &[SearchCell] = &[SearchCell::Expand, SearchCell::Switch];
     match s.tables[t].rows.get(at) {
         Some(SearchRow::Item(_)) if t == TABLE_SEARCH => ALL,
-        Some(SearchRow::Item(_)) => &ALL[..2],
-        Some(SearchRow::Extension(_)) if row_item(s, t, at).is_some() => ALL,
-        Some(SearchRow::Extension(_)) => &ALL[2..],
+        Some(SearchRow::Item(_)) if row_item(s, t, at).is_some() => &ALL[..2],
+        Some(SearchRow::Extension(e)) if ext_commands(&s.search_items, *e).is_empty() => &EXTENSION[1..],
+        Some(SearchRow::Extension(_)) => EXTENSION,
         _ => &[],
+    }
+}
+
+/// The part of a row a click at `x` lands on. Anywhere along an extension's row but its switch
+/// opens or closes it.
+fn table_cell_at(s: &State, t: usize, at: usize, width: i32, x: i32) -> Option<SearchCell> {
+    let cell = search_cell_at(s.style.dpi, width, x);
+    let cells = row_cells(s, t, at);
+    match s.tables[t].rows.get(at) {
+        Some(SearchRow::Extension(_)) if cell != Some(SearchCell::Switch) && cells.contains(&SearchCell::Expand) => Some(SearchCell::Expand),
+        _ => cell.filter(|cell| cells.contains(cell)),
     }
 }
 
@@ -1052,7 +1291,34 @@ fn say_table_note(s: &mut State, t: usize, text: &str, alert: bool) {
     set_note_text(s, note, text);
 }
 
-/// How tall a row is, in DIP.
+/// How tall a row is now, in pixels. A command under an extension that's opening or closing shows
+/// as much of itself as has slid out: the commands come out one after another, as one sheet.
+fn table_row_px(s: &State, t: usize, at: usize) -> i32 {
+    let full = forms::scale(table_row_dip(s, t, at), s.style.dpi);
+    match unfolding_place(s, t, at) {
+        Some((shown, place, count)) => slide_height(shown, full, place, count),
+        None => full,
+    }
+}
+
+/// For a command under an extension that's opening or closing: how far along it is, this
+/// command's place under it, and how many there are.
+fn unfolding_place(s: &State, t: usize, at: usize) -> Option<(f32, usize, usize)> {
+    if t != TABLE_EXTENSIONS || s.unfolding.is_empty() {
+        return None;
+    }
+    let rows = &s.tables[t].rows;
+    if !matches!(rows.get(at), Some(SearchRow::Item(_))) {
+        return None;
+    }
+    let head = (0..at).rev().find(|&above| !matches!(rows[above], SearchRow::Item(_)))?;
+    let SearchRow::Extension(e) = rows[head] else { return None };
+    let unfold = s.unfolding.iter().find(|u| u.entry == e)?;
+    let count = (head + 1..rows.len()).take_while(|&below| matches!(rows[below], SearchRow::Item(_))).count();
+    Some((unfold.shown(), at - head - 1, count))
+}
+
+/// How tall a row is, in DIP, when it's all showing.
 fn table_row_dip(s: &State, t: usize, at: usize) -> i32 {
     if t == TABLE_SEARCH {
         return HOTKEY_ROW_DIP;
@@ -1064,19 +1330,27 @@ fn table_row_dip(s: &State, t: usize, at: usize) -> i32 {
     }
 }
 
-/// Fills a table from its filter, and sizes it to fit.
+/// Fills a table from its filter, and sizes it to fit. The chosen row, and the one under the
+/// pointer, stay as they were where they're still listed.
 fn refresh_table(s: &mut State, t: usize) {
     finish_alias_edit(s, t, false);
     let list = s.tables[t].list;
     s.tables[t].filled = true;
     let chosen = unsafe { SendMessageW(list, LB_GETCURSEL, None, None) }.0;
+    let was_chosen = usize::try_from(chosen).ok().and_then(|at| s.tables[t].rows.get(at).copied());
+    let was_hover = s.tables[t].hover.and_then(|(at, cell)| s.tables[t].rows.get(at).map(|row| (*row, cell)));
     let query = get_text(s.tables[t].filter);
     s.tables[t].rows = if t == TABLE_SEARCH {
         search_rows(&s.search_items, &s.ext_entries, &s.base, &query)
     } else {
-        extension_rows(&s.search_items, &s.ext_entries, &s.base, &query)
+        let open: Vec<bool> = (0..s.ext_entries.len()).map(|e| ext_open(s, e) || s.unfolding.iter().any(|u| u.entry == e)).collect();
+        extension_rows(&s.search_items, &s.ext_entries, &s.base, &query, |e| open.get(e).copied().unwrap_or(false))
     };
-    s.tables[t].hover = None;
+    let rows = &s.tables[t].rows;
+    let find = |row: SearchRow| rows.iter().position(|other| *other == row);
+    let hover = was_hover.and_then(|(row, cell)| find(row).map(|at| (at, cell)));
+    let keep = was_chosen.and_then(find);
+    s.tables[t].hover = hover;
     unsafe {
         SendMessageW(list, WM_SETREDRAW, Some(WPARAM(0)), None);
         SendMessageW(list, LB_RESETCONTENT, None, None);
@@ -1086,14 +1360,19 @@ fn refresh_table(s: &mut State, t: usize) {
         }
         let rows = &s.tables[t].rows;
         if chosen >= 0 && !rows.is_empty() {
-            let at = (chosen as usize).min(rows.len() - 1);
-            let at = nearest_search_row(rows, at, 1).unwrap_or(at);
+            let at = keep.unwrap_or_else(|| {
+                let at = (chosen as usize).min(rows.len() - 1);
+                nearest_search_row(rows, at, 1).unwrap_or(at)
+            });
             SendMessageW(list, LB_SETCURSEL, Some(WPARAM(at)), None);
         }
         SendMessageW(list, WM_SETREDRAW, Some(WPARAM(1)), None);
     }
-    let dip = if s.tables[t].rows.is_empty() { HOTKEY_ROW_DIP } else { (0..s.tables[t].rows.len()).map(|at| table_row_dip(s, t, at)).sum() };
-    let height = forms::scale(dip, s.style.dpi);
+    let height = if s.tables[t].rows.is_empty() {
+        forms::scale(HOTKEY_ROW_DIP, s.style.dpi)
+    } else {
+        (0..s.tables[t].rows.len()).map(|at| table_row_px(s, t, at)).sum()
+    };
     resize_on_page(s, list, height);
     unsafe {
         let _ = InvalidateRect(Some(list), None, true);
@@ -1130,7 +1409,14 @@ fn search_row_text(s: &State, t: usize, at: usize) -> String {
         SearchRow::Item(item) => s.search_items[item].name.clone(),
         SearchRow::Extension(e) => {
             let entry = &s.ext_entries[e];
-            format!("{}, {}, {}", entry.name, if ext_is_on(&s.base, entry) { "on" } else { "off" }, entry.about)
+            let shut = if ext_commands(&s.search_items, e).is_empty() {
+                ""
+            } else if ext_open(s, e) {
+                ", open"
+            } else {
+                ", closed"
+            };
+            format!("{}, {}{shut}, {}", entry.name, if ext_is_on(&s.base, entry) { "on" } else { "off" }, entry.about)
         }
     };
     if let Some(item) = row_item(s, t, at) {
@@ -1215,7 +1501,8 @@ fn missing_tool(entry: &ExtEntry) -> Option<Tool> {
     entry.builtin.and_then(Tool::of_extension).filter(|tool| integrations::find(*tool).is_none())
 }
 
-/// Turns an extension on or off. Its commands come and go with it, on both tables.
+/// Turns an extension on or off. Its commands come and go with it on the Search page, and in the
+/// Extensions table it opens to show them, or closes.
 fn switch_extension(s: &mut State, e: usize) {
     let entry = &s.ext_entries[e];
     let on = !ext_is_on(&s.base, entry);
@@ -1236,6 +1523,7 @@ fn switch_extension(s: &mut State, e: usize) {
     }
     say_table_note(s, TABLE_EXTENSIONS, "", false);
     refresh_tables(s);
+    set_ext_open(s, e, on);
     apply_dependents(s);
     save_soon(s, 1);
 }
@@ -1247,12 +1535,25 @@ fn act_on_cell(s: &mut State, t: usize, at: usize, cell: SearchCell) {
     }
     s.tables[t].cell = cell;
     match (cell, s.tables[t].rows[at]) {
+        (SearchCell::Expand, SearchRow::Extension(e)) => toggle_ext_open(s, e),
+        (SearchCell::Expand, _) => {}
         (SearchCell::Alias, _) => start_alias_edit(s, t, at),
         (SearchCell::Hotkey, _) => start_search_record(s, t, at),
         (SearchCell::Switch, SearchRow::Extension(e)) => switch_extension(s, e),
         (SearchCell::Switch, _) => toggle_search_row(s, at),
     }
     redraw_table_row(s, t, at);
+}
+
+/// A command under an extension that's off can't be changed, and says why when it's pressed.
+fn explain_off_command(s: &mut State, t: usize, at: usize) {
+    if t != TABLE_EXTENSIONS || row_command(s, t, at).is_none() || row_item(s, t, at).is_some() {
+        return;
+    }
+    if let Some(e) = row_extension(s, t, at) {
+        let text = format!("Turn {} on to give its commands an alias or a hotkey.", s.ext_entries[e].name);
+        say_table_note(s, t, &text, false);
+    }
 }
 
 /// Takes away a row's alias, from the keyboard.
@@ -1398,12 +1699,16 @@ fn search_recording_row(s: &State) -> Option<(usize, usize)> {
 }
 
 fn draw_table_item(s: &mut State, t: usize, item: &DRAWITEMSTRUCT) {
-    let (width, height) = (item.rcItem.right - item.rcItem.left, item.rcItem.bottom - item.rcItem.top);
-    let Some(mut buffer) = Backbuffer::new(width, height) else { return };
+    let (width, showing) = (item.rcItem.right - item.rcItem.left, item.rcItem.bottom - item.rcItem.top);
     let dpi = s.style.dpi;
     let px = |value: i32| forms::scale(value, dpi);
     let at = item.itemID as usize;
     let row = s.tables[t].rows.get(at).copied();
+    // A command sliding out from under its extension is drawn whole, and only as much of it as
+    // has come out is shown, fading in as it comes.
+    let sliding = unfolding_place(s, t, at).map(|(shown, ..)| shown);
+    let height = if sliding.is_some() { px(table_row_dip(s, t, at)).max(showing) } else { showing };
+    let Some(mut buffer) = Backbuffer::new(width, height) else { return };
     let tile_size = px(PICKER_ICON_DIP);
     let pixels = match row {
         Some(SearchRow::Item(at)) => s.search_items[at].icon.and_then(|hash| icon_pixels(s, hash, tile_size as usize)),
@@ -1438,44 +1743,57 @@ fn draw_table_item(s: &mut State, t: usize, item: &DRAWITEMSTRUCT) {
             let recording = search_recording_row(s) == Some((t, at));
             let chosen = item.itemState.0 & ODS_SELECTED.0 != 0 && (focused || editing);
             let hover = table.hover.filter(|hover| hover.0 == at).map(|hover| hover.1);
+            // An open extension's commands sit together on a panel of their own, under its row.
+            let under = t == TABLE_EXTENSIONS && matches!(row, SearchRow::Item(_));
+            let ground = if under { ext_panel_color(style) } else { theme.card };
+            if under {
+                let rows = &table.rows;
+                let first = at == 0 || !matches!(rows[at - 1], SearchRow::Item(_));
+                let last = !matches!(rows.get(at + 1), Some(SearchRow::Item(_)));
+                let radius = px(forms::RADIUS_SELECTION);
+                // Rounded where the panel starts and ends, by running the shape off the row.
+                let (top, bottom) = (if first { 0 } else { -radius * 2 }, if last { height } else { height + radius * 2 });
+                buffer.fill_round_rect(0, top, width, bottom - top, radius as f32, ground);
+            }
             let surface = if chosen {
                 theme.selection
             } else if hover.is_some() {
-                theme.selection.mix(theme.card, 0.5)
+                theme.selection.mix(ground, 0.5)
             } else {
-                theme.card
+                ground
             };
-            if surface != theme.card {
+            if surface != ground {
                 buffer.fill_round_rect(0, px(2), width, height - px(4), px(forms::RADIUS_SELECTION) as f32, surface);
             }
             let cap = if chosen { theme.keycap_on_selection } else { theme.keycap };
             let on = match row {
                 SearchRow::Item(index) if t == TABLE_SEARCH => !s.base.hidden.contains(&s.search_items[index].key),
                 SearchRow::Extension(e) => ext_is_on(&s.base, &s.ext_entries[e]),
+                // A command under an extension that's off is there to see, not to change.
+                SearchRow::Item(_) => active,
                 _ => true,
             };
             let ink = if on { theme.text } else { theme.secondary };
-            // An extension with several commands has them in rows of their own, so its own row's
-            // words can run on to the switch.
+            // An extension's own row has no alias or hotkey, so its words can run on to the switch.
             let name_right = if command.is_none() { switch_col.0 - px(20) } else { alias_col.0 - px(10) };
+            let ext_text_left = ext_tile_left(dpi) + px(EXT_TILE_DIP) + px(12);
             match row {
                 SearchRow::Extension(e) => {
                     let entry = &s.ext_entries[e];
                     let size = px(EXT_TILE_DIP);
-                    let (tile_x, tile_y) = (px(8), (height - size) / 2);
+                    let (tile_x, tile_y) = (ext_tile_left(dpi), (height - size) / 2);
                     draw_small_tile(style, &mut buffer, (tile_x, tile_y, size), Tile::Glyph(entry.glyph), cap);
-                    let text_left = tile_x + size + px(12);
                     // Geist's line box is a little tall, so the line under the name sits closer.
                     let (name_height, about_height) = (px(19), px(16));
                     let top = middle - (name_height + about_height) / 2;
-                    buffer.text(&entry.name, style.font, ink, RECT { left: text_left, top, right: name_right, bottom: top + name_height }, false);
-                    buffer.text(&entry.about, style.small, theme.secondary, RECT { left: text_left, top: top + name_height, right: name_right, bottom: top + name_height + about_height }, false);
+                    buffer.text(&entry.name, style.font, ink, RECT { left: ext_text_left, top, right: name_right, bottom: top + name_height }, false);
+                    buffer.text(&entry.about, style.small, theme.secondary, RECT { left: ext_text_left, top: top + name_height, right: name_right, bottom: top + name_height + about_height }, false);
                 }
                 SearchRow::Item(index) => {
                     let entry = &s.search_items[index];
                     // A command sits under its extension's name.
-                    let indent = if t == TABLE_EXTENSIONS { px(EXT_TILE_DIP) + px(12) } else { 0 };
-                    let (tile_x, tile_y) = (px(8) + indent, (height - tile_size) / 2);
+                    let tile_x = if t == TABLE_EXTENSIONS { ext_text_left } else { px(8) };
+                    let tile_y = (height - tile_size) / 2;
                     match pixels {
                         Some(pixels) => buffer.blit_premultiplied(tile_x, tile_y, tile_size, &pixels),
                         None => draw_small_tile(style, &mut buffer, (tile_x, tile_y, tile_size), entry.tile, cap),
@@ -1587,10 +1905,52 @@ fn draw_table_item(s: &mut State, t: usize, item: &DRAWITEMSTRUCT) {
                 let waiting = matches!(row, SearchRow::Extension(e) if !on && missing_tool(&s.ext_entries[e]).is_some());
                 style.draw_switch(&mut buffer, switch_col.0, switch_top, on, waiting, surface);
             }
+
+            // Open or closed: a chevron that points along the row while it's closed, and turns to
+            // point down at its commands as they slide out.
+            if let (SearchRow::Extension(e), true) = (row, cells.contains(&SearchCell::Expand)) {
+                let size = px(EXT_CHEVRON_DIP);
+                let box_left = ext_chevron_left(dpi);
+                if keyboard_here(SearchCell::Expand) {
+                    ring(&mut buffer, (box_left, box_left + size));
+                }
+                let lit = hover == Some(Some(SearchCell::Expand)) || chosen;
+                let chevron_ink = if lit { theme.text } else { theme.secondary };
+                let degrees = -90.0 * (1.0 - chevron_turn(s, e));
+                let rect = RECT { left: box_left, top: middle - size / 2, right: box_left + size, bottom: middle + size / 2 };
+                crate::symbols::draw_turned(&buffer, CHEVRON_DOWN, px(14) as f32, false, degrees, chevron_ink, rect, crate::text::Align::Center);
+            }
         }
         None => {}
     }
-    buffer.copy_to_dc_at(item.hDC, item.rcItem.left, item.rcItem.top);
+    if let Some(shown) = sliding {
+        buffer.fill_rect_alpha(0, 0, width, height, theme.card, ((1.0 - shown).clamp(0.0, 1.0) * 255.0) as u8);
+    }
+    buffer.copy_top_to_dc_at(item.hDC, item.rcItem.left, item.rcItem.top, showing);
+}
+
+/// Orbit's own down chevron, which an extension's row turns to show it's open.
+const CHEVRON_DOWN: char = '\u{E70D}';
+
+/// Where an extension's chevron starts, and its tile after it.
+fn ext_chevron_left(dpi: u32) -> i32 {
+    forms::scale(4, dpi)
+}
+
+fn ext_tile_left(dpi: u32) -> i32 {
+    ext_chevron_left(dpi) + forms::scale(EXT_CHEVRON_DIP + 4, dpi)
+}
+
+/// The panel an open extension's commands sit on: a shade off the card, so they read as its.
+fn ext_panel_color(style: &forms::Style) -> crate::gfx::Rgb {
+    let theme = &style.theme;
+    if theme.high_contrast {
+        theme.card
+    } else if style.is_dark() {
+        theme.card.mix(theme.text, 0.035)
+    } else {
+        theme.card.mix(theme.text, 0.03)
+    }
 }
 
 /// A table's list. A click on a row's alias, hotkey or switch changes it. From the keyboard, Left
@@ -1705,8 +2065,9 @@ unsafe extern "system" fn table_list_proc(hwnd: HWND, message: u32, wparam: WPAR
                     return LRESULT(0);
                 }
                 if at >= 0 && (key == VK_RETURN.0 || key == VK_SPACE.0) {
-                    if let Some(cell) = current_cell(s, t, at as usize) {
-                        act_on_cell(s, t, at as usize, cell);
+                    match current_cell(s, t, at as usize) {
+                        Some(cell) => act_on_cell(s, t, at as usize, cell),
+                        None => explain_off_command(s, t, at as usize),
                     }
                     return LRESULT(0);
                 }
@@ -1739,7 +2100,7 @@ unsafe extern "system" fn table_list_proc(hwnd: HWND, message: u32, wparam: WPAR
             WM_MOUSEMOVE => {
                 let row = picker_row_at(hwnd, lparam);
                 let hover = (row >= 0 && matches!(s.tables[t].rows.get(row as usize), Some(SearchRow::Item(_) | SearchRow::Extension(_))))
-                    .then(|| (row as usize, search_cell_at(s.style.dpi, width(), x_of(lparam)).filter(|cell| row_cells(s, t, row as usize).contains(cell))));
+                    .then(|| (row as usize, table_cell_at(s, t, row as usize, width(), x_of(lparam))));
                 if hover != s.tables[t].hover {
                     for old in [s.tables[t].hover.map(|h| h.0), hover.map(|h| h.0)].into_iter().flatten() {
                         redraw_table_row(s, t, old);
@@ -1770,8 +2131,9 @@ unsafe extern "system" fn table_list_proc(hwnd: HWND, message: u32, wparam: WPAR
                     return LRESULT(0);
                 }
                 let result = DefSubclassProc(hwnd, message, wparam, lparam);
-                if let Some(cell) = search_cell_at(s.style.dpi, width(), x_of(lparam)) {
-                    act_on_cell(s, t, row as usize, cell);
+                match table_cell_at(s, t, row as usize, width(), x_of(lparam)) {
+                    Some(cell) => act_on_cell(s, t, row as usize, cell),
+                    None => explain_off_command(s, t, row as usize),
                 }
                 result
             }
@@ -1990,6 +2352,11 @@ struct State {
     find_list: HWND,
     findable: Vec<Found>,
     find_rows: Vec<usize>,
+    /// The extensions whose accordions are open in the Extensions table, by id. They all start
+    /// closed, and stay as they were left while Settings is open.
+    ext_open: std::collections::HashSet<String>,
+    /// Those sliding open or shut right now.
+    unfolding: Vec<Unfold>,
 }
 
 fn state(hwnd: HWND) -> Option<&'static mut State> {
@@ -2018,6 +2385,30 @@ const KEYBOARD: &[(&str, orbit_core::vim::KeyboardMode)] = &[
 ];
 const APPEARANCE: &[(&str, Appearance)] =
     &[("Match Windows", Appearance::System), ("Light", Appearance::Light), ("Dark", Appearance::Dark)];
+const ICON_STYLES: &[(&str, IconStyle)] = &[
+    ("Plain", IconStyle::Plain),
+    ("Coloured", IconStyle::Coloured),
+    ("Grey tiles", IconStyle::GreyTiles),
+    ("Tinted tiles", IconStyle::TintedTiles),
+];
+
+/// The icon style the drop-down shows.
+fn chosen_icon_style(s: &State) -> IconStyle {
+    ICON_STYLES[selected(s.controls.icon_style).min(ICON_STYLES.len() - 1)].1
+}
+
+/// Draws commands in the icon style the drop-down shows, here at once and in the launcher next
+/// time it's drawn. Called as it changes, so arrowing through the open list shows each style, and
+/// as it closes, which puts back the one kept if the list was left with Esc.
+fn follow_icon_style(s: &State) {
+    let style = chosen_icon_style(s);
+    if crate::rows::icon_style() != style {
+        crate::rows::set_icon_style(style);
+        unsafe {
+            let _ = RedrawWindow(Some(window_of(s)), None, None, RDW_INVALIDATE | RDW_ALLCHILDREN);
+        }
+    }
+}
 
 fn show_page(state: &mut State, page: usize) {
     end_flash(state);
@@ -4051,6 +4442,8 @@ fn save_now(s: &mut State) -> Option<String> {
     unsafe {
         let _ = KillTimer(Some(window_of(s)), SAVE_TIMER);
     }
+    // What's saved is what's drawn, whichever way the drop-down was left.
+    follow_icon_style(s);
     let (settings, problem) = collect(s);
     s.base.extensions.everything = settings.extensions.everything.clone();
     // This is now the last good text, which a later mistake falls back to.
@@ -4348,6 +4741,8 @@ pub fn reopen(context: EditorContext, settings: Settings, dir: std::path::PathBu
     let Some(old) = CURRENT.with(|c| c.get()) else { return };
     let Some(s) = state(old) else { return };
     let (page, scroll, retry) = (s.page, s.scroll, s.save_pending);
+    // The extensions left open stay open, so the page is as long as it was and the scroll fits.
+    let ext_open = std::mem::take(&mut s.ext_open);
     // Text being edited isn't in `settings`, and may not make sense yet. It's still the user's.
     let draft = s.text_mode.then(|| (get_text(s.controls.hyper_table), get_text(s.controls.shortcuts)));
     let focus = unsafe { GetFocus() };
@@ -4373,6 +4768,10 @@ pub fn reopen(context: EditorContext, settings: Settings, dir: std::path::PathBu
     open(context, settings, dir, apps);
     let Some(hwnd) = CURRENT.with(|c| c.get()) else { return };
     let Some(s) = state(hwnd) else { return };
+    s.ext_open = ext_open;
+    if s.tables[TABLE_EXTENSIONS].filled {
+        refresh_table(s, TABLE_EXTENSIONS);
+    }
     select_page(s, page);
     if let Some((hyper, shortcuts)) = draft {
         toggle_hotkey_text(s);
@@ -4448,6 +4847,7 @@ fn collect(state: &State) -> (Settings, Option<String>) {
     s.launcher.pass_through_in_games = is_checked(c.launcher_games);
     s.launcher.excluded_apps = state.pickers[PICKER_LAUNCHER].chosen.clone();
     s.appearance = APPEARANCE[selected(c.appearance).min(APPEARANCE.len() - 1)].1;
+    s.icon_style = chosen_icon_style(state);
     s.launcher.keyboard = KEYBOARD[selected(c.keyboard).min(KEYBOARD.len() - 1)].1;
     if let Some(screen) = screen_picker::choice(c.screen) {
         s.launcher.screen = screen;
@@ -4573,6 +4973,7 @@ const PAGE_WORDS: [&str; 10] = [
 const FIND_WORDS: &[(&str, &str)] = &[
     ("Start Orbit when I sign in", "startup login autostart boot"),
     ("Theme", "appearance dark mode light mode colours"),
+    ("Command icons", "icon style symbols tiles squares colour color plain grey gray tinted"),
     ("See-through launcher", "transparent transparency glass blur acrylic mica"),
     ("Shrink to fit results", "height size"),
     ("Open on", "monitor display screen"),
@@ -5051,10 +5452,23 @@ fn hotkey_row_action(s: &State, row: HotkeyRow) -> Option<Action> {
     }
 }
 
+/// Which app an app's hotkey opens, found as the launcher finds it: by its id, or by its name for
+/// one typed in as text, which has no id. The id the app's icon is kept under.
+fn app_icon_id<'a>(options: &'a [ActionOption], id: &'a str, name: &str) -> &'a str {
+    let apps = || {
+        options.iter().filter_map(|option| match &option.action {
+            Action::FocusOrLaunchApp { id, name } => Some((id.as_str(), name.as_str())),
+            _ => None,
+        })
+    };
+    let by_id = (!id.is_empty()).then(|| apps().find(|app| app.0 == id)).flatten();
+    by_id.or_else(|| apps().find(|app| app.1.eq_ignore_ascii_case(name))).map_or(id, |app| app.0)
+}
+
 /// A row's picture: an app's own icon if it has one, or otherwise what the launcher would show.
-fn action_tile(action: &Action) -> (Option<u64>, Tile) {
+fn action_tile(options: &[ActionOption], action: &Action) -> (Option<u64>, Tile) {
     match action {
-        Action::FocusOrLaunchApp { id, name } | Action::LaunchApp { id, name } => (Some(crate::indexer::icon_hash(id)), forms::letter_tile(name)),
+        Action::FocusOrLaunchApp { id, name } | Action::LaunchApp { id, name } => (Some(crate::indexer::icon_hash(app_icon_id(options, id, name))), forms::letter_tile(name)),
         Action::OpenPath { .. } => (None, Tile::Glyph(GLYPH_FOLDER)),
         Action::Url { .. } => (None, Tile::Glyph(GLYPH_LINK)),
         Action::Builtin { command } => (None, Tile::Glyph(crate::catalog::glyph_for_builtin(*command))),
@@ -5065,19 +5479,34 @@ fn action_tile(action: &Action) -> (Option<u64>, Tile) {
     }
 }
 
-/// The small rounded square for a row with no icon of its own. `place` is left, top and size.
+/// A command's symbol in the icon style chosen in Settings, or the small rounded square for a row
+/// with no icon of its own. `place` is left, top and size.
 fn draw_small_tile(style: &Style, buffer: &mut Backbuffer, place: (i32, i32, i32), tile: Tile, fill: crate::gfx::Rgb) {
     let (x, y, size) = place;
     let radius = forms::scale(5, style.dpi) as f32;
     let area = RECT { left: x, top: y, right: x + size, bottom: y + size };
-    // A command has the same coloured tile as in the launcher, except in high contrast.
+    let theme = &style.theme;
+    // A command looks as it does in the launcher, except in high contrast.
     if let Tile::Glyph(glyph) = tile
-        && !style.theme.high_contrast
+        && !theme.high_contrast
     {
-        let (light, deep) = crate::rows::tile_colors(glyph);
-        buffer.fill_tile(x, y, size, radius, (style.dpi as f32 / 96.0).max(1.0), light, deep);
+        use orbit_core::settings::IconStyle;
+        let (colours, dark) = (crate::rows::tile_colors(glyph), theme.background.0 < 128);
+        let (heavy, ink) = match crate::rows::icon_style() {
+            IconStyle::Plain => (false, theme.secondary),
+            IconStyle::Coloured => (false, crate::rows::coloured_symbol(colours, dark)),
+            IconStyle::GreyTiles => {
+                buffer.fill_round_rect(x, y, size, size, radius, fill);
+                (false, theme.text)
+            }
+            IconStyle::TintedTiles => {
+                let (fill, alpha, ink) = crate::rows::tinted_tile(colours, dark);
+                buffer.fill_round_rect_alpha(x, y, size, size, radius, fill, alpha);
+                (true, ink)
+            }
+        };
         // 13 on a 22 tile, and as much more on a bigger one.
-        buffer.symbol_centered(&glyph.to_string(), style.icon_small, size * 3 / 5, true, crate::gfx::Rgb(255, 255, 255), area);
+        buffer.symbol_centered(&glyph.to_string(), style.icon_small, size * 3 / 5, heavy, ink, area);
         return;
     }
     buffer.fill_round_rect(x, y, size, size, radius, fill);
@@ -5104,7 +5533,7 @@ fn draw_hotkey_item(s: &mut State, item: &DRAWITEMSTRUCT) {
         return;
     };
     let tile_size = px(PICKER_ICON_DIP);
-    let (icon, tile) = hotkey_row_action(s, row).as_ref().map_or((None, Tile::Glyph(GLYPH_COMMAND)), action_tile);
+    let (icon, tile) = hotkey_row_action(s, row).as_ref().map_or((None, Tile::Glyph(GLYPH_COMMAND)), |action| action_tile(&s.action_options, action));
     let pixels = icon.and_then(|hash| icon_pixels(s, hash, tile_size as usize));
     let s: &State = s;
     let style = &s.style;
@@ -5268,7 +5697,7 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
             // An extension's row is taller than a command's under it.
             if id == ID_EXT_LIST {
                 if let Some(s) = state(hwnd) {
-                    item.itemHeight = forms::scale(table_row_dip(s, TABLE_EXTENSIONS, item.itemID as usize), s.style.dpi) as u32;
+                    item.itemHeight = table_row_px(s, TABLE_EXTENSIONS, item.itemID as usize) as u32;
                     return LRESULT(1);
                 }
             }
@@ -5447,7 +5876,7 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
                     ID_SUGGEST => add_suggested(s),
                     ID_ACTION_SEARCH if notification == EN_CHANGE => refresh_hotkey_list(s),
                     ID_SEARCH_FILTER if notification == EN_CHANGE => refresh_table(s, TABLE_SEARCH),
-                    ID_EXT_FILTER if notification == EN_CHANGE => refresh_table(s, TABLE_EXTENSIONS),
+                    ID_EXT_FILTER if notification == EN_CHANGE => filter_extensions(s),
                     ID_FIND if notification == EN_CHANGE => refresh_find(s),
                     ID_HOTKEY_TEXT => toggle_hotkey_text(s),
                     ID_CLEAR_CLIPS => {
@@ -5527,6 +5956,9 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
                             reveal_list_row(s, control);
                         }
                     } else if notification == CBN_SELCHANGE {
+                        if control == s.controls.icon_style {
+                            follow_icon_style(s);
+                        }
                         if control == s.controls.keyboard {
                             let mode = KEYBOARD[selected(control).min(KEYBOARD.len() - 1)].1;
                             set_status(s.controls.keyboard_note, keyboard_description(mode));
@@ -5542,6 +5974,9 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
                             let _ = save_now(s);
                         }
                     } else if notification == CBN_CLOSEUP {
+                        if control == s.controls.icon_style {
+                            follow_icon_style(s);
+                        }
                         save_soon(s, 1);
                     }
                 }
@@ -5568,6 +6003,15 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
             WM_TIMER if wparam.0 == ARM_TIMER => {
                 if let Some(s) = state(hwnd) {
                     disarm_button(s);
+                }
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == UNFOLD_TIMER => {
+                match state(hwnd) {
+                    Some(s) => step_unfold(s),
+                    None => {
+                        let _ = KillTimer(Some(hwnd), UNFOLD_TIMER);
+                    }
                 }
                 LRESULT(0)
             }
@@ -6036,6 +6480,11 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let appearance = b.combo("Theme", &appearance_names, appearance_at, 0);
         b.note("For the launcher and this window.");
         b.line();
+        let icon_names: Vec<&str> = ICON_STYLES.iter().map(|style| style.0).collect();
+        let icon_at = ICON_STYLES.iter().position(|style| style.1 == settings.icon_style).unwrap_or(0);
+        let icon_style = b.combo("Command icons", &icon_names, icon_at, 0);
+        b.note("How Orbit's own commands look, here and in the launcher. Apps keep their own icons.");
+        b.line();
         let glass = b.switch("See-through launcher", settings.launcher.glass, 0);
         b.note("Solid in high contrast, over Remote Desktop, or with Windows' transparency effects off.");
         b.line();
@@ -6266,7 +6715,7 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let links_managed = build_managed(&mut b, "Quicklinks", Some("Websites and searches you can open by name or alias."), ID_LINK_NEW, ID_LINK_LIST);
         b.begin_card();
         let link_icons = b.switch("Show website icons", settings.fetch_link_icons, 0);
-        b.note("Orbit asks each quicklink's own website for its icon, once, and keeps it. Only the site is asked, never anyone else, with no cookies or sign-in. Turning this off deletes the icons.");
+        b.note("Orbit asks each quicklink's website for its icon, including sites on your own network, with no cookies or sign-in. A link without one is asked again later, and saving a link fetches its icon again. Turning this off deletes the icons.");
         b.end_card();
         let commands_managed = build_managed(&mut b, "Commands", Some("Programs you can run from Orbit, only when you choose them, without a shell."), ID_COMMAND_NEW, ID_COMMAND_LIST);
         b.begin_card();
@@ -6459,6 +6908,7 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
             fit_results,
             launcher_games,
             appearance,
+            icon_style,
             keyboard,
             keyboard_note,
             screen_mode,
@@ -6596,6 +7046,8 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
             find_list,
             findable,
             find_rows: Vec::new(),
+            ext_open: std::collections::HashSet::new(),
+            unfolding: Vec::new(),
         });
         let pointer = Box::into_raw(owned);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, pointer as isize);
@@ -6716,14 +7168,15 @@ pub fn preview_state(what: &str) {
             s.action_options.insert(0, ActionOption { name: "Example App".to_string(), kind: "App", action: Action::Builtin { command: Builtin::NewNote } });
             set_text(s.controls.action_search, "e");
         }
-        // The Extensions table with GitHub on, so its commands show under it, and the pointer on
-        // one of them.
+        // The Extensions table with GitHub on and open, so its commands show under it, and the
+        // pointer on one of them.
         "extensions-github" | "extensions-tool" => {
             s.base.extensions.github = true;
             if let Some(item) = s.search_items.iter().position(|item| item.name == "My Pull Requests") {
                 let key = s.search_items[item].key.clone();
                 set_item_keyword(&mut s.base, &key, "pr");
             }
+            s.ext_open.insert(BuiltinExt::GitHub.id().to_string());
             show_page(s, PAGE_EXTENSIONS);
             refresh_table(s, TABLE_EXTENSIONS);
             let rows = &s.tables[TABLE_EXTENSIONS].rows;
@@ -6743,6 +7196,38 @@ pub fn preview_state(what: &str) {
             }
             unsafe {
                 let _ = InvalidateRect(Some(s.tables[TABLE_EXTENSIONS].list), None, false);
+            }
+        }
+        // Accordions: GitHub on and open, Weather open, AI Usage off but open to see what it
+        // has, and the pointer on the closed Speed Test's row. `-sliding` stops GitHub part way
+        // out.
+        "extensions-open" | "extensions-sliding" => {
+            s.base.extensions.github = true;
+            s.base.extensions.ai_usage = false;
+            for ext in [BuiltinExt::GitHub, BuiltinExt::Weather, BuiltinExt::AiUsage] {
+                s.ext_open.insert(ext.id().to_string());
+            }
+            if let Some(item) = s.search_items.iter().position(|item| item.name == "My Issues") {
+                let action = s.search_items[item].action.clone();
+                if let Some(action) = action {
+                    s.base.hyper.bindings.push(orbit_core::settings::HyperBinding { key: "I".to_string(), action, enabled: true });
+                }
+            }
+            let entry_of = |s: &State, ext: BuiltinExt| s.ext_entries.iter().position(|entry| entry.builtin == Some(ext));
+            if what == "extensions-sliding"
+                && let Some(github) = entry_of(s, BuiltinExt::GitHub)
+            {
+                s.unfolding.push(Unfold { entry: github, opening: true, started: std::time::Instant::now(), ms: 200.0, held: Some(0.45) });
+            }
+            show_page(s, PAGE_EXTENSIONS);
+            refresh_table(s, TABLE_EXTENSIONS);
+            let table = TABLE_EXTENSIONS;
+            let speed = entry_of(s, BuiltinExt::SpeedTest).and_then(|e| s.tables[table].rows.iter().position(|row| *row == SearchRow::Extension(e)));
+            if let Some(speed) = speed {
+                s.tables[table].hover = Some((speed, Some(SearchCell::Expand)));
+            }
+            unsafe {
+                let _ = InvalidateRect(Some(s.tables[table].list), None, false);
             }
         }
         "search-filled" | "search-alias" | "search-record" => {
@@ -6921,10 +7406,10 @@ pub fn preview_selfcheck() -> Vec<String> {
                 act_on_cell(s, TABLE_EXTENSIONS, github, SearchCell::Switch);
             }
             let rows_off = s.tables[TABLE_EXTENSIONS].rows.len();
-            check("an extension that's off has only its switch", row_cells(s, TABLE_EXTENSIONS, github) == [SearchCell::Switch], format!("{:?}", row_cells(s, TABLE_EXTENSIONS, github)));
+            check("an extension's row has its chevron and its switch", row_cells(s, TABLE_EXTENSIONS, github) == [SearchCell::Expand, SearchCell::Switch], format!("{:?}", row_cells(s, TABLE_EXTENSIONS, github)));
             act_on_cell(s, TABLE_EXTENSIONS, github, SearchCell::Switch);
             let commands = s.tables[TABLE_EXTENSIONS].rows.len() - rows_off;
-            check("turning it on there turns it on, and lists its commands under it", s.base.extensions.github && commands == 4, format!("{commands} more rows"));
+            check("turning it on there turns it on, and opens it to list its commands under it", s.base.extensions.github && commands == 4 && ext_open(s, s.ext_entries.iter().position(|e| e.builtin == Some(BuiltinExt::GitHub)).unwrap_or(0)), format!("{commands} more rows"));
             let in_search = row_named(s, TABLE_SEARCH, "My Issues").is_some();
             check("and the Search page lists them too", in_search, String::new());
             let issues = row_named(s, TABLE_EXTENSIONS, "My Issues");
@@ -6946,10 +7431,134 @@ pub fn preview_selfcheck() -> Vec<String> {
         } else {
             check("the Extensions table lists GitHub", false, String::new());
         }
+        // Each extension is an accordion, opened and closed by a click along its row.
+        let ext_table = TABLE_EXTENSIONS;
+        let list_width = {
+            let mut client = RECT::default();
+            let _ = GetClientRect(s.tables[ext_table].list, &mut client);
+            client.right
+        };
+        let entry_of = |s: &State, ext: BuiltinExt| s.ext_entries.iter().position(|entry| entry.builtin == Some(ext)).unwrap_or(usize::MAX);
         if let Some(everything) = ext_row(s, BuiltinExt::Files) {
-            let cells = row_cells(s, TABLE_EXTENSIONS, everything);
+            let e = entry_of(s, BuiltinExt::Files);
+            let [_, _, switch_col] = search_columns(s.style.dpi, list_width);
+            check("a click along an extension's name opens it", table_cell_at(s, ext_table, everything, list_width, forms::scale(120, s.style.dpi)) == Some(SearchCell::Expand), String::new());
+            check("and a click on its switch is the switch's", table_cell_at(s, ext_table, everything, list_width, switch_col.0 + 2) == Some(SearchCell::Switch), String::new());
+            let before = s.tables[ext_table].rows.len();
+            act_on_cell(s, ext_table, everything, SearchCell::Expand);
+            let command = everything + 1;
             let on = s.base.extensions.everything.enabled;
-            check("Everything has one command, so its row has its alias and hotkey", !on || cells == [SearchCell::Alias, SearchCell::Hotkey, SearchCell::Switch], format!("{cells:?}"));
+            let cells = row_cells(s, ext_table, command);
+            check(
+                "Everything opens to show its one command under it, with its alias and hotkey",
+                ext_open(s, e) && s.tables[ext_table].rows.len() == before + 1 && row_command(s, ext_table, command).is_some_and(|item| s.search_items[item].key == FILES_KEY) && (!on || cells == [SearchCell::Alias, SearchCell::Hotkey]),
+                format!("{cells:?}"),
+            );
+            check("and its row says it's open", search_row_text(s, ext_table, everything).contains(", open"), search_row_text(s, ext_table, everything));
+            act_on_cell(s, ext_table, everything, SearchCell::Expand);
+            check("a second click closes it", !ext_open(s, e) && s.tables[ext_table].rows.len() == before, format!("{} rows", s.tables[ext_table].rows.len()));
+        }
+        let ai_was = s.base.extensions.ai_usage;
+        if let Some(ai) = ext_row(s, BuiltinExt::AiUsage) {
+            if ai_was {
+                act_on_cell(s, ext_table, ai, SearchCell::Switch);
+            }
+            act_on_cell(s, ext_table, ai, SearchCell::Expand);
+            let command = ai + 1;
+            check("an extension that's off opens to show what it has", ext_open(s, entry_of(s, BuiltinExt::AiUsage)) && row_command(s, ext_table, command).is_some(), String::new());
+            check("but its commands can't be changed while it's off", row_cells(s, ext_table, command).is_empty() && row_item(s, ext_table, command).is_none(), String::new());
+            say_table_note(s, ext_table, "", false);
+            explain_off_command(s, ext_table, command);
+            check("and a click on one says why", get_text(s.tables[ext_table].note).starts_with("Turn AI Usage on"), get_text(s.tables[ext_table].note));
+            say_table_note(s, ext_table, "", false);
+            act_on_cell(s, ext_table, ai, SearchCell::Switch);
+            check("turning it on keeps it open, and its commands can be changed", s.base.extensions.ai_usage && ext_open(s, entry_of(s, BuiltinExt::AiUsage)) && row_cells(s, ext_table, command) == [SearchCell::Alias, SearchCell::Hotkey], String::new());
+            act_on_cell(s, ext_table, ai, SearchCell::Switch);
+            check("and turning it off closes it", !s.base.extensions.ai_usage && !ext_open(s, entry_of(s, BuiltinExt::AiUsage)), String::new());
+            if ai_was {
+                act_on_cell(s, ext_table, ai, SearchCell::Switch);
+            }
+        }
+        // The chosen row stays chosen while one above it opens.
+        let github_e = entry_of(s, BuiltinExt::GitHub);
+        let github_open = ext_open(s, github_e);
+        if github_open {
+            set_ext_open(s, github_e, false);
+        }
+        if let (Some(github), Some(last)) = (ext_row(s, BuiltinExt::GitHub), ext_row(s, BuiltinExt::AiUsage)) {
+            let list = s.tables[ext_table].list;
+            SendMessageW(list, LB_SETCURSEL, Some(WPARAM(last)), None);
+            act_on_cell(s, ext_table, github, SearchCell::Expand);
+            let chosen = SendMessageW(list, LB_GETCURSEL, None, None).0;
+            check("the row that was chosen stays chosen as rows open above it", chosen == ext_row(s, BuiltinExt::AiUsage).map_or(-1, |at| at as isize) && chosen as usize > last, format!("{chosen} was {last}"));
+            let rows: i32 = (0..s.tables[ext_table].rows.len()).map(|at| table_row_px(s, ext_table, at)).sum();
+            let mut client = RECT::default();
+            let _ = GetClientRect(list, &mut client);
+            check("and the table grows to fit them", client.bottom == rows, format!("{} for {rows}", client.bottom));
+            set_ext_open(s, github_e, github_open);
+        }
+        // The filter opens an extension whose command it finds.
+        let ext_filter = s.tables[ext_table].filter;
+        let open_before = s.ext_open.clone();
+        s.ext_open.clear();
+        refresh_table(s, ext_table);
+        set_text(ext_filter, "starred");
+        check(
+            "typing a command's name opens its extension to show it",
+            ext_open(s, github_e) && row_named(s, ext_table, "Starred Repositories").is_some() && s.tables[ext_table].rows.len() == 3,
+            format!("{:?}", s.tables[ext_table].rows),
+        );
+        set_text(ext_filter, "");
+        check("and it stays open after", ext_open(s, github_e) && row_named(s, ext_table, "My Issues").is_some(), String::new());
+        s.ext_open = open_before;
+        refresh_table(s, ext_table);
+        check("nothing is left sliding in a preview", s.unfolding.is_empty(), String::new());
+
+        // A slide, a frame at a time, as its timer moves it.
+        let github_id = BuiltinExt::GitHub.id().to_string();
+        let github_open = s.ext_open.contains(&github_id);
+        s.ext_open.remove(&github_id);
+        refresh_table(s, ext_table);
+        let list = s.tables[ext_table].list;
+        let full = forms::scale(EXT_COMMAND_DIP, s.style.dpi);
+        let item_heights = |s: &State| -> Vec<i32> {
+            let Some(at) = ext_row(s, BuiltinExt::GitHub) else { return Vec::new() };
+            let rows = &s.tables[ext_table].rows;
+            (at + 1..rows.len()).take_while(|&below| matches!(rows[below], SearchRow::Item(_))).map(|below| SendMessageW(list, LB_GETITEMHEIGHT, Some(WPARAM(below)), None).0 as i32).collect()
+        };
+        let list_fits = |s: &State| {
+            let mut client = RECT::default();
+            let _ = GetClientRect(list, &mut client);
+            client.bottom == (0..s.tables[ext_table].rows.len()).map(|at| table_row_px(s, ext_table, at)).sum::<i32>()
+        };
+        s.ext_open.insert(github_id.clone());
+        s.unfolding.push(Unfold { entry: github_e, opening: true, started: std::time::Instant::now(), ms: 200.0, held: Some(0.5) });
+        refresh_table(s, ext_table);
+        step_unfold(s);
+        let heights = item_heights(s);
+        check("part way out, the first commands are out and the last is still coming", heights.len() == 4 && heights[0] == full && heights[3] > 0 && heights[3] < full && list_fits(s), format!("{heights:?}"));
+        let pause = std::time::Duration::from_secs(1);
+        for unfold in &mut s.unfolding {
+            unfold.held = None;
+            unfold.started -= pause;
+        }
+        step_unfold(s);
+        let heights = item_heights(s);
+        check("when it's done they're all the way out", s.unfolding.is_empty() && heights.len() == 4 && heights.iter().all(|h| *h == full) && list_fits(s), format!("{heights:?}"));
+        s.ext_open.remove(&github_id);
+        // Held where half of them still shows.
+        s.unfolding.push(Unfold { entry: github_e, opening: false, started: std::time::Instant::now(), ms: 200.0, held: Some(unfold_resume(0.5, false)) });
+        step_unfold(s);
+        let heights = item_heights(s);
+        check("closing, the last ones go back in first", heights == [full, full, 1, 1] && list_fits(s), format!("{heights:?}"));
+        for unfold in &mut s.unfolding {
+            unfold.held = None;
+            unfold.started -= pause;
+        }
+        step_unfold(s);
+        check("and once it's shut its commands are gone", s.unfolding.is_empty() && item_heights(s).is_empty() && list_fits(s), format!("{:?}", item_heights(s)));
+        if github_open {
+            set_ext_open(s, github_e, true);
         }
         check("buttons numbered after the pickers aren't taken for them", picker_of(ID_EXT_REMOVE).is_none() && picker_of(ID_PICKERS + 2).is_some(), String::new());
         let _ = save_now(s);
@@ -7410,6 +8019,27 @@ pub fn preview_selfcheck() -> Vec<String> {
         let _ = eats_key_text(&MSG { hwnd: s.controls.hotkey, message: WM_KEYDOWN, wParam: WPARAM(VK_DOWN.0 as usize), ..Default::default() });
         check("the next key ends the light on an added row", !s.pickers[PICKER_HYPER].just_added, format!("was {lit}"));
 
+        // Command icons: a choice is drawn at once, everywhere, and saved.
+        {
+            let icons = s.controls.icon_style;
+            let before = selected(icons);
+            check("command icons start plain", ICON_STYLES[before].1 == IconStyle::Plain && crate::rows::icon_style() == IconStyle::Plain, format!("{before}"));
+            let choose = |at: usize| {
+                SendMessageW(icons, CB_SETCURSEL, Some(WPARAM(at)), None);
+                SendMessageW(root, WM_COMMAND, Some(WPARAM((CBN_SELCHANGE as usize) << 16)), Some(LPARAM(icons.0 as isize)));
+            };
+            choose(3);
+            check("choosing tinted tiles draws them at once", crate::rows::icon_style() == IconStyle::TintedTiles, format!("{:?}", crate::rows::icon_style()));
+            check("and saves them", collect(s).0.icon_style == IconStyle::TintedTiles, format!("{:?}", collect(s).0.icon_style));
+            // As Esc does after arrowing through the open list: the kept choice comes back.
+            SendMessageW(icons, CB_SETCURSEL, Some(WPARAM(1)), None);
+            SendMessageW(root, WM_COMMAND, Some(WPARAM((CBN_CLOSEUP as usize) << 16)), Some(LPARAM(icons.0 as isize)));
+            check("closing the list draws what it shows", crate::rows::icon_style() == IconStyle::Coloured, format!("{:?}", crate::rows::icon_style()));
+            choose(before);
+            check("and plain again", crate::rows::icon_style() == IconStyle::Plain, format!("{:?}", crate::rows::icon_style()));
+            pump();
+        }
+
         // The row says what the launcher opens on, and only "Specific screen" shows the picture.
         {
             use orbit_core::settings::LauncherScreen;
@@ -7649,25 +8279,75 @@ mod tests {
     }
 
     #[test]
-    fn the_extensions_table_shows_each_extension_and_its_commands_while_on() {
+    fn the_extensions_table_shows_each_extension_and_its_commands_while_open() {
         let mut settings = Settings::default();
         let entries = ext_entries(&[]);
         let items = search_items(&[], &settings, &[]);
         let at_of = |ext: BuiltinExt| entries.iter().position(|entry| entry.builtin == Some(ext)).unwrap();
-        let rows = extension_rows(&items, &entries, &settings, "");
+        let (github, weather) = (at_of(BuiltinExt::GitHub), at_of(BuiltinExt::Weather));
+        let rows = extension_rows(&items, &entries, &settings, "", |_| false);
         assert_eq!(rows[0], SearchRow::Header(COLUMN_TITLES), "the column titles come first");
-        assert_eq!(rows.len(), 1 + entries.len(), "with GitHub off, no commands show");
+        assert_eq!(rows.len(), 1 + entries.len(), "with every one closed, no commands show");
         settings.extensions.github = true;
-        let rows = extension_rows(&items, &entries, &settings, "");
-        let github = rows.iter().position(|row| *row == SearchRow::Extension(at_of(BuiltinExt::GitHub))).unwrap();
-        assert!(rows[github + 1..github + 5].iter().all(|row| matches!(row, SearchRow::Item(at) if items[*at].group_name == "GitHub")), "its four commands are under it");
-        let weather = rows.iter().position(|row| *row == SearchRow::Extension(at_of(BuiltinExt::Weather))).unwrap();
-        assert!(matches!(rows[weather + 1], SearchRow::Extension(_)), "one with a single command keeps it in its own row");
-        let rows = extension_rows(&items, &entries, &settings, "starred");
+        let rows = extension_rows(&items, &entries, &settings, "", |_| false);
+        assert_eq!(rows.len(), 1 + entries.len(), "and turning one on doesn't open it by itself");
+        let rows = extension_rows(&items, &entries, &settings, "", |e| e == github || e == weather);
+        let at = rows.iter().position(|row| *row == SearchRow::Extension(github)).unwrap();
+        assert!(rows[at + 1..at + 5].iter().all(|row| matches!(row, SearchRow::Item(item) if items[*item].group_name == "GitHub")), "an open one has its four commands under it");
+        let at = rows.iter().position(|row| *row == SearchRow::Extension(weather)).unwrap();
+        assert!(matches!(rows[at + 1], SearchRow::Item(item) if items[item].group_name == "Weather"), "and one with a single command has it under it too");
+        settings.extensions.github = false;
+        let rows = extension_rows(&items, &entries, &settings, "", |e| e == github);
+        assert_eq!(rows.len(), 1 + entries.len() + 4, "one that's off still opens, to show what it has");
+        let rows = extension_rows(&items, &entries, &settings, "starred", |e| e == github);
         assert_eq!(rows.len(), 3, "a command's name finds its extension, with just that command: {rows:?}");
-        let rows = extension_rows(&items, &entries, &settings, "forecast");
-        assert_eq!(rows, [SearchRow::Header(COLUMN_TITLES), SearchRow::Extension(at_of(BuiltinExt::Weather))], "and what it does finds it");
-        assert!(extension_rows(&items, &entries, &settings, "zebra").is_empty(), "nothing found leaves no rows, so the list says so");
+        let rows = extension_rows(&items, &entries, &settings, "starred", |_| false);
+        assert_eq!(rows.len(), 2, "but only shows it while it's open");
+        assert_eq!(extensions_found_by_command(&items, &entries, &settings, "starred"), [github], "so the filter opens the one it finds");
+        assert!(extensions_found_by_command(&items, &entries, &settings, "forecast").is_empty(), "what an extension does isn't a command");
+        assert!(extensions_found_by_command(&items, &entries, &settings, "  ").is_empty());
+        assert_eq!(extensions_found_by_command(&items, &entries, &settings, "ghi"), [github], "an alias finds its command");
+        let rows = extension_rows(&items, &entries, &settings, "forecast", |_| true);
+        assert_eq!(rows, [SearchRow::Header(COLUMN_TITLES), SearchRow::Extension(weather), SearchRow::Item(rows_item(&items, "Weather"))], "and what it does finds it, with all of its commands");
+        assert!(extension_rows(&items, &entries, &settings, "zebra", |_| true).is_empty(), "nothing found leaves no rows, so the list says so");
+    }
+
+    fn rows_item(items: &[SearchItem], group: &str) -> usize {
+        items.iter().position(|item| item.group_name == group).unwrap()
+    }
+
+    #[test]
+    fn an_extension_slides_open_and_shut_smoothly() {
+        for opening in [true, false] {
+            let (start, end) = (unfold_shown(0.0, opening), unfold_shown(1.0, opening));
+            assert_eq!((start, end), if opening { (0.0, 1.0) } else { (1.0, 0.0) });
+            let mut last = start;
+            for step in 1..=20 {
+                let now = unfold_shown(step as f32 / 20.0, opening);
+                assert!(if opening { now >= last } else { now <= last }, "it never goes back the way it came");
+                last = now;
+            }
+            assert!((unfold_shown(0.5, opening) - if opening { 0.875 } else { 0.125 }).abs() < 1e-5, "and does most of it early");
+            for shown in [0.0, 0.2, 0.5, 0.83, 1.0] {
+                let resumed = unfold_shown(unfold_resume(shown, opening), opening);
+                assert!((resumed - shown).abs() < 1e-4, "turning back at {shown} carries on from there, not from {resumed}");
+            }
+        }
+    }
+
+    #[test]
+    fn commands_slide_out_one_after_another() {
+        let full = 40;
+        let heights = |shown: f32| (0..4).map(|place| slide_height(shown, full, place, 4)).collect::<Vec<_>>();
+        assert_eq!(heights(0.0), [1, 1, 1, 1], "a row can't be nothing, so a closed one is a pixel");
+        assert_eq!(heights(1.0), [40, 40, 40, 40]);
+        assert_eq!(heights(0.5), [40, 40, 1, 1], "the first ones come out first");
+        assert_eq!(heights(0.6), [40, 40, 16, 1], "and the next is part way out");
+        for step in 0..=50 {
+            let shown = step as f32 / 50.0;
+            let total: i32 = heights(shown).iter().sum();
+            assert!((total - (shown * 160.0).round() as i32).abs() <= 4, "the table grows evenly: {total} at {shown}");
+        }
     }
 
     #[test]
@@ -7715,6 +8395,9 @@ mod tests {
         assert_eq!(search_cell_at(dpi, width, hotkey.0 + 1), Some(SearchCell::Hotkey));
         assert_eq!(search_cell_at(dpi, width, switch.0 + 1), Some(SearchCell::Switch));
         assert_eq!(search_cell_at(dpi, width, 20), None, "the name is just the name");
+        for dpi in [96, 120, 144, 192] {
+            assert!(ext_chevron_left(dpi) + forms::scale(EXT_CHEVRON_DIP, dpi) <= ext_tile_left(dpi), "an extension's chevron sits clear of its tile");
+        }
     }
 
     #[test]
@@ -7735,6 +8418,22 @@ mod tests {
         let options = [option("Notepad"), option("Search Notes"), option("Keynote"), option("Calculator")];
         assert_eq!(matching_actions(&options, "note"), [0, 1, 2]);
         assert!(matching_actions(&options, "zzz").is_empty());
+    }
+
+    #[test]
+    fn an_app_typed_in_as_text_shows_its_own_icon() {
+        let app = |id: &str, name: &str| ActionOption { name: name.to_string(), kind: "App", action: Action::FocusOrLaunchApp { id: id.into(), name: name.into() } };
+        let options = [app("C:\\Zen\\zen.exe", "Zen"), app("C:\\Notes\\notes.exe", "Notes")];
+        // Edit as text keeps only the name, as the launcher reads it.
+        assert_eq!(app_icon_id(&options, "", "zen"), "C:\\Zen\\zen.exe");
+        // The id wins over a name that has since changed.
+        assert_eq!(app_icon_id(&options, "C:\\Notes\\notes.exe", "Zen"), "C:\\Notes\\notes.exe");
+        // An app that's gone keeps the id it had, and one with neither has no icon to find.
+        assert_eq!(app_icon_id(&options, "C:\\Gone\\gone.exe", "Gone"), "C:\\Gone\\gone.exe");
+        assert_eq!(app_icon_id(&options, "", "Gone"), "");
+        let (icon, tile) = action_tile(&options, &Action::FocusOrLaunchApp { id: String::new(), name: "Zen".into() });
+        assert_eq!(icon, Some(crate::indexer::icon_hash("C:\\Zen\\zen.exe")));
+        assert_eq!(tile, Tile::Letter('Z'));
     }
 
     #[test]

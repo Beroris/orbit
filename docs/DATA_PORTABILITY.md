@@ -33,7 +33,7 @@ One JSON document written with pretty formatting. It is written to a temporary f
 
 ### Shape
 
-Top-level keys: `schema_version`, `launcher`, `hyper`, `shortcuts`, `clipboard`, `snippets`, `links`, `custom_commands`, `aliases`, `pinned`, `hidden`, `emoji`, `appearance`, `low_resource_mode`, `launch_at_login`, `onboarded`.
+Top-level keys: `schema_version`, `launcher`, `hyper`, `shortcuts`, `clipboard`, `snippets`, `links`, `custom_commands`, `aliases`, `pinned`, `hidden`, `emoji`, `appearance`, `icon_style`, `low_resource_mode`, `launch_at_login`, `onboarded`.
 
 | Section | Fields (default) |
 |---|---|
@@ -50,6 +50,7 @@ Top-level keys: `schema_version`, `launcher`, `hyper`, `shortcuts`, `clipboard`,
 | `aliases` | Object: item key → alias text |
 | `pinned`, `hidden` | Lists of item keys |
 | `appearance` | `"system"`, `"light"`, `"dark"` |
+| `icon_style` | How Orbit's own commands are drawn: `"plain"` (the default), `"coloured"`, `"grey_tiles"`, `"tinted_tiles"`. A value this version doesn't know reads as `"plain"`. |
 
 Chords are strings: `"Alt+Space"`, `"Ctrl+Alt+K"`, `"Hyper+F13"`. The saved file prints the Windows or Command modifier as `Super`; the parser also accepts `Win`, `Windows`, `Cmd`, `Command`, `Meta`. Key names are logical names, not Windows key codes ([SHORTCUT_SEMANTICS.md](SHORTCUT_SEMANTICS.md)).
 

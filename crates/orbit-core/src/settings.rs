@@ -31,6 +31,9 @@ pub struct Settings {
     pub pinned: Vec<String>,
     pub hidden: Vec<String>,
     pub appearance: Appearance,
+    /// How Orbit's own commands' symbols are drawn. Apps keep their own icons.
+    #[serde(deserialize_with = "or_default")]
+    pub icon_style: IconStyle,
     pub low_resource_mode: bool,
     /// Ask each quicklink's own site for its icon, once.
     pub fetch_link_icons: bool,
@@ -315,6 +318,21 @@ pub enum Appearance {
     Dark,
 }
 
+/// How the symbols of Orbit's own commands are drawn, in the launcher and in Settings.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IconStyle {
+    /// The symbol alone, in grey.
+    #[default]
+    Plain,
+    /// The symbol alone, in its own colour.
+    Coloured,
+    /// The symbol on a grey square.
+    GreyTiles,
+    /// The symbol in its colour, on a faint square of that colour.
+    TintedTiles,
+}
+
 /// Apps that commonly hold secrets. A best effort, not a guarantee: see docs/PRIVACY.md.
 pub const DEFAULT_SECRET_APPS: &[&str] = &[
     "1password.exe",
@@ -358,6 +376,7 @@ impl Default for Settings {
             pinned: Vec::new(),
             hidden: Vec::new(),
             appearance: Appearance::System,
+            icon_style: IconStyle::Plain,
             low_resource_mode: false,
             fetch_link_icons: true,
             fetch_exchange_rates: true,
@@ -535,6 +554,20 @@ mod tests {
         assert!(s.hyper.enabled);
         assert_eq!(s.hyper.trigger, "CapsLock");
         assert_eq!(s.clipboard.max_items, 500);
+    }
+
+    #[test]
+    fn icons_are_plain_unless_chosen_and_an_unknown_style_is_plain() {
+        assert_eq!(Settings::default().icon_style, IconStyle::Plain);
+        let mut s = Settings::default();
+        s.icon_style = IconStyle::TintedTiles;
+        assert!(s.to_json().contains(r#""icon_style": "tinted_tiles""#), "{}", s.to_json());
+        assert_eq!(Settings::parse(&s.to_json()).0.icon_style, IconStyle::TintedTiles);
+        // A style from a later version loses only itself.
+        let (parsed, outcome) = Settings::parse(r#"{"icon_style":"neon","low_resource_mode":true}"#);
+        assert!(matches!(outcome, LoadOutcome::Loaded));
+        assert_eq!(parsed.icon_style, IconStyle::Plain);
+        assert!(parsed.low_resource_mode);
     }
 
     #[test]

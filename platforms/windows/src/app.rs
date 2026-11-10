@@ -47,6 +47,8 @@ static CARET_PENDING: AtomicBool = AtomicBool::new(false);
 static AREA_HWND: AtomicIsize = AtomicIsize::new(0);
 /// A form left open when the launcher hid comes back if it's shown again this soon.
 const FORM_KEPT_SECS: u64 = 300;
+/// How long before links still without an icon are asked again, when the launcher opens.
+const LINK_ICONS_AGAIN: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND, DwmExtendFrameIntoClientArea, DwmFlush,
@@ -292,6 +294,8 @@ pub struct App {
     clip_preview_wanted: Option<i64>,
     /// Links whose sites have been asked for an icon since Orbit started. `None` until the first time.
     link_icons_asked: Option<HashSet<String>>,
+    /// When every link without an icon was last asked for one.
+    link_icons_at: Option<Instant>,
     exchange_rates: crate::rates::ExchangeRates,
     pub weather: crate::weather::Weather,
     pub speedtest: crate::speedtest::SpeedTest,
@@ -868,6 +872,7 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
         let catalog = Catalog::new(apps.unwrap_or_default(), &settings);
         let theme = ui::resolve_theme(settings.appearance);
         ui::publish_edit_colors(&theme);
+        crate::rows::set_icon_style(settings.icon_style);
         let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
         let icon_capacity = if settings.low_resource_mode { 16 } else { 64 };
 
@@ -909,6 +914,7 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             clip_preview: None,
             clip_preview_wanted: None,
             link_icons_asked: None,
+            link_icons_at: None,
             exchange_rates: Default::default(),
             weather: Default::default(),
             speedtest: Default::default(),
@@ -1810,6 +1816,9 @@ impl App {
         }
         self.restart_caret();
         self.metrics.record_show(source, times);
+        if self.preview.is_none() && self.link_icons_at.is_some_and(|at| at.elapsed() >= LINK_ICONS_AGAIN) {
+            self.ask_every_link_icon();
+        }
     }
 
     pub fn hide(&mut self, restore_focus: bool) {
@@ -2488,10 +2497,16 @@ impl App {
     }
 
     fn on_key(&mut self, vk: u16, t_key: i64) -> bool {
+        let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
+        self.on_key_as(vk, ctrl, t_key)
+    }
+
+    /// A key pressed, with Ctrl held or not, or a button in the footer clicked, which does just
+    /// what its key does wherever it's shown.
+    fn on_key_as(&mut self, vk: u16, ctrl: bool, t_key: i64) -> bool {
         if self.recording.is_some() {
             return self.on_recording_key(vk, t_key);
         }
-        let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
         // Ctrl+comma, as in most apps. It means the same in every keyboard mode.
         if vk == VK_OEM_COMMA.0 && ctrl {
             self.perform_builtin(Builtin::Settings);
@@ -3184,19 +3199,13 @@ impl App {
             .map(|(_, name)| *name)
     }
 
-    /// A click does what the key shown on the button does.
+    /// A click does what the key shown on the button does, as if it had been pressed: Enter saves
+    /// a form, Space picks its app, and so on.
     fn on_footer_button(&mut self, name: &'static str) {
-        let t = qpc();
+        if let Some((vk, ctrl)) = footer_key(name) {
+            self.on_key_as(vk, ctrl, qpc());
+        }
         match name {
-            "Enter" => self.activate_selected(false, t),
-            "Ctrl+Enter" => self.activate_selected(true, t),
-            "Ctrl+K" => self.open_action_menu(),
-            "Tab" => {
-                self.on_key(VK_TAB.0, t);
-            }
-            "Esc" => {
-                self.on_key(VK_ESCAPE.0, t);
-            }
             "i" => self.set_vim_mode(VimMode::Insert),
             ui::BUTTON_ORBIT_MENU => self.open_orbit_menu(),
             ui::BUTTON_BACK => self.go_back_or_hide(),
@@ -3206,10 +3215,9 @@ impl App {
             }
             _ => {}
         }
+        // Typing carries on in whichever box it was in, such as a snippet's.
         if self.visible {
-            unsafe {
-                let _ = SetFocus(Some(self.edit));
-            }
+            self.focus_input();
         }
     }
 
@@ -6056,6 +6064,7 @@ impl App {
         if old.fetch_link_icons && !self.settings.fetch_link_icons {
             crate::favicon::forget(&self.dir);
             self.link_icons_asked = None;
+            self.link_icons_at = None;
             self.icons.clear();
             crate::settings_win::link_icons_changed(false);
         }
@@ -6072,6 +6081,7 @@ impl App {
                 self.trim_working_set();
             }
         }
+        crate::rows::set_icon_style(self.settings.icon_style);
         self.refresh_theme();
     }
 
@@ -6261,6 +6271,19 @@ impl App {
 }
 
 /// Ctrl with `vk`, written as menus write it, such as `Ctrl+Shift+E`. Only keys a menu shows.
+/// The key a button in the footer stands for, and whether Ctrl goes with it.
+fn footer_key(name: &str) -> Option<(u16, bool)> {
+    Some(match name {
+        "Enter" => (VK_RETURN.0, false),
+        "Ctrl+Enter" => (VK_RETURN.0, true),
+        "Ctrl+K" => (0x4B, true),
+        "Tab" => (VK_TAB.0, false),
+        "Esc" => (VK_ESCAPE.0, false),
+        "Space" => (0x20, false),
+        _ => return None,
+    })
+}
+
 fn shortcut_label(vk: u16, shift: bool) -> Option<String> {
     let key = match vk {
         0x0D => "Enter".to_string(),
@@ -6505,10 +6528,17 @@ impl App {
     /// A form finished: replaces the item with the same id, or adds it at the end.
     fn on_link_saved(&mut self, saved: crate::link_form::LinkSaved) {
         match saved {
-            crate::link_form::LinkSaved::Link(link) => match self.settings.links.iter_mut().find(|other| other.id == link.id) {
-                Some(other) => *other = link,
-                None => self.settings.links.push(link),
-            },
+            crate::link_form::LinkSaved::Link(link) => {
+                // Saving a link asks its site again, even if it gave an icon before, so a site
+                // that changed its icon or couldn't be reached can be tried by hand.
+                if self.settings.fetch_link_icons && !self.previewing {
+                    crate::favicon::fetch(self.dir.clone(), std::slice::from_ref(&link.url), true, self.send, WM_ORBIT_LINK_ICONS);
+                }
+                match self.settings.links.iter_mut().find(|other| other.id == link.id) {
+                    Some(other) => *other = link,
+                    None => self.settings.links.push(link),
+                }
+            }
             crate::link_form::LinkSaved::Command(command) => match self.settings.custom_commands.iter_mut().find(|other| other.id == command.id) {
                 Some(other) => *other = command,
                 None => self.settings.custom_commands.push(command),
@@ -6596,7 +6626,6 @@ impl App {
         row
     }
 
-    /// Links or commands changed: keeps them, and tells every window that shows them.
     /// How a quicklink's row looks: its site's icon, when Orbit may ask for one.
     fn link_icon(&self, url: &str) -> RowIcon {
         match crate::favicon::link_key(url) {
@@ -6605,20 +6634,33 @@ impl App {
         }
     }
 
-    /// Asks for the icons of links whose sites haven't been asked yet. At start that's links never
-    /// asked before, and a site that had none isn't asked again. After that it's links just added
-    /// or changed, whose sites are asked even if they had none last time.
+    /// Asks for the icons of links not asked about since Orbit started: at start every link, and
+    /// after that links just added or changed. Sites whose icons are kept aren't asked.
     fn sync_link_icons(&mut self) {
         if !self.settings.fetch_link_icons {
             return;
         }
-        let urls: Vec<String> = self.settings.links.iter().map(|link| link.url.clone()).collect();
-        let first = self.link_icons_asked.is_none();
-        let asked = self.link_icons_asked.get_or_insert_with(HashSet::new);
-        let fresh: Vec<String> = urls.into_iter().filter(|url| asked.insert(url.clone())).collect();
-        if !fresh.is_empty() {
-            crate::favicon::fetch(self.dir.clone(), &fresh, !first, self.send, WM_ORBIT_LINK_ICONS);
+        if self.link_icons_asked.is_none() {
+            self.ask_every_link_icon();
+            return;
         }
+        let asked = self.link_icons_asked.get_or_insert_with(HashSet::new);
+        let fresh: Vec<String> = self.settings.links.iter().map(|link| link.url.clone()).filter(|url| asked.insert(url.clone())).collect();
+        if !fresh.is_empty() {
+            crate::favicon::fetch(self.dir.clone(), &fresh, false, self.send, WM_ORBIT_LINK_ICONS);
+        }
+    }
+
+    /// Asks for the icon of every link that has none, as at start and when the launcher opens a
+    /// while later: a site that couldn't be reached, or had nothing, may have one now.
+    fn ask_every_link_icon(&mut self) {
+        if !self.settings.fetch_link_icons {
+            return;
+        }
+        let urls: Vec<String> = self.settings.links.iter().map(|link| link.url.clone()).collect();
+        self.link_icons_asked = Some(urls.iter().cloned().collect());
+        self.link_icons_at = Some(Instant::now());
+        crate::favicon::fetch(self.dir.clone(), &urls, false, self.send, WM_ORBIT_LINK_ICONS);
     }
 
     fn links_saved(&mut self) {
@@ -6631,7 +6673,31 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{plate_inset, shortcut_label};
+    use super::{footer_key, plate_inset, shortcut_label};
+
+    /// Every key the footer shows is a button that presses it, so a click saves a form, picks its
+    /// app or opens the menu just as the key would.
+    #[test]
+    fn every_key_in_the_footer_can_be_clicked() {
+        let source = include_str!("view.rs");
+        let body = &source[source.find("pub fn footer_hints").unwrap()..];
+        let body = &body[..body.find("
+    }
+").unwrap()];
+        // Each hint is pushed as (keys, what they do): the keys are the quoted words before the last comma.
+        let keys: Vec<&str> = body
+            .split("out.push((")
+            .skip(1)
+            .filter_map(|push| Some(push[..push.find("));")?].rsplit_once(", ")?.0))
+            .flat_map(|keys| keys.split('"').skip(1).step_by(2))
+            .collect();
+        assert!(keys.contains(&"Space") && keys.contains(&"Ctrl+Enter"), "{keys:?}");
+        for key in keys {
+            assert!(footer_key(key).is_some() || key == "i", "{key} is shown but does nothing when clicked");
+        }
+        assert_eq!(footer_key("Ctrl+Enter"), Some((0x0D, true)));
+        assert_eq!(footer_key("Space"), Some((0x20, false)));
+    }
 
     /// Keys are read back in the words the menus show them in.
     #[test]

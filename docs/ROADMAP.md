@@ -60,7 +60,7 @@ What's built, and what's next by impact. "Tested" below means the automated suit
 2. **macOS parity:** Set hotkey in Cmd+K, game detection (`LSApplicationCategoryType` games plus fullscreen), press-again to hide, the new look with real Liquid Glass or `NSVisualEffectView`, favourites and favourites-only opening, Cmd+, for Settings, clipboard thumbnails, the clipboard preview beside its list, quicklink boxes for `{name}` and website icons, and 1Password and Ente Auth (their tools work the same on a Mac, with Touch ID for 1Password).
 3. **More in the welcome.** It brings things over from other launchers, picks the shortcut, and turns on Everything, 1Password and Ente Auth; it could offer HyperKey and snippet expansion too.
 4. **Hotkeys list:** real note titles instead of "Note 12".
-5. **Media controls**, clipboard as a root result, a chosen browser per link, quicklink icons for sites that keep theirs elsewhere or only as SVG, a live Ente code that counts down in the list before you copy it, and emoji skin tones and country flags.
+5. **Media controls**, clipboard as a root result, a chosen browser per link, a live Ente code that counts down in the list before you copy it, and emoji skin tones and country flags.
 6. **Note editing:** note kill loses up to 400 ms of typing, so shorten or remove that window.
 
 ### For staying light under pressure

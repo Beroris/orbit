@@ -382,25 +382,35 @@ struct Badge {
     glyph: char,
 }
 
-/// The colour of a page's badge, or of its square in the page list. In high contrast it's the
-/// text colour, so nothing depends on a colour Windows didn't choose.
-pub fn badge_fill(theme: &Theme, color: crate::gfx::Rgb) -> (crate::gfx::Rgb, crate::gfx::Rgb) {
-    if theme.high_contrast { (theme.text, theme.background) } else { (color, crate::gfx::Rgb(255, 255, 255)) }
-}
-
-/// A rounded square in a page's colour with its symbol on it, `size` across, at `x`, `y`.
+/// A page's symbol, `size` across, at `x`, `y`, in the icon style chosen in Settings and in the
+/// page's colour where the style has one. In high contrast it's the background colour on a square
+/// of the text colour, so nothing depends on a colour Windows didn't choose.
 pub fn draw_badge(buffer: &mut Backbuffer, theme: &Theme, font: HFONT, x: i32, y: i32, size: i32, color: crate::gfx::Rgb, glyph: char) {
-    let (fill, ink) = badge_fill(theme, color);
+    use orbit_core::settings::IconStyle;
     let radius = (size as f32 * 0.26).max(3.0);
-    if theme.high_contrast {
-        buffer.fill_round_rect(x, y, size, size, radius, fill);
-    } else {
-        // Lit like the launcher's tiles.
-        let rim = (size as f32 / 22.0).max(1.0);
-        buffer.fill_tile(x, y, size, radius, rim, fill.mix(crate::gfx::Rgb(255, 255, 255), 0.2), fill.mix(crate::gfx::Rgb(0, 0, 0), 0.18));
-    }
+    let area = RECT { left: x, top: y, right: x + size, bottom: y + size };
     let symbol = (size as f32 * 0.6).round() as i32;
-    buffer.symbol_centered(&glyph.to_string(), font, symbol, !theme.high_contrast, ink, RECT { left: x, top: y, right: x + size, bottom: y + size });
+    if theme.high_contrast {
+        buffer.fill_round_rect(x, y, size, size, radius, theme.text);
+        buffer.symbol_centered(&glyph.to_string(), font, symbol, false, theme.background, area);
+        return;
+    }
+    let dark = theme.background.0 < 128;
+    let colours = (color.mix(crate::gfx::Rgb(255, 255, 255), 0.2), color.mix(crate::gfx::Rgb(0, 0, 0), 0.18));
+    let (heavy, ink) = match crate::rows::icon_style() {
+        IconStyle::Plain => (false, theme.secondary),
+        IconStyle::Coloured => (false, crate::rows::coloured_symbol(colours, dark)),
+        IconStyle::GreyTiles => {
+            buffer.fill_round_rect(x, y, size, size, radius, theme.keycap);
+            (false, theme.text)
+        }
+        IconStyle::TintedTiles => {
+            let (fill, alpha, ink) = crate::rows::tinted_tile(colours, dark);
+            buffer.fill_round_rect_alpha(x, y, size, size, radius, fill, alpha);
+            (true, ink)
+        }
+    };
+    buffer.symbol_centered(&glyph.to_string(), font, symbol, heavy, ink, area);
 }
 
 /// A rounded group of controls, painted by the window behind them. It shows while `anchor` does,

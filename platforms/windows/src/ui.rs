@@ -771,25 +771,27 @@ fn hairline(dpi: u32) -> i32 {
     1.max(dpi as i32 / 96)
 }
 
-/// A command's symbol on its tile.
+/// A command's symbol, in the icon style chosen in Settings.
 fn draw_tile(buffer: &mut Backbuffer, paint: &Paint, glyph: char, x: i32, y: i32, size: i32, selected: bool) {
-    let dpi = paint.dpi;
-    let (light, deep) = tile_colors(glyph);
-    let white = Rgb(255, 255, 255);
-    // The chosen row's tile brightens a touch and glows in its own colour.
-    let (light, deep) = if selected { (light.mix(white, 0.12), deep.mix(white, 0.08)) } else { (light, deep) };
-    let radius = scale(TILE_RADIUS, dpi) as f32;
+    use orbit_core::settings::IconStyle;
+    let radius = scale(TILE_RADIUS, paint.dpi) as f32;
     let rect = RECT { left: x, top: y, right: x + size, bottom: y + size };
-    let symbol = glyph.to_string();
-    // Lifted a little off the glass, then lit, with the symbol casting a faint shadow of its own.
-    if selected {
-        buffer.shadow_round_rect(x, y, size, size, radius, scale(7, dpi) as f32, light, if paint.dark { 120 } else { 90 });
-    }
-    buffer.shadow_round_rect(x, y + scale(1, dpi), size, size, radius, scale(3, dpi) as f32, Rgb(0, 0, 0), if paint.dark { 90 } else { 50 });
-    buffer.fill_tile(x, y, size, radius, paint.thin as f32, light, deep);
-    let below = RECT { top: rect.top + scale(1, dpi), bottom: rect.bottom + scale(1, dpi), ..rect };
-    text::draw(buffer, &symbol, &paint.fonts.icon_on_tile, deep.mix(Rgb(0, 0, 0), 0.35), below, Align::Center);
-    text::draw(buffer, &symbol, &paint.fonts.icon_on_tile, Rgb(255, 255, 255), rect, Align::Center);
+    let theme = paint.theme;
+    let (face, ink) = match crate::rows::icon_style() {
+        IconStyle::Plain => (&paint.fonts.icon_row, if selected { theme.text } else { theme.secondary }),
+        IconStyle::Coloured => (&paint.fonts.icon_row, crate::rows::coloured_symbol(tile_colors(glyph), paint.dark)),
+        IconStyle::GreyTiles => {
+            let fill = if selected { paint.tile_on_selection } else { paint.tile };
+            buffer.fill_round_rect_alpha(x, y, size, size, radius, fill.0, fill.1);
+            (&paint.fonts.icon_tile, theme.text)
+        }
+        IconStyle::TintedTiles => {
+            let (fill, alpha, ink) = crate::rows::tinted_tile(tile_colors(glyph), paint.dark);
+            buffer.fill_round_rect_alpha(x, y, size, size, radius, fill, alpha);
+            (&paint.fonts.icon_on_tile, ink)
+        }
+    };
+    text::draw(buffer, &glyph.to_string(), face, ink, rect, Align::Center);
 }
 
 /// The search box's text and caret. The box itself isn't drawn, because a standard control can't

@@ -7,7 +7,8 @@
 //! `<what>` is a Settings page, a page in a state (`hotkeys-filled`, `hotkeys-text`,
 //! `hotkeys-recording`, `hotkeys-search`, `hotkeys-bad-text`, `general-listening`,
 //! `general-problem`, `general-saved`, `general-failed`, `general-find`,
-//! `general-find-go`, `general-find-none`, `data-armed`), or `link-form`,
+//! `general-find-go`, `general-find-none`, `data-armed`, `extensions-github`, `extensions-open`,
+//! `extensions-sliding`), or `link-form`,
 //! `command-form` or `snippet-form`. Add `-new` to a form for a blank one, or `-error` to a link or
 //! command form to see it complain.
 
@@ -224,6 +225,7 @@ pub fn run(preview: SettingsPreview, dir: Option<PathBuf>) -> i32 {
         settings.appearance = theme;
     }
     let theme = crate::ui::resolve_theme(settings.appearance);
+    crate::rows::set_icon_style(settings.icon_style);
     // Nothing answers: the receiver just stays open while the form is up.
     let (tx, _rx) = std::sync::mpsc::channel::<Req>();
     let context = EditorContext { tx, main: SendHwnd::new(HWND::default()), theme };
@@ -272,7 +274,7 @@ pub fn run(preview: SettingsPreview, dir: Option<PathBuf>) -> i32 {
                     ("general", false, false)
                 }
                 "search-filled" | "search-alias" | "search-record" => ("search", false, false),
-                "extensions-github" | "extensions-tool" => ("extensions", false, false),
+                "extensions-github" | "extensions-tool" | "extensions-open" | "extensions-sliding" => ("extensions", false, false),
                 other => (other, false, false),
             };
             let state = match kind {
@@ -287,6 +289,8 @@ pub fn run(preview: SettingsPreview, dir: Option<PathBuf>) -> i32 {
                 "search-record" => "search-record",
                 "extensions-github" => "extensions-github",
                 "extensions-tool" => "extensions-tool",
+                "extensions-open" => "extensions-open",
+                "extensions-sliding" => "extensions-sliding",
                 "general-listening" => "listening",
                 "general-problem" => "problem",
                 "general-saved" => "saved",

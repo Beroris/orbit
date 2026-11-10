@@ -222,6 +222,8 @@ Why Orbit is built the way it is. Figures come from the Windows reference machin
 
 ## Quicklink icons are fetched, and on by default
 
+*Partly replaced by "Quicklink icons come from internal sites too, and a missing one is asked for again", at the end: what's asked, where Orbit may go, and that "no icon" is no longer kept.*
+
 **Decision.** Orbit asks each quicklink's own website for its icon, once, and keeps the answer. The switch for it, "Show website icons", is on by default. Only the link's own site is asked, by host, with no cookies or Windows sign-in, and an icon named on another site is refused. A redirect the site itself gives for its icon is followed once, to a public HTTPS address, which is how Gmail gets its icon from Google's file server. Local and private addresses are never asked. See [PRIVACY.md](PRIVACY.md#quicklink-website-icons).
 
 **Why.** The owner asked for icons like Raycast's, and chose on by default with a way to turn it off. The brief asks for no background network activity unless the user has turned it on, so this is a deliberate exception made by the owner. It's kept as small as it can be: no icon service, which would learn every link, and no refreshing.
@@ -372,15 +374,17 @@ A click on the alias opens a box over it: Enter keeps it, Esc puts it back, and 
 
 ## Command tiles are lit like app icons
 
+*Replaced by "Commands' icons are plain, or a style chosen in Settings", at the end.*
+
 **Decision.** A command's tile is drawn the way an app icon is, so it sits well beside real ones. It uses two colours per command, light at the top left and deeper, a little shifted in hue, at the bottom right, with a soft gloss from above and an edge that catches light at the top and falls into shade at the bottom. A small shadow lifts it off the glass. The symbol is white and heavier than the font's own weight, with a faint shadow of its own. The Settings window draws the same tiles. High contrast keeps plain symbols. A see-through "tinted glass" tile was tried and looked washed out beside app icons.
 
 **Why.** The owner found the flat tiles with thin symbols plain next to the app icons around them.
 
 ## Orbit draws its own symbols
 
-**Decision.** The symbols on rows, tiles, menus and key caps are drawn by Orbit itself (`symbols.rs`), as a few strokes each on a 24-unit grid, rather than taken from the Windows icon font. Strokes are 2 units wide, or 2.4 on a coloured tile, and never thinner than a pixel and a quarter, so small ones don't go faint. They keep the icon font's code points, and anything Orbit hasn't drawn still comes from the font. Settings uses the same symbols, and the same lit tiles for its page badges. The chosen row's tile brightens a little and glows in its own colour.
+**Decision.** The symbols on rows, tiles, menus and key caps are drawn by Orbit itself (`symbols.rs`), as a few strokes each on a 24-unit grid, rather than taken from the Windows icon font. Strokes are 2 units wide, or 2.4 on a tinted tile, and never thinner than a pixel and a quarter, so small ones don't go faint. They keep the icon font's code points, and anything Orbit hasn't drawn still comes from the font, though every symbol Orbit names is drawn: the test `every_symbol_orbit_uses_is_drawn` lists them. Extensions, Import and Check for Updates came from the font until the owner asked for the weak icons to be improved; Extensions is drawn as blocks with one being added, since a puzzle piece read as a mug when small. Settings uses the same symbols, in the same icon style, for its pages and extensions.
 
-**Why.** The owner found the font's symbols too thin, in menus as well as on tiles. The glow on the chosen tile was tried at the owner's request and may be taken out.
+**Why.** The owner found the font's symbols too thin, in menus as well as on tiles.
 
 ## End task is in a running app's menu
 
@@ -468,6 +472,26 @@ No AI (AI Usage only reads how much of other services' limits you've used), clou
 
 ## Extensions are one table
 
-**Decision.** The Extensions page starts with one table of every extension: a coloured tile, its name over one line on what it does, and its switch. One that's on with several commands has a row for each under it, with its alias and hotkey changed in place, the same way as on the Search page; one with a single command has its alias and hotkey in its own row. A filter above it finds an extension by name or what it does, and a command by name or alias, beside "Add extension…". Under the table, a card for each extension holds only what it needs: a tool to install or sign in to, Everything's own settings, and what it sends. Everything has no keyword until it's given an alias. Typing "everything" finds it like any other command, and Enter opens the file search.
+**Decision.** The Extensions page starts with one table of every extension: its symbol, its name over one line on what it does, and its switch. Its commands have a row each under it, with their alias and hotkey changed in place, the same way as on the Search page; the next decision says when they show. A filter above it finds an extension by name or what it does, and a command by name or alias, beside "Add extension…". Under the table, a card for each extension holds only what it needs: a tool to install or sign in to, Everything's own settings, and what it sends. Everything has no keyword until it's given an alias. Typing "everything" finds it like any other command, and Enter opens the file search.
 
 **Why.** The owner found the earlier page, a card per extension with a "Change…" button that went to the Search page, hard to use, and its buttons did nothing: the pickers' range of control ids took in every id after it. A single `f` keyword was also unlike everything else in Orbit, which is found by its name. One table puts what's on, and what each command answers to, in one place, and the cards are left with what can't be a row.
+
+## Each extension in the table is an accordion
+
+**Decision.** Every extension's row in the Extensions table starts with a chevron and opens and closes like an accordion: a click anywhere along the row but its switch, or Enter on its chevron, slides its commands out under it on a panel a shade off the card, each with its alias and hotkey, and the chevron turns to point down at them. This holds for an extension with a single command too, so no extension's own row has an alias or a hotkey. Turning an extension on opens it and turning it off closes it; one that's off can still be opened, with its commands greyed out, and pressing one says to turn the extension on. The slide takes 150 to 260 ms, longer for more commands, easing out, with the commands coming out one after another and fading in, and the page following one that opens past the bottom of the window. It's instant when Windows' animations are off. Everything starts closed; what's open stays open while Settings is, also when it rebuilds itself. Typing a command's name or alias in the filter opens its extension at once.
+
+**Why.** The owner asked for each extension to expand and close, showing each of its commands with their hotkeys and aliases, as it's turned on and off. Before, an extension's commands showed whenever it was on, so a few extensions with several commands each made a long table, and one with a single command looked different from the rest. Closed by default, the table is a short list of what Orbit can do; open, each extension reads the same way. Raycast's extension settings work the same way, with the chevron at the start of the row.
+
+## Commands' icons are plain, or a style chosen in Settings
+
+**Decision.** Orbit's own commands show their symbol alone, in grey, and so do the pages and extensions in Settings. General → Appearance → **Command icons** offers three more styles: Coloured, the symbol alone in the command's colour; Grey tiles, the symbol on a grey square; and Tinted tiles, the symbol in its colour on a faint square of it. A choice is drawn at once in Settings, and in the launcher the next time it shows. Apps, files and quicklinks keep their own icons, and high contrast keeps its own squares whatever the choice. The lit, glossy tiles are gone. A style written by a later version reads as Plain.
+
+**Why.** The owner found the glossy tiles too playful and wanted something simpler. Six looks were rendered side by side. The owner liked Plain best, and liked Coloured, Grey tiles and Tinted tiles enough to keep them as choices. Flat colour tiles were left out as hardly calmer than the glossy ones.
+
+## Quicklink icons come from internal sites too, and a missing one is asked for again
+
+**Decision.** Links to sites on your own network (local names, names with no dot, private addresses) have their icons asked for like any other. They're asked over HTTPS first and then plain HTTP, and their certificates aren't checked. Nothing is kept about a site that gave no icon: links without one are asked again when Orbit starts and when the launcher opens 30 minutes or more after the last time, and saving a link from its form asks its site again even if it has an icon. Orbit goes where a site sends it and loads icons the page keeps on another server, as a browser would, as long as that server is a public HTTPS address; never a private address that isn't the link's own site. It names itself `Mozilla/5.0 (compatible; Orbit)`, tries the usual icon addresses as well as the ones the page names, and reads an icon file whose pictures Windows can't read together one at a time. See [PRIVACY.md](PRIVACY.md#quicklink-website-icons).
+
+**Why.** The owner found many quicklinks without icons on a work laptop, where most links are internal, and asked for internal sites to have icons too, and for "no icon" not to be remembered, so that a site that was down or out of reach is tried again, and editing a link fetches its icon afresh. Of 50 common sites, 33 had icons before; 44 do after. Most of the rest came from icons kept on a site's own file server (Discord, Dropbox, Asana), sites that redirect to another of their own domains (notion.so to notion.com, OneDrive to microsoft.com), sites that turn away a request naming only `Orbit`, and an icon file Windows wouldn't read whole (Trello).
+
+**Cost.** Asking an internal site reveals its name to the DNS server of whatever network you're on, as opening the link would. On another network the same private name or address may be someone else's device, so a link with no icon yet could be given that device's icon until it's saved again. An internal site that needs your Windows sign-in still gives no icon, since Orbit never sends one: the sign-in could reach a device pretending to be the site. Not checking certificates is safe only because nothing in the request is secret and an icon is all that's read back. A site's file server now sees your IP address when its page names an icon there. Sites behind bot protection (cloudflare.com, openai.com), sign-in-only pages (Outlook, Google Calendar) and pages that set their icon by script (the Azure portal) still get the plain link symbol.

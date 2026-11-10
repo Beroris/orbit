@@ -24,12 +24,12 @@ Their ids (`files`, `1password`, `ente-auth`, `weather`, `speed-test`, `github`,
 
 ## Aliases and hotkeys
 
-The Extensions table shows each extension with what it does and its switch. Under one that's on and has more than one command, each command has a row of its own; one with a single command keeps it in its own row. Click a command's Alias or Hotkey to change it, or use the keyboard: Left and Right move between the parts, and Enter changes the one that's lit. Each command can have:
+The Extensions table shows each extension with what it does and its switch. Each one opens like an accordion: click anywhere along its row, or its chevron, and its commands slide out under it, each in a row of its own with its alias and hotkey; click again to close it. Turning an extension on opens it, and turning it off closes it. One that's off can still be opened to see what it has, with its commands greyed out until it's on. Click a command's Alias or Hotkey to change it, or use the keyboard: Left and Right move between the parts of a row (an extension's chevron and switch, or a command's alias and hotkey), and Enter or Space changes the one that's lit. Each command can have:
 
 - **An alias.** For a command that opens a list, and for Everything, the alias is also its keyword: typing it and a space goes straight in, so `ghi bug` searches your issues for "bug". Clearing it leaves the command with no keyword.
 - **A hotkey**, which opens the command from anywhere.
 
-The filter above the table finds an extension by its name or what it does, and a command by its name or alias. The Search page lists the same commands, with the same aliases and hotkeys, in a group for each extension that's on, and its **Shown** switch leaves one out of the launcher's search. Under the table, a card for each extension holds what it needs, such as a tool to install, and says what it sends.
+The filter above the table finds an extension by its name or what it does, and a command by its name or alias, opening the extension it's in. The Search page lists the same commands, with the same aliases and hotkeys, in a group for each extension that's on, and its **Shown** switch leaves one out of the launcher's search. Under the table, a card for each extension holds what it needs, such as a tool to install, and says what it sends.
 
 Ctrl+K on a command in the launcher sets the same alias and hotkey without opening Settings.
 

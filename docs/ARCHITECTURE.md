@@ -175,7 +175,7 @@ Default data directory: `%LOCALAPPDATA%\Orbit` (falls back to `%USERPROFILE%\App
 | `orbit.db`, `-wal`, `-shm` | data thread | Notes, snippets, usage counts, FTS5 indexes. |
 | `clipboard.db`, `-wal`, `-shm` | data thread | Clipboard history. Absent when "keep history after Orbit exits" is off; history is then in memory. |
 | `clipboard-images/<hash>.dib` | data thread | Raw bitmap data for image clips. |
-| `link-icons/<hash>.bgra`, `.none` | icon thread, data thread | Quicklink website icons, 64 by 64, or a note that a site had none. See PRIVACY.md. |
+| `link-icons/<hash>-full.bgra` | icon thread, data thread | Quicklink website icons, 64 by 64. See PRIVACY.md. |
 | `exchange-rates.xml` | exchange-rate thread, UI thread | The European Central Bank's daily reference rates, for currency conversion. Fetched when a conversion is typed and the copy is over 12 hours old. See PRIVACY.md. |
 | `apps.json` | indexer child | Installed-app list. A cache; rebuilt if missing. |
 | `icons/<hash>.bgra` | indexer child | App icons. A cache. |
