@@ -5,6 +5,9 @@
 //! `WM_ACTIVATE`). Those nested messages are queued and handled when the outer handler returns,
 //! so a handler always has exclusive access to `App` and no aliasing or runtime panic is possible.
 
+mod ext;
+mod welcome;
+
 use crate::catalog::{Catalog, Entry, app_key, glyph_for_builtin};
 use crate::clipboard::{self, Capture, CaptureLimits, InsertOutcome, InsertRequest};
 use crate::gfx::Backbuffer;
@@ -85,7 +88,7 @@ pub const WM_ORBIT_REPORT: u32 = WM_APP + 44;
 pub const WM_ORBIT_INSERT_DONE: u32 = WM_APP + 9;
 pub const WM_ORBIT_SETTINGS_APPLY: u32 = WM_APP + 10;
 pub const WM_ORBIT_RUN_BUILTIN: u32 = WM_APP + 11;
-pub const WM_ORBIT_IMPORT: u32 = WM_APP + 12;
+
 /// Settings is listening for keys, or has stopped, in wparam. Orbit's own shortcuts stand aside.
 pub const WM_ORBIT_SETTINGS_RECORDING: u32 = WM_APP + 31;
 /// Settings has moved to a screen with a different DPI, and needs making again.
@@ -123,6 +126,16 @@ const WM_ORBIT_SPEEDTEST: u32 = WM_APP + 42;
 const WM_ORBIT_SPEEDTEST_INSTALLED: u32 = WM_APP + 43;
 /// The colour picker has finished: wParam is 0x01RRGGBB, or 0 if nothing was picked.
 const WM_ORBIT_COLOUR: u32 = WM_APP + 45;
+/// The files thread answered: boxed `files::FileAnswer`.
+const WM_ORBIT_FILES: u32 = WM_APP + 46;
+/// An extension said something, or stopped: boxed `extensions::Event`.
+const WM_ORBIT_EXTENSION: u32 = WM_APP + 47;
+/// Installing Everything finished: boxed `Result<(), String>`.
+pub const WM_ORBIT_EVERYTHING_INSTALLED: u32 = WM_APP + 48;
+/// Settings added or removed an extension, so the folder is looked at again.
+pub const WM_ORBIT_EXTENSIONS_CHANGED: u32 = WM_APP + 49;
+/// The updater's worker found something: boxed `update::Event`.
+pub const WM_ORBIT_UPDATE: u32 = WM_APP + 53;
 /// What a new quicklink could be, read from the window that was in front.
 const WM_ORBIT_LINK_SUGGESTION: u32 = WM_APP + 36;
 /// For the bench driver: write out pending timing lines.
@@ -146,6 +159,14 @@ const TIMER_FORGET_VAULTS: usize = 7;
 const TIMER_COUNTDOWN: usize = 8;
 /// Once a second, only while a running timer or stopwatch is on screen.
 const TIMER_CLOCK: usize = 9;
+/// Stops extensions' programs that have been idle a while.
+const TIMER_EXT_IDLE: usize = 10;
+/// Looks again while Everything starts up or reads the drives.
+const TIMER_FILES_RETRY: usize = 11;
+/// The updater's first look, then its hourly tick. See `update.rs`.
+pub const TIMER_UPDATE_CHECK: usize = 12;
+/// Setup was started to update Orbit, and should have closed it by now.
+pub const TIMER_UPDATE_SETUP: usize = 13;
 /// How long a copied password or code stays on the clipboard.
 const SECRET_CLEAR_MS: u32 = 30_000;
 /// How long the names in a password manager stay in memory after being fetched.
@@ -180,6 +201,22 @@ pub struct Options {
     /// Empty the working set this long after hiding. `None` keeps pages resident.
     pub trim_after_ms: Option<u32>,
     pub no_reindex: bool,
+    /// What to open once started, besides the tray icon.
+    pub start: Start,
+    /// Started as a new version, just installed: say so.
+    pub updated: bool,
+}
+
+/// What a start opens besides the tray icon.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Start {
+    #[default]
+    Quietly,
+    /// `--show`: the launcher, as after an update.
+    Launcher,
+    /// `--setup-continue x,y`: Setup.exe installed Orbit, and the welcome carries on here, where
+    /// Setup's window was.
+    Welcome { at: Option<(i32, i32)> },
 }
 
 /// A quicklink's blanks, being filled in from the search bar. The box being typed in is the real
@@ -341,6 +378,24 @@ pub struct App {
     lost_focus_while_held: bool,
     /// A password or code Orbit copied, by its clipboard sequence number, for clearing later.
     secret_on_clipboard: Option<u32>,
+    /// The files thread, once file search has been used.
+    files: Option<crate::files::Files>,
+    file_seq: u64,
+    /// The newest search for each place files are shown. Answers to older ones are dropped.
+    file_latest: [u64; 2],
+    /// Where the icons of files and extensions' pictures in rows are read from, by icon key.
+    icon_paths: HashMap<u64, (String, bool)>,
+    everything_installing: bool,
+    /// When Orbit started Everything, which takes a moment to answer.
+    everything_starting: Option<Instant>,
+    pub extensions: Vec<crate::extensions::Installed>,
+    pub broken_extensions: Vec<crate::extensions::Broken>,
+    runners: crate::extensions::Runners,
+    /// GitHub and AI Usage, which answer from Orbit's own code.
+    providers: crate::providers::Providers,
+    /// The extension and request whose answer is wanted. Anything else it answers is old.
+    ext_waiting: Option<(String, u64)>,
+    ext_requests: u64,
 }
 
 /// What a password manager or authenticator last said. Item names and no secrets.
@@ -599,6 +654,8 @@ fn show_tray_menu(hwnd: HWND) {
                 clipboard_paused: app.clip_paused,
                 suspended: app.suspended,
                 launcher_hint: app.active_hotkey.clone(),
+                appearance: app.settings.appearance,
+                update: crate::update::tray_item(),
             })
         })
     });
@@ -707,6 +764,8 @@ fn load_settings(dir: &std::path::Path) -> (Settings, bool, Option<String>) {
 
 /// Creates the window and state. The window is ready to appear instantly from then on.
 pub fn startup(options: Options) -> windows::core::Result<()> {
+    let start = options.start;
+    let updated = options.updated;
     let _ = std::fs::create_dir_all(&options.data_dir);
     let (mut settings, read_only, settings_notice) = load_settings(&options.data_dir);
     if options.preview.is_none() {
@@ -812,6 +871,7 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
         let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
         let icon_capacity = if settings.low_resource_mode { 16 } else { 64 };
 
+        let extension_data_dir = options.data_dir.clone();
         let mut app = App {
             main,
             edit,
@@ -912,13 +972,32 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             hold_open: None,
             lost_focus_while_held: false,
             secret_on_clipboard: None,
+            files: None,
+            file_seq: 0,
+            file_latest: [0, 0],
+            icon_paths: HashMap::new(),
+            everything_installing: false,
+            everything_starting: None,
+            extensions: Vec::new(),
+            broken_extensions: Vec::new(),
+            runners: crate::extensions::Runners::new(extension_data_dir),
+            providers: Default::default(),
+            ext_waiting: None,
+            ext_requests: 0,
         };
+        app.discover_extensions();
         app.layout_for_dpi(dpi);
         app.apply_glass();
         if app.preview.is_some() {
             let _ = SetTimer(Some(main), TIMER_PREVIEW, 1500, None);
         }
         tray::add(main, WM_ORBIT_TRAY);
+        if app.preview.is_none() {
+            crate::update::start(main, app.dir.clone());
+            if updated {
+                crate::update::announce_updated();
+            }
+        }
         if app.preview.is_none() {
             let s = &mut app.settings;
             let mut lists = [
@@ -951,15 +1030,12 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             app.notify("Orbit", &notice);
         }
         app.announce_hotkey_problems();
-        if first_run {
-            let message = if app.active_hotkey.is_empty() {
-                "Orbit is running. Open it from its tray icon.".to_string()
-            } else {
-                format!("Orbit is running. Press {} to open it.", app.active_hotkey)
-            };
-            app.notify("Welcome to Orbit", &message);
-            app.settings.onboarded = true;
-            app.save_settings();
+        // The welcome marks itself as seen when it closes, however it closes.
+        match start {
+            Start::Welcome { at } if !app.previewing => app.open_welcome(true, at),
+            _ if first_run && !app.previewing => app.open_welcome(false, None),
+            Start::Launcher if !app.previewing => app.send.post(WM_ORBIT_TOGGLE, 0, 0),
+            _ => {}
         }
         APP.with(|cell| *cell.borrow_mut() = Some(app));
     }
@@ -1128,8 +1204,17 @@ impl App {
                 Some(LRESULT(0))
             }
             WM_ORBIT_TRAY => {
-                if (lparam.0 & 0xFFFF) as u32 == WM_LBUTTONUP {
+                let event = (lparam.0 & 0xFFFF) as u32;
+                if event == WM_LBUTTONUP {
                     self.toggle(Scope::Root, "tray", t0);
+                } else if event == tray::NOTIFICATION_CLICKED {
+                    crate::update::notification_clicked();
+                }
+                Some(LRESULT(0))
+            }
+            WM_ORBIT_UPDATE => {
+                if let Some(line) = crate::update::on_message(wparam.0) {
+                    self.report(&line);
                 }
                 Some(LRESULT(0))
             }
@@ -1257,10 +1342,14 @@ impl App {
                 Some(LRESULT(0))
             }
             WM_ORBIT_SET_ALIAS => {
-                if let Some(change) = util::take_posted::<(String, String)>(wparam.0) {
-                    let (key, alias) = *change;
+                if let Some(change) = util::take_posted::<(String, String, bool)>(wparam.0) {
+                    let (key, alias, keyword) = *change;
                     let own = key.starts_with(&crate::catalog::link_key("")) || key.starts_with(&crate::catalog::custom_key(""));
-                    crate::settings_win::set_item_alias(&mut self.settings, &key, &alias);
+                    if keyword {
+                        crate::settings_win::set_item_keyword(&mut self.settings, &key, &alias);
+                    } else {
+                        crate::settings_win::set_item_alias(&mut self.settings, &key, &alias);
+                    }
                     self.save_and_rebuild_catalog();
                     if own {
                         crate::settings_win::links_changed(&self.settings);
@@ -1324,14 +1413,9 @@ impl App {
                 }
                 Some(LRESULT(0))
             }
-            WM_ORBIT_IMPORT => {
-                let Some(path) = util::take_posted::<PathBuf>(wparam.0) else {
-                    return Some(LRESULT(0));
-                };
-                if path.file_name().is_some_and(|name| name.eq_ignore_ascii_case("settings.json")) {
-                    self.import_settings(&path);
-                } else {
-                    self.worker.send(Req::Import { path: *path });
+            crate::setup::WM_ORBIT_SETUP => {
+                if let Some(change) = util::take_posted::<crate::setup::Change>(wparam.0) {
+                    self.on_setup(*change);
                 }
                 Some(LRESULT(0))
             }
@@ -1399,6 +1483,29 @@ impl App {
                 crate::settings_win::link_icons_changed(self.settings.fetch_link_icons);
                 Some(LRESULT(0))
             }
+            WM_ORBIT_FILES => {
+                if let Some(answer) = util::take_posted::<crate::files::FileAnswer>(wparam.0) {
+                    self.on_files(*answer);
+                }
+                Some(LRESULT(0))
+            }
+            WM_ORBIT_EXTENSION => {
+                if let Some(event) = util::take_posted::<crate::extensions::Event>(wparam.0) {
+                    self.on_extension(*event);
+                }
+                Some(LRESULT(0))
+            }
+            WM_ORBIT_EVERYTHING_INSTALLED => {
+                if let Some(result) = util::take_posted::<Result<(), String>>(wparam.0) {
+                    self.on_everything_installed(*result);
+                }
+                Some(LRESULT(0))
+            }
+            WM_ORBIT_EXTENSIONS_CHANGED => {
+                let change = util::take_posted::<crate::extensions::Change>(wparam.0);
+                self.on_extensions_changed(change.map(|change| *change));
+                Some(LRESULT(0))
+            }
             m if m == self.taskbar_created && m != 0 => {
                 tray::add(self.main, WM_ORBIT_TRAY);
                 None
@@ -1412,6 +1519,7 @@ impl App {
     fn layout_for_dpi(&mut self, dpi: u32) {
         let changed = self.fonts.is_none() || self.dpi != dpi;
         self.dpi = dpi;
+        self.view.dpi = dpi;
         if changed {
             let fonts = Fonts::new(dpi);
             if let Some(fonts) = &fonts {
@@ -1757,6 +1865,7 @@ impl App {
                 let _ = SetTimer(Some(self.main), TIMER_TRIM, delay, None);
             }
         }
+        self.arm_extension_idle();
     }
 
     fn trim_working_set(&mut self) {
@@ -1874,6 +1983,10 @@ impl App {
                 crate::editor::release_rich_edit();
                 release_free_heap();
             }
+            TIMER_EXT_IDLE => self.on_extension_idle(),
+            TIMER_FILES_RETRY => self.on_files_retry(),
+            TIMER_UPDATE_CHECK => crate::update::on_check_timer(self.settings.check_updates),
+            TIMER_UPDATE_SETUP => crate::update::on_setup_timer(),
             _ => {}
         }
     }
@@ -1953,6 +2066,14 @@ impl App {
                         self.enter_scope(Scope::Stopwatch, qpc());
                     }
                     Some("colour") => self.enter_scope(Scope::Colour(orbit_core::colour::Colour { r: 56, g: 189, b: 248 }), qpc()),
+                    // An extension's list, as "ext:github/issues". One that comes with Orbit reads
+                    // saved answers from the data folder instead of asking online.
+                    Some(list) if list.starts_with("ext:") => {
+                        if let Some((ext, command)) = list["ext:".len()..].split_once('/') {
+                            let (ext, command) = (ext.to_string(), command.to_string());
+                            self.open_extension_command(&ext, &command);
+                        }
+                    }
                     _ => {}
                 }
                 // A scope's rows arrive from the data thread, so its menu waits for them.
@@ -1962,7 +2083,8 @@ impl App {
                 self.request_visible_icons();
             }
             1 => {
-                if preview.scope.is_some() && self.menu.is_none() {
+                // A row picked lower down, in a scope or on the home list.
+                if self.menu.is_none() && (preview.scope.is_some() || preview.select > 0) {
                     self.view.select(preview.select);
                     self.after_selection_change();
                     if preview.actions {
@@ -2285,6 +2407,10 @@ impl App {
             return Err("a plain key would stop typing everywhere".to_string());
         }
         let (mods, vk) = keys::chord_to_registration(chord).ok_or("unknown key")?;
+        // A preview only draws, and mustn't take keys from the Orbit that's running.
+        if self.previewing {
+            return Ok(());
+        }
         unsafe { RegisterHotKey(Some(self.main), id, mods, vk) }
             .map_err(|_| "already taken by another program".to_string())?;
         self.registered_hotkeys.push(id);
@@ -2298,7 +2424,8 @@ impl App {
     pub fn apply_hook(&mut self) {
         self.hook = None;
         self.hook_failed = false;
-        if self.suspended {
+        // A preview only draws. Its keyboard hook would see every key typed while it runs.
+        if self.suspended || self.previewing {
             return;
         }
         let config = hook::config_from_settings(&self.settings, self.send, WM_ORBIT_HYPER, WM_ORBIT_EXPAND, Vec::new());
@@ -3425,12 +3552,11 @@ impl App {
         self.last_mouse = (x, y);
         if let Some(index) = self.row_under(x, y) {
             if index != self.view.selected {
-                // Moving over a grid mustn't scroll it out from under the pointer.
+                // What's under the pointer is on screen already, and moving over it mustn't scroll
+                // the list out from under the pointer.
                 let scroll = self.view.scroll;
                 self.view.select(index);
-                if self.view.grid.is_some() {
-                    self.view.scroll = scroll;
-                }
+                self.view.scroll = scroll;
                 self.after_selection_change();
                 self.redraw();
             }
@@ -3550,6 +3676,10 @@ impl App {
 
     /// Switches what the launcher shows. `keep_query` retains the current text.
     pub fn set_scope(&mut self, scope: Scope, keep_query: bool) {
+        // Lists that arrive later start empty, not showing the last list's rows.
+        if matches!(scope, Scope::Files | Scope::Extension { .. }) && scope != self.view.scope {
+            self.view.rows.clear();
+        }
         self.view.scope = scope;
         self.view.reset_position();
         self.view.static_rows.clear();
@@ -3675,11 +3805,18 @@ impl App {
             }
             Scope::Emoji => self.build_emoji_rows(&query),
             Scope::Notes | Scope::Snippets | Scope::Clipboard => self.request_scope_rows(&scope, &query),
+            Scope::Files => self.search_files(crate::files::Place::List, &query),
+            Scope::Extension { ext, command, .. } => self.search_extension(ext, command, &query),
             Scope::SetAlias { key, .. } => {
                 let alias = query.trim();
                 self.view.rows.clear();
                 if !alias.is_empty() && !alias.contains(char::is_whitespace) {
-                    self.view.rows.push(Row::op(format!("Use alias “{alias}”"), "", GLYPH_TAG, Op::SaveAlias { key: key.clone() }));
+                    let row = if self.opens_with_keyword(key) {
+                        Row::op(format!("Use keyword “{alias}”"), format!("Type “{alias}” and a space to search it"), GLYPH_TAG, Op::SaveAlias { key: key.clone() })
+                    } else {
+                        Row::op(format!("Use alias “{alias}”"), "", GLYPH_TAG, Op::SaveAlias { key: key.clone() })
+                    };
+                    self.view.rows.push(row);
                 }
             }
             _ => self.view.filter_static(&query),
@@ -3718,6 +3855,7 @@ impl App {
                 source: RowSource::Emoji { at, pinned: pinned.iter().any(|glyph| glyph == entry.glyph) },
                 primary: Some(Op::EmojiPaste(at)),
                 keys: None,
+                accessory: None,
             }
         };
         let place_of = |glyph: &str| table.iter().position(|entry| entry.glyph == glyph).map(|at| at as u16);
@@ -3752,6 +3890,19 @@ impl App {
     }
 
     fn build_root_rows(&mut self, query: &str) {
+        // "f report": a keyword and a space opens the file search, or an extension's list.
+        if self.menu.is_none() {
+            if let Some((to, rest)) = self.keyword_jump(query) {
+                self.jump(to, rest);
+                return;
+            }
+        }
+        // The files found for the last query stay until the next ones arrive, so they don't flicker.
+        let files_at = self.root_files_start();
+        let kept_files = match self.view.rows.get(files_at) {
+            Some(row) if row.is_header() && row.title == "Files" => self.view.rows.split_off(files_at),
+            _ => Vec::new(),
+        };
         self.view.rows.clear();
         let q = query.trim();
         self.seq += 1;
@@ -3788,14 +3939,9 @@ impl App {
             return;
         }
 
-        // "weather", or "weather London".
-        if let Some(place) = orbit_core::weather::parse_query(q).filter(|_| self.settings.fetch_weather) {
-            let row = match (place.is_empty(), &self.settings.weather_place) {
-                (false, _) => Row::op(format!("Weather in {}", orbit_core::weather::capitalized(place)), "Looks it up with Open-Meteo", GLYPH_WEATHER, Op::Weather(place.to_string())),
-                (true, Some(known)) => Row::op(format!("Weather in {}", known.name), known.region.clone(), GLYPH_WEATHER, Op::Weather(String::new())),
-                (true, None) => Row::info("Weather", "Type a place after it, such as \u{201C}weather London\u{201D}", GLYPH_WEATHER),
-            };
-            let mut row = row;
+        // "weather London". The word alone finds the Weather command, which has the place from last time.
+        if let Some(place) = orbit_core::weather::parse_query(q).filter(|place| !place.is_empty() && self.settings.fetch_weather) {
+            let mut row = Row::op(format!("Weather in {}", orbit_core::weather::capitalized(place)), "Looks it up with Open-Meteo", GLYPH_WEATHER, Op::Weather(place.to_string()));
             row.kind = "Weather";
             row.accent = true;
             self.view.rows.push(row);
@@ -3905,6 +4051,12 @@ impl App {
         if searches_data {
             self.worker.search(self.seq, DataScope::Root, q.to_string(), 6);
         }
+        // A few files, under everything else, from Everything.
+        let everything = &self.settings.extensions.everything;
+        if everything.enabled && everything.in_search && q.chars().count() >= ext::ROOT_MIN_CHARS && crate::everything::window().is_some() {
+            self.search_files(crate::files::Place::Root, q);
+            self.view.rows.extend(kept_files);
+        }
     }
 
     fn push_web_row(&mut self, q: &str) {
@@ -3912,7 +4064,9 @@ impl App {
             let url = fill_url_template(&link.url, q);
             let mut row = Row::op(format!("{} for “{q}”", link.name), "", GLYPH_WEB, Op::OpenUrl(url));
             row.kind = "Web";
-            self.view.rows.push(row);
+            // Above any files, which always come last.
+            let at = self.root_files_start();
+            self.view.rows.insert(at, row);
             self.metrics.record_action("web-row", 0, 0);
         }
     }
@@ -3989,7 +4143,16 @@ impl App {
             Entry::Builtin(command) => (RowIcon::Glyph(glyph_for_builtin(*command)), "Command"),
             Entry::Link(i) => (self.catalog.link(*i).map_or(RowIcon::Glyph(GLYPH_LINK), |link| self.link_icon(&link.url)), "Link"),
             Entry::Custom(_) => (RowIcon::Glyph(GLYPH_COMMAND), "Script"),
-            Entry::Integration(tool) => (RowIcon::Glyph(tool.glyph()), "Integration"),
+            Entry::Integration(tool) => (RowIcon::Glyph(tool.glyph()), "Extension"),
+            Entry::Extension(i) => match self.catalog.extension_commands.get(*i) {
+                Some(command) => (self.extension_icon(&command.ext, command.icon.as_deref()), "Extension"),
+                None => (RowIcon::Glyph(GLYPH_EXTENSION), "Extension"),
+            },
+        };
+        // Weather says which place it opens on.
+        let known_place = match (&self.catalog.entries[item as usize], &self.settings.weather_place) {
+            (Entry::Builtin(Builtin::Weather), Some(place)) => Some(if place.region.is_empty() { place.name.clone() } else { format!("{}, {}", place.name, place.region) }),
+            _ => None,
         };
         let primary = match &self.catalog.entries[item as usize] {
             Entry::Integration(tool) => Op::OpenVault(*tool),
@@ -3997,11 +4160,12 @@ impl App {
         };
         Row {
             title: index.title(item).to_string(),
-            subtitle: if running { "Running".to_string() } else { index.subtitle(item).to_string() },
+            subtitle: if running { "Running".to_string() } else { known_place.unwrap_or_else(|| index.subtitle(item).to_string()) },
             kind,
             icon,
             accent: false,
             keys: self.catalog.hotkey_label(item).map(str::to_string),
+            accessory: None,
             primary: Some(primary),
             source: RowSource::Catalog { item, key },
         }
@@ -4107,15 +4271,27 @@ impl App {
                 }
                 Err(why) => self.report(&format!("Export failed: {why}")),
             },
+            Resp::HaulImported { row, links, left_out, result } => self.on_haul_imported(row, links, left_out, result),
             Resp::Imported(result) => match result {
                 Ok(summary) => {
-                    self.report(&summary);
+                    if crate::setup::is_open() {
+                        crate::setup::orbit_file_imported(&summary, true);
+                    } else {
+                        self.report(&summary);
+                    }
                     // Imported snippets may bring triggers the running hook hasn't heard of.
                     if self.triggers_needed() {
                         self.worker.send(Req::SnippetTriggers);
                     }
+                    crate::settings_win::snippets_changed();
                 }
-                Err(why) => self.report(&format!("Import failed: {why}")),
+                Err(why) => {
+                    if crate::setup::is_open() {
+                        crate::setup::orbit_file_imported(&format!("Couldn't import it: {why}."), false);
+                    } else {
+                        self.report(&format!("Import failed: {why}"));
+                    }
+                }
             },
             Resp::Counts { notes, snippets, clips, sqlite_bytes } => {
                 self.last_counts = Some((notes, snippets, clips, sqlite_bytes));
@@ -4156,7 +4332,7 @@ impl App {
                 let at = self.view.async_insert_at.min(self.view.rows.len());
                 self.view.rows.splice(at..at, converted);
                 if let Some(q) = self.web_row_waiting.take() {
-                    if self.view.rows.is_empty() {
+                    if self.root_files_start() == 0 {
                         self.push_web_row(&q);
                     }
                 }
@@ -4216,6 +4392,7 @@ impl App {
                         self.worker.send(Req::LoadFavicon { key, hash, size });
                     }
                 }
+                RowIcon::File(hash, _) => self.request_file_icon(hash, size),
                 RowIcon::Glyph(_) | RowIcon::Emoji(_) => {}
             }
         }
@@ -4268,7 +4445,7 @@ impl App {
             }),
             RowSource::Note { id, .. } => Some(Action::OpenNote { id: *id }),
             RowSource::Snippet { id } => Some(Action::InsertSnippet { id: *id }),
-            RowSource::Plain | RowSource::Header | RowSource::Clip { .. } | RowSource::Secret { .. } | RowSource::Emoji { .. } | RowSource::Answer { .. } | RowSource::SpeedTest { .. } | RowSource::Clock { .. } | RowSource::Colour(_) => None,
+            RowSource::Plain | RowSource::Header | RowSource::Clip { .. } | RowSource::Secret { .. } | RowSource::Emoji { .. } | RowSource::Answer { .. } | RowSource::SpeedTest { .. } | RowSource::Clock { .. } | RowSource::Colour(_) | RowSource::File { .. } | RowSource::Extension { .. } => None,
         }
     }
 
@@ -4370,7 +4547,10 @@ impl App {
             command("Orbit Help", GLYPH_HELP, Builtin::ShowHelp),
             command("Diagnostics", GLYPH_DIAGNOSTICS, Builtin::Diagnostics),
             suspended,
-            Row::info("Updates", "No update channel yet", GLYPH_REFRESH),
+            {
+                let (title, subtitle) = crate::update::menu_row();
+                Row::op(&title, &subtitle, crate::rows::GLYPH_UPDATE, Op::RunBuiltin(Builtin::CheckForUpdates))
+            },
             command("Restart Orbit", GLYPH_REFRESH, Builtin::RestartOrbit),
             command("Quit Orbit", GLYPH_POWER, Builtin::QuitOrbit),
         ];
@@ -4511,6 +4691,9 @@ impl App {
 
     fn execute(&mut self, op: Op) {
         match op {
+            op @ (Op::OpenFile(_) | Op::RevealFile(_) | Op::CopyPath(_) | Op::CopyFile(_) | Op::OpenFileWith(_) | Op::FileAsAdmin(_) | Op::TerminalHere(_) | Op::EverythingInstall | Op::EverythingStart | Op::EverythingRetry | Op::ExtAction { .. } | Op::OpenExtensionsSettings) => {
+                self.execute_ext(op);
+            }
             Op::Weather(name) => {
                 self.enter_scope(Scope::Weather, qpc());
                 self.weather_look_up(&name);
@@ -4609,11 +4792,6 @@ impl App {
                 }
             }
             Op::CopySecret { tool, id, field } => self.ask_tool_for_value(tool, id, field),
-            Op::OpenIntegrations => {
-                self.hide(false);
-                crate::settings_win::open_on_integrations(self.editor_context(), self.settings.clone(), self.dir.clone(), &self.catalog.apps);
-                self.tell_settings(None);
-            }
             Op::RunItem { item, key } => {
                 let Some(action) = self.catalog.entry_action(item, self.settings.launcher.focus_running_app) else { return };
                 self.worker.send(Req::RecordUsage(key));
@@ -4829,7 +5007,12 @@ impl App {
             Op::SaveAlias { key } => {
                 let alias = self.read_query().trim().to_string();
                 if !alias.is_empty() {
-                    self.settings.aliases.insert(key, alias);
+                    // A list's alias is its keyword, as on Settings' Search page.
+                    if self.opens_with_keyword(&key) {
+                        crate::settings_win::set_item_keyword(&mut self.settings, &key, &alias);
+                    } else {
+                        self.settings.aliases.insert(key, alias);
+                    }
                     self.save_and_rebuild_catalog();
                     crate::settings_win::aliases_changed(&self.settings);
                 }
@@ -5026,6 +5209,7 @@ impl App {
                 self.hide(true);
                 self.worker.send(Req::SnippetGet { id: *id, purpose: Purpose::Insert });
             }
+            Action::Extension { ext, command } => self.open_extension_command(ext, command),
         }
     }
 
@@ -5160,9 +5344,9 @@ impl App {
                     format!("Set up {}", tool.name()),
                     "Its command-line tool isn't installed. Settings can install it.",
                     tool.glyph(),
-                    Op::OpenIntegrations,
+                    Op::OpenExtensionsSettings,
                 )],
-                Failure::NeedsSignIn => vec![again, Row::op("Open Orbit's Integrations settings", "", GLYPH_KEY, Op::OpenIntegrations)],
+                Failure::NeedsSignIn => vec![again, Row::op(format!("Open {} in Settings", tool.name()), "Under Extensions", GLYPH_KEY, Op::OpenExtensionsSettings)],
                 _ => vec![again],
             };
         }
@@ -5181,6 +5365,7 @@ impl App {
                     icon: RowIcon::Glyph(tool.glyph()),
                     accent: false,
                     keys: None,
+                    accessory: None,
                     primary: Some(Op::CopySecret { tool, id: item.id.clone(), field }),
                     source: RowSource::Secret { tool, id: item.id.clone(), url: item.url.clone() },
                 }
@@ -5356,6 +5541,11 @@ impl App {
 
     fn perform_builtin(&mut self, command: Builtin) {
         let t0 = qpc();
+        // A hotkey can outlast its extension being turned off.
+        if let Some(ext) = orbit_core::builtin_ext::BuiltinExt::of_builtin(command).filter(|ext| !ext.is_on(&self.settings)) {
+            self.report(&format!("{} is turned off. Turn it on in Settings, under Extensions.", ext.name()));
+            return;
+        }
         match command {
             Builtin::ToggleLauncher => self.toggle(Scope::Root, "command", t0),
             Builtin::NewNote => {
@@ -5366,7 +5556,14 @@ impl App {
             Builtin::ClipboardHistory => self.enter_scope(Scope::Clipboard, t0),
             Builtin::SnippetSearch => self.enter_scope(Scope::Snippets, t0),
             Builtin::SearchQuicklinks => self.enter_scope(Scope::Links, t0),
+            Builtin::SearchFiles => self.enter_scope(Scope::Files, t0),
+            Builtin::ManageExtensions => self.execute_ext(Op::OpenExtensionsSettings),
+            Builtin::ImportData => self.open_import(),
             Builtin::EmojiPicker => self.enter_scope(Scope::Emoji, t0),
+            Builtin::Weather => {
+                self.enter_scope(Scope::Weather, t0);
+                self.weather_look_up("");
+            }
             Builtin::SpeedTest => {
                 self.enter_scope(Scope::SpeedTest, t0);
                 // Opening it starts a test, once Ookla's terms have been accepted.
@@ -5466,6 +5663,16 @@ impl App {
                 self.worker.send(Req::Export { settings_json: self.settings.to_json() });
             }
             Builtin::RestartOrbit => self.restart(),
+            Builtin::CheckForUpdates => {
+                use crate::update::{Ask, Phase};
+                // Installing closes Orbit, and the release page opens in the browser.
+                if matches!(crate::update::phase(), Phase::Ready(_) | Phase::Available(_)) {
+                    self.hide(false);
+                }
+                if let Some(line) = crate::update::press(Ask::FromLauncher) {
+                    self.report(&line);
+                }
+            }
             Builtin::QuitOrbit => self.begin_exit(),
             Builtin::LockScreen => {
                 self.hide(false);
@@ -5543,6 +5750,7 @@ impl App {
             }
             MenuChoice::ToggleSuspend => self.set_suspended(!self.suspended),
             MenuChoice::Quit => self.begin_exit(),
+            MenuChoice::Update => self.perform_builtin(Builtin::CheckForUpdates),
         }
     }
 
@@ -5720,7 +5928,8 @@ impl App {
     }
 
     pub fn apply_clipboard_listener(&mut self) {
-        let want = self.settings.clipboard.enabled && !self.clip_paused;
+        // A preview only draws, so it never keeps what's copied while it runs.
+        let want = self.settings.clipboard.enabled && !self.clip_paused && !self.previewing;
         if want == self.clip_listening {
             return;
         }
@@ -5815,6 +6024,7 @@ impl App {
         self.catalog.rebuild(&self.settings);
         self.register_hotkeys();
         self.announce_hotkey_problems();
+        self.stop_disabled_extensions();
         // Mappings alone don't replace the hook, because a key may be held right now.
         let without_bindings = |hyper: &orbit_core::settings::HyperSettings| orbit_core::settings::HyperSettings { bindings: Vec::new(), ..hyper.clone() };
         let hook_inputs_changed = without_bindings(&old.hyper) != without_bindings(&self.settings.hyper)
@@ -5870,21 +6080,21 @@ impl App {
     fn import_settings(&mut self, path: &std::path::Path) {
         const MAX_SETTINGS_BYTES: u64 = 4 * 1024 * 1024;
         if std::fs::metadata(path).map_or(true, |meta| meta.len() > MAX_SETTINGS_BYTES) {
-            self.report("That settings file is too large.");
+            self.orbit_file_report("That settings file is too large.", false);
             return;
         }
         let Ok(text) = std::fs::read_to_string(path) else {
-            self.report("Couldn't read that settings file.");
+            self.orbit_file_report("Couldn't read that settings file.", false);
             return;
         };
         let (settings, outcome) = Settings::parse(&text);
         if !matches!(outcome, orbit_core::settings::LoadOutcome::Loaded) {
-            self.report("That file isn't a settings file Orbit can read, so nothing changed.");
+            self.orbit_file_report("That file isn't a settings file Orbit can read, so nothing changed.", false);
             return;
         }
         self.apply_settings(settings);
         self.reopen_settings();
-        self.report("Settings imported.");
+        self.orbit_file_report("Settings imported. Orbit now has the settings from that file.", true);
     }
 
     /// Removes what Orbit stored, by name, then quits. It never empties the folder as a whole, since
@@ -6028,6 +6238,7 @@ impl App {
         }
         self.exiting = true;
         self.speedtest.stop();
+        self.runners.stop_all();
         self.hide(false);
         self.clear_secret_now();
         crate::editor::close_all();
@@ -6073,6 +6284,7 @@ fn data_row(row: DataRow, now: i64) -> Row {
                 icon: RowIcon::Glyph(GLYPH_NOTE),
                 accent: note.pinned,
                 keys: None,
+                accessory: None,
                 primary: Some(Op::NoteOpen(note.id)),
                 source: RowSource::Note { id: note.id, pinned: note.pinned },
             }
@@ -6086,6 +6298,7 @@ fn data_row(row: DataRow, now: i64) -> Row {
                 icon: RowIcon::Glyph(GLYPH_SNIPPET),
                 accent: false,
                 keys: None,
+                accessory: None,
                 primary: Some(Op::SnippetInsert(id)),
                 source: RowSource::Snippet { id },
             }
@@ -6110,6 +6323,7 @@ fn data_row(row: DataRow, now: i64) -> Row {
                 },
                 accent: clip.pinned,
                 keys: None,
+                accessory: None,
                 primary: Some(Op::ClipPaste(clip.id)),
                 source: RowSource::Clip { id: clip.id, kind: clip.kind, pinned: clip.pinned, formatted: clip.formatted },
             }

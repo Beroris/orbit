@@ -73,7 +73,7 @@ Example (shape taken from the serde attributes in `action.rs` and `settings.rs`)
 
 Things that do not travel well between machines: `focus_or_launch_app` ids come from the local app index; `open_path` and `custom_commands` hold local paths; `open_note` and `insert_snippet` hold database ids, which are not preserved by export and import; exclusion lists hold Windows executable names.
 
-Moving settings to another Windows PC: copy the exported `settings.json`, then use Settings → Data → "Import a file…" on the other PC, or copy the file into its data folder while Orbit is quit.
+Moving settings to another Windows PC: copy the exported `settings.json`, then use Settings → Data → Import → "Choose file…" on the other PC, or copy the file into its data folder while Orbit is quit.
 
 ## Export
 
@@ -120,7 +120,50 @@ The file content is the note body, unchanged. The name is a five-digit counter a
 
 ## Import
 
-Settings → Data → "Import a file…" opens a file picker (filter `*.json`). Orbit imports `orbit-export.json` bundles, which add notes and snippets, and a file named `settings.json`, which replaces your settings. It does not import Markdown files, a ZIP, or any other format.
+Settings → Data → Import, or the launcher command "Import from Another Launcher", opens the Import page of Orbit Setup. The same page is the first step after installing. It lists the other launchers Orbit finds on this PC, each with what it would bring, and has a "Choose file…" row for an export.
+
+Nothing is changed in the other launcher. Its files are only read: JSON and INI files as text, and Wox 2's database read-only, so Wox can stay open. Nothing read is run or opened. Orbit only adds to what it has, except when the chosen file is Orbit's own `settings.json` (below).
+
+### What each launcher brings
+
+| Launcher | Where Orbit looks | What comes over |
+|---|---|---|
+| Raycast (Windows or Mac) | Only an export, as Raycast keeps its own data encrypted. Orbit offers the newest `.rayconfig` in Downloads, Documents or on the desktop, or one you choose. | Quicklinks with their aliases and the app they open with, snippets with their keywords, notes, the launcher hotkey |
+| Flow Launcher | `%APPDATA%\FlowLauncher\Settings`, or `UserData\Settings` beside a portable copy | Web searches, Explorer's quick-access folders, the hotkey |
+| Wox 2 | `%USERPROFILE%\.wox\wox-user\wox.db`, or the folder named in `.wox\.userdata.location` | Web searches, the hotkey |
+| Wox 1 | `%APPDATA%\Wox\Settings` | Web searches, the hotkey |
+| PowerToys Run | `%LOCALAPPDATA%\Microsoft\PowerToys\PowerToys Run\settings.json` | The hotkey |
+| Command Palette | `%LOCALAPPDATA%\Packages\Microsoft.CommandPalette_8wekyb3d8bbwe\LocalState` | Bookmarks, the hotkey |
+| Keypirinha | `%APPDATA%\Keypirinha\User` (`Keypirinha.ini`, `WebSearch.ini`) | Web searches, the hotkey |
+
+A launcher's hotkey isn't taken over by itself. The Shortcut page after Import offers it, and says if that launcher is running and still holds it.
+
+What Orbit has no place for is named on the page and left behind: for example extensions from Raycast's store, aliases and hotkeys on Raycast's own commands, and Flow Launcher's query shortcuts and plugin hotkeys.
+
+### Raycast's exports
+
+"Choose file…" reads:
+
+- Settings & Data exports (`.rayconfig`) from Raycast 2 for Windows and Mac, and from Raycast for Mac before it. Raycast 2 encrypts them with a passphrase you choose (scrypt and AES-256-GCM), so the page asks for it. Older Mac exports use AES-256-CBC with a password that is `12345678` unless it was changed; Orbit tries that first and asks only if it fails. Early Raycast 2 builds wrapped the export in gzip, which is read too.
+- The JSON files from Raycast's Export Snippets and Export Quicklinks.
+
+The passphrase is used once to open the file and is not kept. A wrong one says so and lets you try again.
+
+Placeholders become Orbit's where Orbit has the same one: `{query}` and `{argument name="city" default="London"}` (as `{city=London}`) in quicklinks, and `{clipboard}`, `{date}`, `{time}`, `{datetime}` and `{cursor}` in snippets. Others, such as `{selection}`, stay as typed, and the page says how many snippets have them.
+
+### Other launchers' files
+
+"Choose file…" also takes Flow Launcher's `Settings.json` and its Web Searches and Explorer plugin settings, and Command Palette's `bookmarks.json`, for example copied from another PC.
+
+### How things are added
+
+- Quicklinks go into `settings.json`. One with the same address as a link Orbit has (ignoring case) is skipped. One whose alias Orbit already uses comes over without the alias. One Orbit can't open on Windows, such as a Mac's `~/Downloads`, is skipped. A link that opened with a particular app opens with that app if Orbit finds one by the same name.
+- Snippets and notes go through the same import as an Orbit export (below), in one transaction. Snippets are put in a category named after the launcher. A keyword another snippet already uses is dropped, and the snippet kept.
+- The page then says what came over, what was already there, and what was left behind.
+
+### Orbit's own files
+
+"Choose file…" takes `orbit-export.json` bundles, which add notes and snippets, and a file named `settings.json` with Orbit's settings in it, which replaces your settings. It does not import Markdown files or a ZIP.
 
 A `settings.json` must be under 4 MB and must load cleanly. Otherwise nothing changes and Orbit says so. Bundles follow these rules:
 
@@ -134,7 +177,7 @@ Rules (`Store::import_bundle`, `worker::import`):
 - Text is stored as plain data. Nothing in a bundle is executed, opened or used as a file path.
 - The result message gives counts of added and skipped records.
 
-Not done on import:
+Not done on import of an Orbit bundle:
 
 - Snippet triggers are not validated. A trigger that is too short or contains whitespace is stored but ignored by the matcher. A trigger already used by another snippet is stored; the older snippet wins.
 - Expansion triggers do refresh after an import, so imported triggers work at once.

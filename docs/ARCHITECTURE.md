@@ -35,6 +35,9 @@ Build settings that affect the architecture (`Cargo.toml`, `.cargo/config.toml`)
 | Settings schema, defaults, load outcome | `orbit-core/src/settings.rs` |
 | Text tables for bindings (Settings' "Edit as text" view); link and command parsers no window uses now | `orbit-core/src/bindings_text.rs` |
 | Snippet placeholders and the trigger matcher | `orbit-core/src/snippet.rs` |
+| Reading other launchers' settings and Raycast's exports, for Import, and merging quicklinks | `orbit-core/src/import.rs` |
+| Extension manifests and the messages to and from extensions | `orbit-core/src/extension.rs` |
+| The extensions that come with Orbit, their switches and keywords; reading GitHub's and Claude's and Codex's answers | `orbit-core/src/builtin_ext.rs`, `github.rs`, `ai_usage.rs` |
 | Notes, snippets, clipboard rows, usage, FTS5 search, export and import | `orbit-data/src/*.rs` |
 
 The host does everything else: windows, drawing, hotkey registration, the keyboard hook, clipboard access, text injection, launching, file watching, the app indexer, tray, autostart.
@@ -75,9 +78,15 @@ One resident process, `orbit.exe`. A second launch with the same data directory 
 | `orbit-insert` | Per text insertion | Default | Waits for the target window to be foreground, then types or pastes the text. Posts the outcome back. |
 | `orbit-clip` | Per clipboard change | Default | Reads the clipboard after `WM_CLIPBOARDUPDATE`, applies the capture rules, sends the result to the data thread. |
 | `orbit-index-wait` | While an index run is active | Default | Waits for the indexer child process and posts `WM_ORBIT_INDEX_DONE`. |
+| `orbit-files` | From the first file search or file icon | Default | Owns a message-only window, because Everything answers a query with `WM_COPYDATA` to a window. Asks Everything (`everything.rs`), skipping searches overtaken while they waited, and loads file icons and extensions' pictures. Posts `WM_ORBIT_FILES` with the answer. |
+| Extension programs, with `orbit-ext-in-<id>`, `orbit-ext-out-<id>` and `orbit-ext-err-<id>` | From the first use of an extension's command until a few minutes after the launcher was last used | Default | Each program is a child process in a job object that ends it with Orbit. One thread writes its input, one reads its output a line at a time and posts each message to the UI thread, one keeps the end of its error output (`extensions.rs`). |
+| `orbit-github`, `orbit-ai-usage`, `orbit-github-read`, `orbit-github-install`, `orbit-github-sign-in` | While a GitHub or AI Usage list is fetched, a notification marked as read, or `gh` installed or signed in from Settings | Default | GitHub's run `gh` with no window; AI Usage asks Anthropic and OpenAI with WinHTTP. Each posts the answer to the UI thread as an extension's message (`providers.rs`). Answers are kept for a minute. |
+| `orbit-setup-install`, `orbit-setup-uninstall`, `orbit-setup-read` | While Orbit Setup installs, removes, or reads a chosen file | Default | Do the work of the Setup window (`setup.rs`, `install.rs`, `importer.rs`) and post where they've got to back to it. |
+| `orbit-update` | While Orbit looks for a new version, once a day or when asked, and downloads it | Default | Asks GitHub for Orbit's latest release, downloads a newer one and checks its SHA-256 (`update.rs`), and posts what it found. |
+| `orbit-everything-install` | While Everything is installed from Settings or Setup | Default | Runs Windows Package Manager and posts the outcome. |
 | **Indexer child process** | While indexing | Idle priority class, EcoQoS | `orbit --index-apps --data-dir <dir>`. Short-lived. Enumerates apps, writes `apps.json` and `icons/*.bgra` atomically, exits with a status code. Started at launch if `apps.json` is missing or older than a day, when the Start Menu watcher reports changes, and on "Rebuild App Index". Only one runs at a time; a request during a run is remembered and run afterwards (`index_dirty`). |
 
-Other files in the host: `launch.rs` finds running windows and force-foregrounds; `catalog.rs` builds the search index from apps, built-ins, links, custom commands, aliases and usage; `editor.rs`, `link_form.rs` and `settings_win.rs` are the note, snippet, quicklink, command and settings windows (created on the UI thread), built from the controls in `forms.rs`; `ui.rs`, `gfx.rs`, `text.rs`, `view.rs`, `rows.rs`, `grid.rs` draw into a CPU back buffer, with the launcher's text from DirectWrite.
+Other files in the host: `launch.rs` finds running windows and force-foregrounds; `catalog.rs` builds the search index from apps, built-ins, links, custom commands, aliases and usage; `editor.rs`, `link_form.rs` and `settings_win.rs` are the note, snippet, quicklink, command and settings windows (created on the UI thread), built from the controls in `forms.rs`; `ui.rs`, `gfx.rs`, `text.rs`, `view.rs`, `rows.rs`, `grid.rs` draw into a CPU back buffer, with the launcher's text from DirectWrite. `setup.rs` is Orbit Setup's window: install, the welcome, Import and uninstall. `install.rs` does the installing and removing, `importer.rs` finds other launchers and reads their files, `extensions.rs` finds extensions and runs their programs, `providers.rs` answers for GitHub and AI Usage, `files.rs` and `everything.rs` are file search, `update.rs` finds, downloads and installs new versions, and `displays.rs` knows the screens.
 
 The launcher is two windows. The main one is layered and presented with `UpdateLayeredWindow`, so it can have antialiased corners and a soft shadow: panel plus a shadow margin on every side, with mouse positions converted back to the panel. Below it sits a click-through "plate" window that holds the acrylic blur, clipped to a rounded region and moved with the main window. With glass off, or where Windows can't blur, the plate isn't used and the panel is opaque.
 
@@ -137,7 +146,7 @@ Bounded by design, not by reclaim: `orbit-data` sets a small SQLite page cache p
 
 Order, from `main.rs` and `app::startup`:
 
-1. Parse arguments. `--index-apps` runs the indexer and exits without creating a window.
+1. Parse arguments. `--index-apps` runs the indexer and exits without creating a window. An exe whose name has "setup" in it, or `--setup`, runs Orbit Setup's install; `--uninstall` runs its uninstall. Both happen before the single-instance check, and with `--silent` or `/VERYSILENT` they show no window.
 2. Single-instance check. A second instance toggles the first and exits.
 3. Create the data directory, install the panic hook and the unhandled-exception filter. Both release any virtual modifiers. The panic hook appends the thread name and `file:line` to `crash.log`, never the panic message.
 4. Load `settings.json` (damaged file moved to `settings.damaged.json`, newer-schema file loaded read-only) and `apps.json`.
@@ -147,13 +156,13 @@ Order, from `main.rs` and `app::startup`:
 8. Add the tray icon, register hotkeys, start the keyboard hook if a feature needs it, start the clipboard listener if history is on.
 9. Register for session notifications, start the Start Menu watcher, ask the data thread for usage counts.
 10. Start the indexer child if `apps.json` is missing, or stale and `--no-reindex` was not given.
-11. On the first run, show a "Welcome to Orbit" notification and save `onboarded = true`.
+11. On the first run, open Orbit Setup's window at Welcome; `onboarded` is saved when it's finished or closed. After Setup has installed Orbit, it starts the installed exe with `--setup-continue x,y`, which opens the same window there at Import. `--show` opens the launcher once Orbit is up.
 
 Clean exit (`begin_exit`): close editors, drop the hook (which resets the state machine and releases virtual modifiers), unregister hotkeys, remove the clipboard listener, remove the tray icon, flush the bench log if any, then send `Shutdown` to the data thread, which runs `PRAGMA optimize` and `wal_checkpoint(TRUNCATE)` on the main database. A timer forces exit if anything stalls. `WM_ENDSESSION` also takes this path, and then blocks the UI thread for a bounded time until the data thread reports it has finished its last write (`worker::wait_for_finish`), because Windows may end the process as soon as the handler returns.
 
-Command-line options (`main.rs`): `--data-dir`, `--index-apps`, `--refresh-icons`, `--bench-log`, `--hotkey`, `--trim-ms`, `--no-trim`, `--no-reindex`, `--wait-pid`, `--accept-injected-input`. `--bench-log`, `--accept-injected-input` and the benchmark harness exist for measurement and testing; see [PERFORMANCE_BUDGET.md](PERFORMANCE_BUDGET.md).
+Command-line options (`main.rs`): `--setup`, `--uninstall`, `--silent` (and `/S`, `/SILENT`, `/VERYSILENT`), `--setup-continue`, `--show`, `--quit`, `--data-dir`, `--index-apps`, `--refresh-icons`, `--bench-log`, `--hotkey`, `--trim-ms`, `--no-trim`, `--no-reindex`, `--wait-pid`, `--accept-injected-input`. `--bench-log`, `--accept-injected-input` and the benchmark harness exist for measurement and testing; see [PERFORMANCE_BUDGET.md](PERFORMANCE_BUDGET.md).
 
-For checking how Settings and the forms look, `orbit --data-dir <folder> --preview-settings <page, link-form, command-form or snippet-form> <out.png>` opens one off-screen in a window that can't take focus, saves a picture and exits, before the single-instance check and before any hook is installed. It needs `--data-dir`, and adds `--preview-theme dark|light`, `--preview-scroll <pixels>`, `--preview-empty` and `--preview-arm-delete`. Details are in `settings_preview.rs`.
+For checking how Settings and the forms look, `orbit --data-dir <folder> --preview-settings <page, link-form, command-form or snippet-form> <out.png>` opens one off-screen in a window that can't take focus, saves a picture and exits, before the single-instance check and before any hook is installed. `--preview-settings setup-<page>` does the same for a page of Orbit Setup, such as `setup-welcome-install` or `setup-import`, with stand-in launchers. It needs `--data-dir`, and adds `--preview-theme dark|light`, `--preview-scroll <pixels>`, `--preview-empty` and `--preview-arm-delete`. Details are in `settings_preview.rs`.
 
 ## Data layout
 
@@ -170,6 +179,8 @@ Default data directory: `%LOCALAPPDATA%\Orbit` (falls back to `%USERPROFILE%\App
 | `exchange-rates.xml` | exchange-rate thread, UI thread | The European Central Bank's daily reference rates, for currency conversion. Fetched when a conversion is typed and the copy is over 12 hours old. See PRIVACY.md. |
 | `apps.json` | indexer child | Installed-app list. A cache; rebuilt if missing. |
 | `icons/<hash>.bgra` | indexer child | App icons. A cache. |
+| `extensions/<id>/` | UI thread | Extensions added from Settings, each a copy of its folder. See [EXTENSIONS.md](EXTENSIONS.md). |
+| `extension-data/<id>/` | the extension itself | Wherever an extension keeps its own things, given to it as `ORBIT_EXTENSION_DATA`. |
 | `crash.log` | panic hook | Thread name and source location of panics. |
 | `*.tmp` | atomic writers | Transient; a write goes to a `.tmp` file and is renamed. |
 

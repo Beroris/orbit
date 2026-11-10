@@ -61,6 +61,19 @@ fn star() -> Vec<P> {
     (0..10).map(|k| at((12.0, 12.6), if k % 2 == 0 { 9.5 } else { 4.2 }, -90.0 + k as f32 * 36.0)).collect()
 }
 
+/// A four-pointed star with curved sides, as AI is often drawn.
+fn sparkle(center: P, radius: f32) -> Vec<P> {
+    let tips = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)].map(|(x, y)| (center.0 + x * radius, center.1 + y * radius));
+    let mut points = vec![tips[0]];
+    for k in 0..4 {
+        let (a, b) = (tips[k], tips[(k + 1) % 4]);
+        let pull = (center.0 + (a.0 + b.0 - 2.0 * center.0) * 0.14, center.1 + (a.1 + b.1 - 2.0 * center.1) * 0.14);
+        curve(a, pull, b, &mut points);
+    }
+    points.pop();
+    points
+}
+
 fn brace(mirror: bool) -> Shape {
     let x = |value: f32| if mirror { 24.0 - value } else { value };
     let mut points = vec![(x(9.5), 3.5)];
@@ -321,6 +334,14 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             closed(&[(12.0, 8.0), (15.5, 4.5), (19.5, 8.5), (16.0, 12.0)]),
             Dot((4.0, 20.0), 1.4),
         ],
+        // Branch, for GitHub
+        '\u{F110}' => {
+            let mut joint = vec![(17.0, 9.0)];
+            curve((17.0, 9.0), (17.0, 14.0), (7.0, 15.0), &mut joint);
+            vec![Ring((7.0, 5.5), 2.5), Ring((7.0, 18.5), 2.5), Ring((17.0, 6.5), 2.5), line((7.0, 8.0), (7.0, 16.0)), Path(joint, false)]
+        }
+        // Sparkle, for AI Usage
+        '\u{F111}' => vec![Path(sparkle((10.5, 13.0), 8.5), true), Fill(sparkle((18.5, 5.5), 3.5))],
         _ => return None,
     })
 }
@@ -453,7 +474,7 @@ mod tests {
             GLYPH_SEARCH, GLYPH_NOTE, GLYPH_SNIPPET, GLYPH_CLIPBOARD, GLYPH_CALC, GLYPH_CURRENCY, GLYPH_WEATHER, GLYPH_SPEED, GLYPH_LINK, GLYPH_WEB,
             GLYPH_COPY, GLYPH_PIN, GLYPH_DELETE, GLYPH_EDIT, GLYPH_FOLDER, GLYPH_HIDE, GLYPH_SHIELD, GLYPH_TAG, GLYPH_PLAY, GLYPH_ADD, GLYPH_INFO,
             GLYPH_WARNING, GLYPH_BACK, GLYPH_CHECK, GLYPH_IMAGE, GLYPH_COMMAND, GLYPH_KEYBOARD, GLYPH_STAR, GLYPH_STAR_FILLED, GLYPH_UP, GLYPH_DOWN,
-            GLYPH_KEY, GLYPH_REFRESH, GLYPH_EMOJI, GLYPH_SETTINGS, GLYPH_POWER, GLYPH_DIAGNOSTICS, GLYPH_HELP,
+            GLYPH_KEY, GLYPH_REFRESH, GLYPH_EMOJI, GLYPH_SETTINGS, GLYPH_POWER, GLYPH_DIAGNOSTICS, GLYPH_HELP, GLYPH_GITHUB, GLYPH_AI,
         ] {
             assert!(has(glyph), "{:X}", glyph as u32);
         }

@@ -368,6 +368,9 @@ pub struct Style {
     rail: Option<(HWND, crate::gfx::Rgb, HBRUSH)>,
     /// Coloured squares with a symbol, beside a page's title.
     badges: Vec<Badge>,
+    /// A row outlined for a moment, because a search just went to it: the window it's on, and
+    /// where, in that window's coordinates.
+    pub flash: Option<(HWND, RECT)>,
 }
 
 /// A page's coloured square, painted by the window behind it while `anchor` shows.
@@ -438,8 +441,20 @@ impl Style {
                 switch_notes: Vec::new(),
                 rail: None,
                 badges: Vec::new(),
+                flash: None,
             }
         }
+    }
+
+    /// The row of a showing card on `parent` that `y` is in: from the line above it, or the
+    /// card's top, to the line below it, or the card's bottom.
+    pub fn row_around(&self, parent: HWND, y: i32) -> Option<RECT> {
+        let card = self.cards.iter().find(|card| {
+            card.parent == parent && card.rect.top <= y && y < card.rect.bottom && unsafe { IsWindowVisible(card.anchor) }.as_bool()
+        })?;
+        let top = card.lines.iter().copied().filter(|line| *line <= y).max().unwrap_or(card.rect.top);
+        let bottom = card.lines.iter().copied().filter(|line| *line > y).min().unwrap_or(card.rect.bottom);
+        Some(RECT { left: card.rect.left, top, right: card.rect.right, bottom })
     }
 
     /// Controls on this window sit on a rail of this colour, rather than the page's.
@@ -479,6 +494,12 @@ impl Style {
     /// Something on a page got `delta` taller at `y`: the card around it grows, and what's below
     /// moves down. `page` is that page's controls, because pages share a window and coordinates.
     pub fn shift_cards(&mut self, page: &[HWND], y: i32, delta: i32) {
+        for badge in &mut self.badges {
+            if page.contains(&badge.anchor) && badge.rect.top >= y {
+                badge.rect.top += delta;
+                badge.rect.bottom += delta;
+            }
+        }
         for card in &mut self.cards {
             if !page.contains(&card.anchor) {
                 continue;
@@ -573,6 +594,15 @@ impl Style {
                     for line in &card.lines {
                         buffer.fill_rect(card.rect.left + pad, *line, width - pad * 2, inset, self.theme.divider);
                     }
+                }
+                // In the space between a row's edge and its controls, so they don't cover it.
+                if let Some((parent, rect)) = self.flash
+                    && parent == hwnd
+                {
+                    let (inset, thickness) = (self.px(2), self.px(2).max(2));
+                    let (width, height) = (rect.right - rect.left - inset * 2, rect.bottom - rect.top - inset * 2);
+                    let color = if self.theme.high_contrast { self.theme.text } else { self.theme.accent };
+                    buffer.stroke_round_rect_alpha(rect.left + inset, rect.top + inset, width, height, self.px(RADIUS_CARD - 3) as f32, thickness as f32, color, 255);
                 }
                 for badge in &self.badges {
                     if badge.parent != hwnd || !IsWindowVisible(badge.anchor).as_bool() {
@@ -830,6 +860,19 @@ struct OpenCard {
     lines: Vec<i32>,
 }
 
+/// A row a form's search can find: its name, what's said under it, and where it is.
+#[derive(Clone, Debug, Default)]
+pub struct Findable {
+    pub title: String,
+    pub note: String,
+    /// The heading it's under, if any.
+    pub heading: String,
+    /// Other words that find it, such as a drop-down's choices or a button's name.
+    pub words: String,
+    /// What to scroll to: the row's name or its control.
+    pub anchor: HWND,
+}
+
 pub struct Builder<'a> {
     pub parent: HWND,
     pub style: &'a mut Style,
@@ -838,6 +881,12 @@ pub struct Builder<'a> {
     pub width: i32,
     /// Every control created since the last `take_controls`.
     pub created: Vec<HWND>,
+    /// Every row with a name since the last `take_found`.
+    found: Vec<Findable>,
+    /// The heading rows are under now.
+    found_heading: String,
+    /// The row a note straight after it belongs to.
+    note_for: Option<usize>,
     open_card: Option<OpenCard>,
     /// Space left after the last row, which a card's edge or line replaces with its own.
     trailing: i32,
@@ -857,7 +906,36 @@ const SWITCH_PAD_DIP: i32 = 10;
 
 impl<'a> Builder<'a> {
     pub fn new(parent: HWND, style: &'a mut Style, x: i32, y: i32, width: i32) -> Builder<'a> {
-        Builder { parent, style, x, y, width, created: Vec::new(), open_card: None, trailing: 0, switch_end: -1, last_label: HWND::default(), last_row: None, last_switch: None }
+        Builder {
+            parent,
+            style,
+            x,
+            y,
+            width,
+            created: Vec::new(),
+            found: Vec::new(),
+            found_heading: String::new(),
+            note_for: None,
+            open_card: None,
+            trailing: 0,
+            switch_end: -1,
+            last_label: HWND::default(),
+            last_row: None,
+            last_switch: None,
+        }
+    }
+
+    /// Remembers a row for searching. A note right after it is what's said under it.
+    fn findable(&mut self, title: &str, anchor: HWND, words: &str) {
+        self.note_for = Some(self.found.len());
+        self.found.push(Findable { title: title.to_string(), note: String::new(), heading: self.found_heading.clone(), words: words.to_string(), anchor });
+    }
+
+    /// The rows made since the last call, in order, for a search to find.
+    pub fn take_found(&mut self) -> Vec<Findable> {
+        self.note_for = None;
+        self.found_heading.clear();
+        std::mem::take(&mut self.found)
     }
 
     fn advance(&mut self, dip: i32) {
@@ -870,6 +948,7 @@ impl<'a> Builder<'a> {
     /// it shows.
     pub fn begin_card(&mut self) {
         let pad = self.px(CARD_PAD_DIP);
+        self.note_for = None;
         self.open_card = Some(OpenCard { top: self.y, first_control: self.created.len(), lines: Vec::new() });
         self.x += pad;
         self.width -= pad * 2;
@@ -879,6 +958,7 @@ impl<'a> Builder<'a> {
 
     /// A thin line between two rows of a card.
     pub fn line(&mut self) {
+        self.note_for = None;
         self.y += self.px(6) - self.trailing;
         let y = self.y;
         if let Some(card) = &mut self.open_card {
@@ -889,6 +969,7 @@ impl<'a> Builder<'a> {
     }
 
     pub fn end_card(&mut self) {
+        self.note_for = None;
         let Some(card) = self.open_card.take() else { return };
         let pad = self.px(CARD_PAD_DIP);
         self.y += self.px(8) - self.trailing;
@@ -999,6 +1080,8 @@ impl<'a> Builder<'a> {
         self.style.badges.push(Badge { rect: RECT { left: self.x, top: self.y + (height - size) / 2, right: self.x + size, bottom: self.y + (height - size) / 2 + size }, anchor: name, parent: self.parent, color, glyph });
         self.y += height;
         self.advance(18);
+        self.found_heading.clear();
+        self.note_for = None;
         (name, line)
     }
 
@@ -1008,6 +1091,8 @@ impl<'a> Builder<'a> {
         let font = self.style.bold;
         let hwnd = self.static_text(text, font, 0);
         self.advance(8);
+        self.found_heading = text.to_string();
+        self.note_for = None;
         hwnd
     }
 
@@ -1016,6 +1101,7 @@ impl<'a> Builder<'a> {
         let font = self.style.font;
         let hwnd = self.static_text(text, font, 0);
         self.advance(6);
+        self.findable(text, hwnd, "");
         hwnd
     }
 
@@ -1023,6 +1109,9 @@ impl<'a> Builder<'a> {
     /// drawn by the switch, under its name, and that switch is what's given back. Right after a
     /// drop-down, it goes under the drop-down's name.
     pub fn note(&mut self, text: &str) -> HWND {
+        if let Some(row) = self.note_for.take().and_then(|at| self.found.get_mut(at)) {
+            row.note = text.to_string();
+        }
         if self.y == self.switch_end {
             if let Some((switch, top)) = self.last_switch.take() {
                 return self.note_on_switch(switch, top, text);
@@ -1123,6 +1212,7 @@ impl<'a> Builder<'a> {
     pub fn labelled_row(&mut self, label: &str, width_dip: i32, height_dip: i32) -> (i32, i32, i32, i32) {
         let (width, height) = (self.control_width(width_dip), self.px(height_dip));
         self.row_label(label, self.width - width - self.px(12), height);
+        self.findable(label, self.last_label, "");
         let rect = (self.x + self.width - width, self.y, width, height);
         self.y += height;
         self.advance(8);
@@ -1142,11 +1232,15 @@ impl<'a> Builder<'a> {
         self.y += self.px(4);
         let top = self.y + (height - title_height - text_height) / 2;
         let style = WINDOW_STYLE(SS_NOPREFIX.0);
-        self.create(w!("STATIC"), title, style, (self.x, top, text_width, title_height), 0, font);
+        let name = self.create(w!("STATIC"), title, style, (self.x, top, text_width, title_height), 0, font);
         let note = self.create(w!("STATIC"), text, style, (self.x, top + title_height, text_width, text_height), ID_NOTE, small);
         let hwnd = self.button_at(label, id, self.x + self.width - button, self.y + (height - button_height) / 2, button, kind);
         self.y += height;
         self.advance(14);
+        self.findable(title, name, label.trim_end_matches('\u{2026}'));
+        if let Some(row) = self.note_for.take().and_then(|at| self.found.get_mut(at)) {
+            row.note = text.to_string();
+        }
         (note, hwnd)
     }
 
@@ -1218,6 +1312,7 @@ impl<'a> Builder<'a> {
         let hwnd = self.line_edit(text, self.x + self.width - width + pad, self.y + self.px(4), width - pad * 2, id);
         self.y += row;
         self.advance(8);
+        self.findable(label, hwnd, "");
         hwnd
     }
 
@@ -1252,6 +1347,7 @@ impl<'a> Builder<'a> {
         self.y += height;
         self.advance(2);
         self.switch_end = self.y;
+        self.findable(text, hwnd, "");
         hwnd
     }
 
@@ -1293,6 +1389,7 @@ impl<'a> Builder<'a> {
         self.y += row;
         self.advance(8);
         self.last_row = Some((self.last_label, hwnd, top, self.y));
+        self.findable(label, hwnd, &items.join(" "));
         hwnd
     }
 
@@ -1344,6 +1441,7 @@ impl<'a> Builder<'a> {
         self.y += row;
         self.advance(8);
         self.last_row = Some((self.last_label, hwnd, top, self.y));
+        self.findable(label, hwnd, &items.join(" "));
         hwnd
     }
 
@@ -1382,8 +1480,18 @@ impl<'a> Builder<'a> {
 
     /// A list the parent draws. `LBS_HASSTRINGS` keeps the text readable by screen readers.
     pub fn owner_list(&mut self, rect: (i32, i32, i32, i32), extra_style: u32, id: i32) -> HWND {
-        let style = WS_TABSTOP | WS_VSCROLL
-            | WINDOW_STYLE((LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT) as u32 | extra_style);
+        self.list_styled(rect, WS_VSCROLL.0 | LBS_OWNERDRAWFIXED as u32 | extra_style, id)
+    }
+
+    /// A list whose rows are as tall as each needs (`WM_MEASUREITEM` as each is added), with no
+    /// scroll bar, where there's no room for one. It still scrolls with the keyboard, and its
+    /// owner moves it for the wheel. A list only leaves its bar out if it's made without one.
+    pub fn variable_list(&mut self, rect: (i32, i32, i32, i32), id: i32) -> HWND {
+        self.list_styled(rect, LBS_OWNERDRAWVARIABLE as u32, id)
+    }
+
+    fn list_styled(&mut self, rect: (i32, i32, i32, i32), extra_style: u32, id: i32) -> HWND {
+        let style = WS_TABSTOP | WINDOW_STYLE((LBS_NOTIFY | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT) as u32 | extra_style);
         let font = self.style.font;
         let hwnd = self.create(w!("LISTBOX"), "", style, rect, id, font);
         if self.style.is_dark() {
@@ -1403,16 +1511,31 @@ impl<'a> Builder<'a> {
         self.trailing = 0;
     }
 
+    /// A card's title, after a small square in its colour with its symbol, like the page's own badge.
+    pub fn card_title(&mut self, text: &str, glyph: char, color: crate::gfx::Rgb) -> HWND {
+        let (size, height, gap) = (self.px(26), self.px(30), self.px(10));
+        let font = self.style.bold;
+        let style = WINDOW_STYLE(SS_NOPREFIX.0 | SS_CENTERIMAGE.0);
+        let name = self.create(w!("STATIC"), text, style, (self.x + size + gap, self.y, self.width - size - gap, height), 0, font);
+        let top = self.y + (height - size) / 2;
+        self.style.badges.push(Badge { rect: RECT { left: self.x, top, right: self.x + size, bottom: top + size }, anchor: name, parent: self.parent, color, glyph });
+        self.y += height;
+        self.advance(6);
+        self.findable(text, name, "");
+        name
+    }
+
     /// A card's title, with a small button at its right.
     pub fn card_header(&mut self, text: &str, button: &str, id: i32) -> HWND {
         let height = self.px(30);
         let width = self.button_width(button).max(self.px(68));
         let font = self.style.bold;
         let style = WINDOW_STYLE(SS_NOPREFIX.0 | SS_CENTERIMAGE.0);
-        self.create(w!("STATIC"), text, style, (self.x, self.y, self.width - width - self.px(12), height), 0, font);
+        let name = self.create(w!("STATIC"), text, style, (self.x, self.y, self.width - width - self.px(12), height), 0, font);
         let hwnd = self.button_at(button, id, self.x + self.width - width, self.y, width, ButtonKind::Normal);
         self.y += height;
         self.advance(8);
+        self.findable(text, name, button.trim_end_matches('\u{2026}'));
         hwnd
     }
 

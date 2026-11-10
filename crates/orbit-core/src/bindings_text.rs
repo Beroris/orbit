@@ -33,19 +33,20 @@ pub fn format_action(action: &Action) -> String {
         Action::Custom { id } => format!("custom:{id}"),
         Action::OpenNote { id } => format!("note:{id}"),
         Action::InsertSnippet { id } => format!("snippet:{id}"),
+        Action::Extension { ext, command } => format!("ext:{ext}/{command}"),
     }
 }
 
 pub fn parse_action(text: &str) -> Result<Action, String> {
     let text = text.trim();
     let Some((kind, value)) = text.split_once(':') else {
-        return Err(format!("“{text}” needs a type, such as app:Firefox or cmd:clipboard"));
+        return Err(format!("â{text}â needs a type, such as app:Firefox or cmd:clipboard"));
     };
     let value = value.trim();
     if value.is_empty() {
-        return Err(format!("“{text}” is missing what to open"));
+        return Err(format!("â{text}â is missing what to open"));
     }
-    let number = |value: &str| value.parse::<i64>().map_err(|_| format!("“{value}” isn't a number"));
+    let number = |value: &str| value.parse::<i64>().map_err(|_| format!("â{value}â isn't a number"));
     match kind.trim().to_ascii_lowercase().as_str() {
         "app" => Ok(Action::FocusOrLaunchApp { id: String::new(), name: value.to_string() }),
         "start" => Ok(Action::LaunchApp { id: String::new(), name: value.to_string() }),
@@ -59,12 +60,16 @@ pub fn parse_action(text: &str) -> Result<Action, String> {
             }
             Builtin::from_key(&key)
                 .map(|command| Action::Builtin { command })
-                .ok_or_else(|| format!("There's no command called “{value}”"))
+                .ok_or_else(|| format!("There's no command called â{value}â"))
         }
         "custom" => Ok(Action::Custom { id: value.to_string() }),
         "note" => Ok(Action::OpenNote { id: number(value)? }),
         "snippet" => Ok(Action::InsertSnippet { id: number(value)? }),
-        other => Err(format!("“{other}:” isn't a type. Use app, start, path, url, cmd, custom, note or snippet")),
+        "ext" => match value.split_once('/') {
+            Some((ext, command)) if !ext.is_empty() && !command.is_empty() => Ok(Action::Extension { ext: ext.to_string(), command: command.to_string() }),
+            _ => Err(format!("“{value}” should be an extension and its command, such as ext:windows-settings/search")),
+        },
+        other => Err(format!("â{other}:â isn't a type. Use app, start, path, url, cmd, custom, note or snippet")),
     }
 }
 
@@ -108,7 +113,7 @@ pub fn parse_hyper(text: &str) -> Result<Vec<HyperBinding>, String> {
             if !enabled {
                 continue; // a comment that happens to contain "="
             }
-            return Err(format!("Line {number}: “{}” isn't a key", key.trim()));
+            return Err(format!("Line {number}: â{}â isn't a key", key.trim()));
         };
         if out.iter().any(|binding| binding.key == key) {
             return Err(format!("Line {number}: {key} is already bound above"));
@@ -194,14 +199,14 @@ pub fn parse_links(text: &str, existing: &[QuickLink]) -> Result<Vec<QuickLink>,
             crate::action::UrlCheck::Blocked(scheme) => {
                 return Err(format!("Line {number}: {scheme}: links are blocked because they can run code"));
             }
-            crate::action::UrlCheck::Invalid => return Err(format!("Line {number}: “{url}” isn't a valid URL")),
+            crate::action::UrlCheck::Invalid => return Err(format!("Line {number}: â{url}â isn't a valid URL")),
             _ => {}
         }
         let same = existing.iter().find(|link| link.name == name).or_else(|| existing.iter().find(|link| link.url == url));
         let id = same.map_or_else(|| slug("link-", name), |link| link.id.clone());
         let open_with = same.map(|link| link.open_with.clone()).unwrap_or_default();
         if out.iter().any(|link| link.id == id) {
-            return Err(format!("Line {number}: “{name}” is already listed"));
+            return Err(format!("Line {number}: â{name}â is already listed"));
         }
         out.push(QuickLink { id, name: name.to_string(), url: url.to_string(), alias: alias.to_string(), open_with });
     }
@@ -241,7 +246,7 @@ pub fn parse_commands(text: &str, existing: &[CustomCommand]) -> Result<Vec<Cust
         let previous = existing.iter().find(|command| command.name == name);
         let id = previous.map_or_else(|| slug("cmd-", name), |command| command.id.clone());
         if out.iter().any(|command: &CustomCommand| command.id == id) {
-            return Err(format!("Line {number}: “{name}” is already listed"));
+            return Err(format!("Line {number}: â{name}â is already listed"));
         }
         out.push(CustomCommand {
             id,

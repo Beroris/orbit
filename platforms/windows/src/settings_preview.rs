@@ -6,7 +6,8 @@
 //!
 //! `<what>` is a Settings page, a page in a state (`hotkeys-filled`, `hotkeys-text`,
 //! `hotkeys-recording`, `hotkeys-search`, `hotkeys-bad-text`, `general-listening`,
-//! `general-problem`, `general-saved`, `general-failed`, `data-armed`), or `link-form`,
+//! `general-problem`, `general-saved`, `general-failed`, `general-find`,
+//! `general-find-go`, `general-find-none`, `data-armed`), or `link-form`,
 //! `command-form` or `snippet-form`. Add `-new` to a form for a blank one, or `-error` to a link or
 //! command form to see it complain.
 
@@ -242,18 +243,36 @@ pub fn run(preview: SettingsPreview, dir: Option<PathBuf>) -> i32 {
             crate::link_form::open_command(context, existing, links, commands);
         }
         "snippet-form" => crate::editor::open_snippet(context, if blank { None } else { Some(stand_in_snippet()) }),
+        setup if setup.starts_with("setup-") => {
+            if !crate::setup::preview_open(&setup["setup-".len()..], theme) {
+                return 3;
+            }
+        }
         page => {
             let (page, filled, as_text) = match page {
                 "hotkeys-filled" => ("hotkeys", true, false),
                 "hotkeys-text" => ("hotkeys", true, true),
                 "hotkeys-recording" | "hotkeys-held" | "hotkeys-replace" | "hotkeys-hover" | "hotkeys-narrow" | "hotkeys-replace-narrow" | "hotkeys-search" | "hotkeys-bad-text" => ("hotkeys", true, false),
-                "general-listening" | "general-problem" | "general-saved" | "general-failed" | "general-narrow" => ("general", false, false),
+                "general-listening" | "general-problem" | "general-saved" | "general-failed" | "general-narrow" | "general-find" | "general-find-go" | "general-find-none" => ("general", false, false),
                 "general-screens" | "general-screens-hover" | "general-screens-narrow" => {
                     stand_in_screens(kind.ends_with("-hover"));
                     ("general", false, false)
                 }
                 "data-armed" | "data-narrow" => ("data", false, false),
+                // The Updates row, as an update gets on.
+                "general-update-ready" | "general-update-other" | "general-update-failed" | "general-update-downloading" | "general-update-latest" => {
+                    use crate::update::Phase;
+                    crate::update::preview(match kind {
+                        "general-update-ready" => Phase::Ready("1.2.0".into()),
+                        "general-update-other" => Phase::Available("1.2.0".into()),
+                        "general-update-downloading" => Phase::Downloading("1.2.0".into()),
+                        "general-update-latest" => Phase::UpToDate,
+                        _ => Phase::Failed("Couldn't reach GitHub. Check your connection.".into()),
+                    });
+                    ("general", false, false)
+                }
                 "search-filled" | "search-alias" | "search-record" => ("search", false, false),
+                "extensions-github" | "extensions-tool" => ("extensions", false, false),
                 other => (other, false, false),
             };
             let state = match kind {
@@ -266,10 +285,15 @@ pub fn run(preview: SettingsPreview, dir: Option<PathBuf>) -> i32 {
                 "search-filled" => "search-filled",
                 "search-alias" => "search-alias",
                 "search-record" => "search-record",
+                "extensions-github" => "extensions-github",
+                "extensions-tool" => "extensions-tool",
                 "general-listening" => "listening",
                 "general-problem" => "problem",
                 "general-saved" => "saved",
                 "general-failed" => "failed",
+                "general-find" => "find",
+                "general-find-go" => "find-go",
+                "general-find-none" => "find-none",
                 "data-armed" => "armed",
                 _ => "",
             };
@@ -291,7 +315,10 @@ pub fn run(preview: SettingsPreview, dir: Option<PathBuf>) -> i32 {
                 crate::settings_win::preview_arm_first_link();
             }
             crate::settings_win::preview_state(state);
-            crate::settings_win::preview_scroll(preview.scroll);
+            // A page opens at its top. Scrolling there again would undo a search going down it.
+            if preview.scroll != 0 {
+                crate::settings_win::preview_scroll(preview.scroll);
+            }
         }
     }
     if complain {

@@ -97,6 +97,9 @@ pub enum Req {
     SetClipPersist(bool),
     Export { settings_json: String },
     Import { path: PathBuf },
+    /// Snippets and notes from another launcher, as an Orbit export. `row` and `links` come back
+    /// with the answer, for the Import page.
+    ImportHaul { json: String, row: usize, links: orbit_core::import::Merged, left_out: Vec<String> },
     Shed,
     Counts,
     /// Replies once every earlier request is finished. Used before a clean exit.
@@ -126,6 +129,8 @@ pub enum Resp {
     Changed,
     Exported(Result<PathBuf, String>),
     Imported(Result<String, String>),
+    /// Snippets added and already there, then notes the same.
+    HaulImported { row: usize, links: orbit_core::import::Merged, left_out: Vec<String>, result: Result<((usize, usize), (usize, usize)), String> },
     Counts { notes: i64, snippets: i64, clips: i64, sqlite_bytes: i64 },
     Failed(String),
     Finished,
@@ -406,6 +411,7 @@ fn run(
             }
             Req::Export { settings_json } => reply(Resp::Exported(export(&store, &settings_json))),
             Req::Import { path } => reply(Resp::Imported(import(&store, &path))),
+            Req::ImportHaul { json, row, links, left_out } => reply(Resp::HaulImported { row, links, left_out, result: import_haul(&store, &json) }),
             Req::Shed => store.shed_memory(),
             Req::Counts => {
                 if let Ok((notes, snippets, clips)) = store.counts() {
@@ -605,6 +611,21 @@ fn export(store: &Store, settings_json: &str) -> Result<PathBuf, String> {
         std::fs::write(notes.join(name), &note.body).map_err(|e| e.to_string())?;
     }
     Ok(folder)
+}
+
+/// Brings in another launcher's snippets and notes. A keyword one of Orbit's snippets already has
+/// is left off the newcomer, which keeps its text.
+fn import_haul(store: &Store, json: &str) -> Result<((usize, usize), (usize, usize)), String> {
+    let mut bundle: orbit_data::ExportBundle = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let mut taken: std::collections::HashSet<String> = store.snippet_triggers().map_err(|e| e.to_string())?.into_iter().map(|(trigger, _)| trigger).collect();
+    for snippet in &mut bundle.snippets {
+        if !snippet.trigger.is_empty() && !taken.insert(snippet.trigger.clone()) {
+            snippet.trigger.clear();
+        }
+    }
+    let json = serde_json::to_string(&bundle).map_err(|e| e.to_string())?;
+    let summary = store.import_bundle(&json).map_err(|e| e.to_string())?;
+    Ok(((summary.snippets_added, summary.snippets_skipped), (summary.notes_added, summary.notes_skipped)))
 }
 
 fn import(store: &Store, path: &Path) -> Result<String, String> {

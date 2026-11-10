@@ -150,6 +150,7 @@ pub fn describe(settings: &Settings, action: &Action) -> String {
             .map_or_else(|| format!("Command {id}"), |command| command.name.clone()),
         Action::OpenNote { id } => format!("Note {id}"),
         Action::InsertSnippet { id } => format!("Snippet {id}"),
+        Action::Extension { ext, command } => format!("{ext} {command}"),
     }
 }
 
@@ -201,9 +202,9 @@ mod tests {
     fn changing_an_items_keys_keeps_its_place() {
         let mut s = Settings::default();
         assign(&mut s, Hotkey::Hyper("A".into()), app("Zen"));
-        assign(&mut s, Hotkey::Hyper("B".into()), app("T3 Code"));
+        assign(&mut s, Hotkey::Hyper("B".into()), app("Terminal"));
         assign(&mut s, Hotkey::Hyper("C".into()), app("Notes"));
-        assign(&mut s, Hotkey::Hyper("D".into()), app("T3 Code"));
+        assign(&mut s, Hotkey::Hyper("D".into()), app("Terminal"));
         let keys: Vec<&str> = s.hyper.bindings.iter().map(|b| b.key.as_str()).collect();
         assert_eq!(keys, ["A", "D", "C"]);
         // Taking a key from a row above it still lands in the right place.
@@ -217,10 +218,10 @@ mod tests {
         let mut s = hyper_on();
         assign(&mut s, Hotkey::Hyper("C".into()), app("Zen"));
         assert_eq!(action_of(&s, &Hotkey::Hyper("c".into())), Some(&app("Zen")));
-        assign(&mut s, Hotkey::Hyper("C".into()), app("T3 Code"));
+        assign(&mut s, Hotkey::Hyper("C".into()), app("Terminal"));
         assert_eq!(s.hyper.bindings.len(), 1);
         assert_eq!(hotkey_for(&s, &app("Zen")), None);
-        assert_eq!(hotkey_for(&s, &app("T3 Code")), Some(Hotkey::Hyper("C".into())));
+        assert_eq!(hotkey_for(&s, &app("Terminal")), Some(Hotkey::Hyper("C".into())));
     }
 
     #[test]
@@ -229,7 +230,7 @@ mod tests {
         s.hyper.bindings.push(HyperBinding { key: "C".into(), action: app("Zen"), enabled: false });
         assert_eq!(hotkey_for(&s, &app("Zen")), None);
         assert_eq!(action_of(&s, &Hotkey::Hyper("C".into())), Some(&app("Zen")));
-        assign(&mut s, Hotkey::Hyper("C".into()), app("T3 Code"));
+        assign(&mut s, Hotkey::Hyper("C".into()), app("Terminal"));
         assert_eq!(s.hyper.bindings.len(), 1);
     }
 

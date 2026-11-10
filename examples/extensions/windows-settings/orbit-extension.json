@@ -1,0 +1,18 @@
+{
+  "id": "windows-settings",
+  "name": "Windows Settings",
+  "description": "Open any page of Windows Settings",
+  "author": "Beroris",
+  "version": "1.0.0",
+  "run": ["main.ps1"],
+  "commands": [
+    {
+      "id": "search",
+      "title": "Search Windows Settings",
+      "subtitle": "Bluetooth, display, sound and the rest",
+      "keyword": "ws",
+      "keywords": "control panel preferences",
+      "placeholder": "Search Settings pages…"
+    }
+  ]
+}

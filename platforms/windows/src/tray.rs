@@ -1,8 +1,9 @@
 //! Notification-area icon. Purely event driven: no timers keep it alive.
 
 use crate::util::wide;
+use orbit_core::settings::Appearance;
 use windows::Win32::Foundation::{HWND, POINT};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_NONE, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
     Shell_NotifyIconW,
@@ -12,7 +13,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LoadImageW, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, SM_CXSMICON, SM_CYSMICON, SetForegroundWindow,
     TPM_NONOTIFY, TPM_RETURNCMD, TrackPopupMenu,
 };
-use windows::core::PCWSTR;
+use windows::core::{PCSTR, PCWSTR, w};
 
 const TRAY_ID: u32 = 1;
 
@@ -59,7 +60,20 @@ pub fn remove(hwnd: HWND, message: u32) {
     }
 }
 
-pub fn notify(hwnd: HWND, message: u32, title: &str, body: &str) {
+/// Counts the notifications shown, so a click on one can be told from a click on another.
+static NOTES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Windows says a notification was clicked with this, in the tray message's lParam.
+pub const NOTIFICATION_CLICKED: u32 = 0x0405; // NIN_BALLOONUSERCLICK
+
+/// The last notification shown, which is the one a click is on: Windows shows one at a time.
+pub fn last_note() -> u32 {
+    NOTES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Shows a notification, and gives its number for [`last_note`].
+pub fn notify(hwnd: HWND, message: u32, title: &str, body: &str) -> u32 {
+    let note = NOTES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let mut data = base_data(hwnd, message);
     data.uFlags |= NIF_INFO;
     data.dwInfoFlags = NIIF_NONE;
@@ -68,6 +82,7 @@ pub fn notify(hwnd: HWND, message: u32, title: &str, body: &str) {
     unsafe {
         let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
     }
+    note
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +92,7 @@ pub enum MenuChoice {
     ToggleClipboardPause,
     ToggleSuspend,
     Quit,
+    Update,
 }
 
 pub struct MenuState {
@@ -84,10 +100,15 @@ pub struct MenuState {
     pub clipboard_paused: bool,
     pub suspended: bool,
     pub launcher_hint: String,
+    /// Orbit's Appearance, which the menu follows: Windows' own colours unless it's set to one.
+    pub appearance: Appearance,
+    /// A new version to install or get, such as "Install Orbit 1.2.0".
+    pub update: Option<String>,
 }
 
 /// Runs a modal menu loop. The caller must not hold the app state across this call.
 pub fn show_menu(hwnd: HWND, state: &MenuState) -> Option<MenuChoice> {
+    follow_theme(hwnd, state.appearance);
     unsafe {
         let menu = CreatePopupMenu().ok()?;
         let add = |id: usize, text: &str, checked: bool| {
@@ -97,6 +118,9 @@ pub fn show_menu(hwnd: HWND, state: &MenuState) -> Option<MenuChoice> {
         };
         add(MenuChoice::Open as usize, &format!("Open Orbit\t{}", state.launcher_hint), false);
         add(MenuChoice::Settings as usize, "Settings…", false);
+        if let Some(update) = &state.update {
+            add(MenuChoice::Update as usize, update, false);
+        }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         if state.clipboard_enabled {
             add(MenuChoice::ToggleClipboardPause as usize, "Pause clipboard history", state.clipboard_paused);
@@ -117,7 +141,53 @@ pub fn show_menu(hwnd: HWND, state: &MenuState) -> Option<MenuChoice> {
             3 => Some(MenuChoice::ToggleClipboardPause),
             4 => Some(MenuChoice::ToggleSuspend),
             5 => Some(MenuChoice::Quit),
+            6 => Some(MenuChoice::Update),
             _ => None,
+        }
+    }
+}
+
+/// Windows' own menus are light unless an app says it can be dark. The switch is in uxtheme.dll
+/// with a number and no name: 135 sets the app's mode (1 follows Windows, 2 is always dark, 3
+/// always light), 133 lets a window go dark, and 136 makes menus pick up the change, so changing
+/// Windows' colours or Orbit's Appearance while Orbit runs shows at the next opening. Where those
+/// aren't there, menus stay light, as before.
+fn follow_theme(hwnd: HWND, appearance: Appearance) {
+    type SetPreferredAppMode = unsafe extern "system" fn(i32) -> i32;
+    type AllowDarkModeForWindow = unsafe extern "system" fn(HWND, i32) -> i32;
+    type FlushMenuThemes = unsafe extern "system" fn();
+    let mode = match appearance {
+        Appearance::System => 1,
+        Appearance::Dark => 2,
+        Appearance::Light => 3,
+    };
+    unsafe {
+        let Ok(uxtheme) = LoadLibraryW(w!("uxtheme.dll")) else { return };
+        let by_number = |number: usize| GetProcAddress(uxtheme, PCSTR(number as *const u8));
+        if let Some(function) = by_number(135) {
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, SetPreferredAppMode>(function)(mode);
+        }
+        if let Some(function) = by_number(133) {
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, AllowDarkModeForWindow>(function)(hwnd, (mode != 3) as i32);
+        }
+        if let Some(function) = by_number(136) {
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, FlushMenuThemes>(function)();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The numbered functions the menu's colours rely on are still in this Windows' uxtheme.dll.
+    #[test]
+    fn the_menu_colour_switches_are_there() {
+        unsafe {
+            let uxtheme = LoadLibraryW(w!("uxtheme.dll")).expect("uxtheme.dll");
+            for number in [133usize, 135, 136] {
+                assert!(GetProcAddress(uxtheme, PCSTR(number as *const u8)).is_some(), "uxtheme.dll has no function {number}");
+            }
         }
     }
 }

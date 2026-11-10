@@ -7,7 +7,10 @@ mod catalog;
 mod clipboard;
 mod displays;
 mod editor;
+mod everything;
+mod extensions;
 mod favicon;
+mod files;
 mod foreground;
 mod frost;
 mod forms;
@@ -17,9 +20,12 @@ mod grid;
 mod hook;
 mod icons;
 mod indexer;
+mod importer;
+mod install;
 mod instance;
 mod inline_form;
 mod integrations;
+mod providers;
 mod text;
 mod keys;
 mod launch;
@@ -30,8 +36,10 @@ mod rows;
 mod screen_picker;
 mod settings_preview;
 mod settings_win;
+mod setup;
 mod tray;
 mod ui;
+mod update;
 mod util;
 mod view;
 mod watch;
@@ -70,6 +78,14 @@ struct Args {
     backdrop: Option<ui::Backdrop>,
     preview: Option<app::Preview>,
     settings_preview: Option<settings_preview::SettingsPreview>,
+    /// `--setup`, or an exe named like `Orbit-1.1.0-Setup.exe`: install Orbit.
+    setup: bool,
+    uninstall: bool,
+    /// No window: `/S`, `/SILENT`, `/VERYSILENT` or `--silent`, as Inno Setup took.
+    silent: bool,
+    start: app::Start,
+    /// Started by an update, as its new version.
+    updated: bool,
 }
 
 fn parse_args() -> Args {
@@ -89,6 +105,20 @@ fn parse_args() -> Args {
             "--trim-ms" => args.trim_ms = iter.next().and_then(|t| t.to_string_lossy().parse().ok()),
             "--no-trim" => args.no_trim = true,
             "--no-reindex" => args.no_reindex = true,
+            "--setup" => args.setup = true,
+            "--uninstall" => args.uninstall = true,
+            "--show" => args.start = app::Start::Launcher,
+            update::UPDATED_ARG => args.updated = true,
+            // Setup.exe installed Orbit and hands the welcome over, with where its window was.
+            "--setup-continue" => {
+                let at = iter.next().and_then(|text| {
+                    let text = text.to_string_lossy().into_owned();
+                    let (x, y) = text.split_once(',')?;
+                    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+                });
+                args.start = app::Start::Welcome { at };
+            }
+            flag if install::is_silent_flag(flag) => args.silent = true,
             // For the end-to-end tests, which can only inject keys.
             "--accept-injected-input" => hook::ACCEPT_INJECTED.store(true, std::sync::atomic::Ordering::Relaxed),
             "--wait-pid" => args.wait_pid = iter.next().and_then(|t| t.to_string_lossy().parse().ok()),
@@ -194,6 +224,13 @@ fn main() {
     if let Some(preview) = args.settings_preview {
         std::process::exit(settings_preview::run(preview, args.data_dir));
     }
+    // Setup and the uninstaller run before anything global, and never as the launcher.
+    if args.uninstall {
+        std::process::exit(setup::run_uninstall(args.silent));
+    }
+    if args.setup || setup::named_as_setup() {
+        std::process::exit(setup::run_install(args.silent));
+    }
     let dir = args.data_dir.clone().or_else(instance::portable_dir).unwrap_or_else(default_data_dir);
     if args.quit {
         std::process::exit(if instance::quit(&dir) { 0 } else { 1 });
@@ -205,7 +242,8 @@ fn main() {
     if let Some(pid) = args.wait_pid {
         unsafe {
             if let Ok(process) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
-                let result = WaitForSingleObject(process, 5000);
+                // An update's old version may take a moment to close.
+                let result = WaitForSingleObject(process, 15_000);
                 debug_assert!(result == WAIT_OBJECT_0 || result.0 != 0);
                 let _ = CloseHandle(process);
             }
@@ -241,6 +279,8 @@ fn main() {
         no_reindex: args.no_reindex,
         backdrop: args.backdrop,
         preview: args.preview,
+        start: args.start,
+        updated: args.updated,
     };
     if app::startup(options).is_err() {
         return;

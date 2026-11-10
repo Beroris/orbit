@@ -27,6 +27,14 @@ pub const BASE_WIDTH: i32 = 720;
 pub const INPUT_HEIGHT: i32 = 64;
 pub const ROW_HEIGHT: i32 = 44;
 pub const HEADER_HEIGHT: i32 = 30;
+/// A section title at the very top has no section above it to stand apart from. Its words go up
+/// into the empty room under the search box, and it takes only this much of the list, so the
+/// first row starts about where it does once something's typed.
+pub const FIRST_HEADER_HEIGHT: i32 = 8;
+/// How far the first title's words reach up past the top of the list.
+const FIRST_HEADER_LIFT: i32 = 14;
+/// The room over a section title's words, between one section and the next.
+const HEADER_SPACE: i32 = 8;
 pub const FOOTER_HEIGHT: i32 = 56;
 /// An answer that's the only result is drawn as a card this tall.
 pub const ANSWER_CARD_HEIGHT: i32 = 150;
@@ -590,15 +598,26 @@ pub fn row_layout(rows: &[Row], scroll: usize, dpi: u32, visible_rows: usize) ->
     rows_down_to(rows, scroll, dpi, top + scale(ROW_HEIGHT, dpi) * visible_rows as i32)
 }
 
+/// Whether row `index` is drawn whole with the list scrolled to `scroll`, as `row_layout` lays it out.
+pub fn row_fits(rows: &[Row], scroll: usize, index: usize, dpi: u32, visible_rows: usize) -> bool {
+    if index < scroll || index >= rows.len() {
+        return false;
+    }
+    let room = scale(ROW_HEIGHT, dpi) * visible_rows as i32;
+    let used: i32 = (scroll..=index).map(|at| scale(row_height_dip(rows, at), dpi)).sum();
+    used <= room
+}
+
 /// An answer that's the only result is a card.
 pub fn is_answer_card(rows: &[Row]) -> bool {
     rows.len() == 1 && matches!(rows[0].source, RowSource::Answer { .. })
 }
 
-/// How tall a row is, in DIPs: section titles are short and a lone answer is a card.
+/// How tall a row is, in DIPs: section titles are short, the first shorter still, and a lone
+/// answer is a card.
 fn row_height_dip(rows: &[Row], index: usize) -> i32 {
     if rows[index].is_header() {
-        HEADER_HEIGHT
+        if index == 0 { FIRST_HEADER_HEIGHT } else { HEADER_HEIGHT }
     } else if index == 0 && is_answer_card(rows) {
         ANSWER_CARD_HEIGHT
     } else {
@@ -1350,7 +1369,8 @@ fn draw_list(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, width: i3
     for (index, y, row_h) in rows_down_to(list.rows, list.scroll, dpi, reach) {
         let row = &list.rows[index];
         if row.is_header() {
-            let rect = RECT { left: icon_x + scale(2, dpi), top: y + scale(8, dpi), right: right_edge, bottom: y + row_h };
+            let top = if index == 0 { y - scale(FIRST_HEADER_LIFT, dpi) } else { y + scale(HEADER_SPACE, dpi) };
+            let rect = RECT { left: icon_x + scale(2, dpi), top, right: right_edge, bottom: y + row_h };
             text::draw(buffer, &row.title, &fonts.section, theme.tertiary, rect, Align::Left);
             continue;
         }
@@ -1372,6 +1392,8 @@ fn draw_list(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, width: i3
         // A website icon that isn't there, or isn't yet, is drawn as any link is.
         let icon = match row.icon {
             RowIcon::Favicon(key) if icons.peek(crate::favicon::row_hash(key), icon_size as usize).is_none() => RowIcon::Glyph(GLYPH_LINK),
+            // A file's own icon that isn't there yet is drawn as its symbol.
+            RowIcon::File(hash, glyph) if icons.peek(hash, icon_size as usize).is_none() => RowIcon::Glyph(glyph),
             other => other,
         };
         // Thumbnails are wider than icons, so everything in that list shares their column.
@@ -1401,6 +1423,11 @@ fn draw_list(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, width: i3
                     buffer.blit_premultiplied(icon_x, icon_y, icon_size, pixels);
                 }
             }
+            RowIcon::File(hash, _) => {
+                if let Some(pixels) = icons.peek(hash, icon_size as usize) {
+                    buffer.blit_premultiplied(glyph_x, icon_y, icon_size, pixels);
+                }
+            }
             RowIcon::Glyph(glyph) => {
                 let rect = RECT { left: glyph_x, top: icon_y, right: glyph_x + icon_size, bottom: icon_y + icon_size };
                 if tiles {
@@ -1414,8 +1441,16 @@ fn draw_list(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, width: i3
             RowIcon::Emoji(_) => {}
         }
 
-        let kind_width = if compact { 0 } else { text::width(row.kind, &fonts.hint) };
-        let mut text_right = right_edge - kind_width - if kind_width > 0 { scale(12, dpi) } else { 0 };
+        // An extension's meters take the place of the words on the right.
+        let meters = match &row.source {
+            RowSource::Extension { meters, .. } if !compact => meters.as_slice(),
+            _ => &[],
+        };
+        let meters_width = if meters.is_empty() { 0 } else { draw_meters(buffer, paint, meters, right_edge, y, row_h, selected) };
+        let kind_text: &str = if meters.is_empty() { row.accessory.as_deref().unwrap_or(row.kind) } else { "" };
+        let kind_width = if compact || kind_text.is_empty() { 0 } else { text::width(kind_text, &fonts.hint) };
+        let used_right = kind_width.max(meters_width);
+        let mut text_right = right_edge - used_right - if used_right > 0 { scale(12, dpi) } else { 0 };
         if let Some(keys) = &row.keys {
             let width = caps_width(keys, fonts, dpi);
             let fill = if selected { paint.keycap_on_selection } else { paint.keycap };
@@ -1442,7 +1477,7 @@ fn draw_list(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, width: i3
         }
         if kind_width > 0 {
             let ink = if selected { theme.secondary } else { theme.tertiary };
-            text::draw(buffer, row.kind, &fonts.hint, ink, RECT { left: right_edge - kind_width, top: y, right: right_edge, bottom: y + row_h }, Align::Right);
+            text::draw(buffer, kind_text, &fonts.hint, ink, RECT { left: right_edge - kind_width, top: y, right: right_edge, bottom: y + row_h }, Align::Right);
         }
     }
 
@@ -1453,6 +1488,52 @@ fn draw_list(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, width: i3
         let thumb_height = (track_height as i64 * visible as i64 / total as i64).max(scale(16, dpi) as i64) as i32;
         let thumb_y = list_top + ((track_height - thumb_height) as i64 * list.scroll as i64 / (total - visible as usize) as i64) as i32;
         buffer.fill_round_rect_alpha(width - scale(6, dpi), thumb_y, scale(3, dpi), thumb_height, scale(2, dpi) as f32, paint.pressed.0, paint.pressed.1);
+    }
+}
+
+/// How wide one meter's bar is, and how wide a long label can stretch it.
+const METER_DIP: i32 = 64;
+const METER_MOST_DIP: i32 = 112;
+
+/// An extension item's meters, such as how much of a limit is used, each a label over a bar, in a
+/// row ending at `right`. Gives back how wide they are.
+fn draw_meters(buffer: &mut Backbuffer, paint: &Paint, meters: &[orbit_core::extension::Meter], right: i32, y: i32, row_h: i32, selected: bool) -> i32 {
+    let dpi = paint.dpi;
+    let theme = &paint.theme;
+    let gap = scale(14, dpi);
+    let bar_h = scale(4, dpi).max(3);
+    let middle = y + row_h / 2;
+    let mut x = right;
+    for meter in meters.iter().rev() {
+        // Each bar is as wide as its label, so "Sonnet 12%" reads whole.
+        let label_width = text::width(&meter.label, &paint.fonts.hint) + scale(2, dpi);
+        let width = label_width.clamp(scale(METER_DIP, dpi), scale(METER_MOST_DIP, dpi));
+        let left = x - width;
+        let ink = if selected { theme.text } else { theme.secondary };
+        let label = RECT { left, top: middle - scale(17, dpi), right: x, bottom: middle + scale(1, dpi) };
+        text::draw(buffer, &meter.label, &paint.fonts.hint, ink, label, Align::Left);
+        let bar_y = middle + scale(4, dpi);
+        let track = if selected { paint.keycap_on_selection } else { paint.keycap };
+        buffer.fill_round_rect_alpha(left, bar_y, width, bar_h, bar_h as f32 / 2.0, track.0, track.1);
+        let filled = (width as f32 * meter.value).round() as i32;
+        if filled > 0 {
+            buffer.fill_round_rect_alpha(left, bar_y, filled.max(bar_h), bar_h, bar_h as f32 / 2.0, meter_color(paint, meter.value), 255);
+        }
+        x = left - gap;
+    }
+    right - (x + gap)
+}
+
+/// A meter's colour: the accent while there's room, amber when it's getting full, red near the end.
+fn meter_color(paint: &Paint, value: f32) -> Rgb {
+    if paint.hc {
+        paint.theme.text
+    } else if value >= 0.9 {
+        paint.theme.danger
+    } else if value >= 0.7 {
+        if paint.dark { Rgb(245, 176, 66) } else { Rgb(206, 122, 6) }
+    } else {
+        paint.theme.accent
     }
 }
 
@@ -2353,9 +2434,21 @@ mod tests {
         rows.insert(2, Row::header("Suggestions"));
         let top = INPUT_HEIGHT + PADDING;
         assert_eq!(row_at(top, 96, &rows, 0, 8), None, "on a title");
-        assert_eq!(row_at(top + HEADER_HEIGHT, 96, &rows, 0, 8), Some(1));
-        assert_eq!(row_at(top + HEADER_HEIGHT + ROW_HEIGHT, 96, &rows, 0, 8), None, "on the second title");
-        assert_eq!(row_at(top + HEADER_HEIGHT * 2 + ROW_HEIGHT, 96, &rows, 0, 8), Some(3));
+        assert_eq!(row_at(top + FIRST_HEADER_HEIGHT, 96, &rows, 0, 8), Some(1));
+        assert_eq!(row_at(top + FIRST_HEADER_HEIGHT + ROW_HEIGHT, 96, &rows, 0, 8), None, "on the second title");
+        assert_eq!(row_at(top + FIRST_HEADER_HEIGHT + HEADER_HEIGHT + ROW_HEIGHT, 96, &rows, 0, 8), Some(3));
+    }
+
+    #[test]
+    fn the_first_title_sits_right_under_the_search_box() {
+        let mut rows = plain(3);
+        rows.insert(0, Row::header("Favourites"));
+        rows.insert(2, Row::header("Suggestions"));
+        let layout = row_layout(&rows, 0, 96, 8);
+        assert_eq!(layout[0], (0, INPUT_HEIGHT + PADDING, FIRST_HEADER_HEIGHT), "no gap over the first title");
+        assert_eq!(layout[2].2, HEADER_HEIGHT, "a title between sections keeps its room");
+        // Scrolled so a later title is at the top, it's still the one between two sections.
+        assert_eq!(row_layout(&rows, 2, 96, 8)[0].2, HEADER_HEIGHT);
     }
 
     #[test]
@@ -2379,7 +2472,7 @@ mod tests {
         assert_eq!(fitted_height(96, &plain(0), 8), full - ROW_HEIGHT * 7, "room to say there's nothing");
         let mut titled = plain(2);
         titled.insert(0, Row::header("Suggestions"));
-        assert_eq!(fitted_height(96, &titled, 8), full - ROW_HEIGHT * 6 + HEADER_HEIGHT);
+        assert_eq!(fitted_height(96, &titled, 8), full - ROW_HEIGHT * 6 + FIRST_HEADER_HEIGHT);
         assert_eq!(fitted_height(192, &plain(2), 8), (full - ROW_HEIGHT * 6) * 2);
     }
 

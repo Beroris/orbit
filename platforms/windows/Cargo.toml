@@ -13,6 +13,8 @@ path = "src/main.rs"
 orbit-core.workspace = true
 orbit-hotkeys.workspace = true
 orbit-data.workspace = true
+# Reading Wox 2's settings, for importing.
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 windows-core = "0.62"
@@ -50,6 +52,8 @@ features = [
     "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
     "Win32_System_Kernel",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",

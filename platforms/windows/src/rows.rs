@@ -4,6 +4,7 @@ use crate::gfx::Rgb;
 use crate::integrations::{Field, Tool};
 use crate::util::format_bytes;
 use crate::worker::{ClipPreview, PreviewBody};
+use orbit_core::extension::{ActionKind, ItemAction};
 use orbit_core::{Action, Builtin};
 use orbit_data::ClipKind;
 
@@ -17,6 +18,9 @@ pub enum RowIcon {
     Emoji(u16),
     /// A quicklink's website icon, by its key in `favicon`. Drawn as a link until it's there.
     Favicon(u64),
+    /// A file's own icon or an extension's picture, by its key in `files::icon_hash`, with the
+    /// symbol to draw until it's there.
+    File(u64, char),
 }
 
 /// Where a clipboard image's thumbnail sits in the icon cache, away from any app's hash.
@@ -63,6 +67,11 @@ pub const GLYPH_POWER: char = '\u{E7E8}';
 pub const GLYPH_DIAGNOSTICS: char = '\u{E9D9}';
 pub const GLYPH_HELP: char = '\u{E897}';
 pub const GLYPH_END_TASK: char = '\u{E711}';
+pub const GLYPH_FILE: char = '\u{E8A5}';
+pub const GLYPH_EXTENSION: char = '\u{EA86}';
+pub const GLYPH_IMPORT: char = '\u{E8B5}';
+/// A download arrow, for a new version of Orbit.
+pub const GLYPH_UPDATE: char = '\u{E896}';
 // Symbols the icon font has no good match for. Orbit draws these itself (see `symbols.rs`), so the
 // code points, from the font's private range, are only names.
 pub const GLYPH_WIN_LEFT: char = '\u{F101}';
@@ -80,6 +89,24 @@ pub const GLYPH_SOUND: char = '\u{F10C}';
 pub const GLYPH_TIMER: char = '\u{F10D}';
 pub const GLYPH_STOPWATCH: char = '\u{F10E}';
 pub const GLYPH_PICKER: char = '\u{F10F}';
+/// A branch, for GitHub.
+pub const GLYPH_GITHUB: char = '\u{F110}';
+/// A sparkle, for AI Usage.
+pub const GLYPH_AI: char = '\u{F111}';
+
+/// The symbol of an extension that comes with Orbit.
+pub fn extension_glyph(ext: orbit_core::builtin_ext::BuiltinExt) -> char {
+    use orbit_core::builtin_ext::BuiltinExt;
+    match ext {
+        BuiltinExt::Files => GLYPH_FILE,
+        BuiltinExt::OnePassword => GLYPH_KEY,
+        BuiltinExt::EnteAuth => GLYPH_SHIELD,
+        BuiltinExt::Weather => GLYPH_WEATHER,
+        BuiltinExt::SpeedTest => GLYPH_SPEED,
+        BuiltinExt::GitHub => GLYPH_GITHUB,
+        BuiltinExt::AiUsage => GLYPH_AI,
+    }
+}
 
 /// The two colours of a command's tile, light at the top left and deep at the bottom right. Colour
 /// tells them apart at a glance, as app icons do, and the second shifts a little in hue so the tile
@@ -100,6 +127,8 @@ pub fn tile_colors(glyph: char) -> (Rgb, Rgb) {
     const FUCHSIA: (Rgb, Rgb) = (Rgb(240, 134, 230), Rgb(178, 36, 190));
     // Grey, as settings usually are, though a cool grey rather than a dull one.
     const SLATE: (Rgb, Rgb) = (Rgb(166, 178, 198), Rgb(68, 82, 106));
+    const GRAPHITE: (Rgb, Rgb) = (Rgb(122, 130, 146), Rgb(28, 33, 42));
+    const ORANGE: (Rgb, Rgb) = (Rgb(253, 170, 96), Rgb(222, 82, 24));
     match glyph {
         GLYPH_NOTE => YELLOW,
         GLYPH_SNIPPET | GLYPH_IMAGE => VIOLET,
@@ -117,11 +146,13 @@ pub fn tile_colors(glyph: char) -> (Rgb, Rgb) {
         GLYPH_HELP => BLUE,
         GLYPH_CURRENCY => EMERALD,
         GLYPH_WEATHER => WEATHER,
+        GLYPH_GITHUB => GRAPHITE,
+        GLYPH_AI => ORANGE,
         GLYPH_LINK | GLYPH_FOLDER | GLYPH_EDIT | GLYPH_REFRESH => BLUE,
         GLYPH_WEB | GLYPH_SEARCH | GLYPH_KEY => SKY,
         GLYPH_PIN | GLYPH_TAG => ROSE,
         GLYPH_DELETE => RED,
-        GLYPH_SHIELD | GLYPH_PLAY | GLYPH_ADD | GLYPH_CHECK => GREEN,
+        GLYPH_SHIELD | GLYPH_PLAY | GLYPH_ADD | GLYPH_CHECK | GLYPH_UPDATE => GREEN,
         GLYPH_WARNING | GLYPH_STAR | GLYPH_STAR_FILLED => YELLOW,
         '\u{E7E8}' => RED, // power
         '\u{E72E}' | '\u{E708}' => INDIGO, // lock, sleep
@@ -165,6 +196,10 @@ pub enum RowSource {
     Clock { stopwatch: bool, running: bool, started: bool },
     /// A colour picked from the screen.
     Colour(orbit_core::colour::Colour),
+    /// A file or folder Everything found.
+    File { path: String, is_folder: bool },
+    /// An item in an extension's list, with everything it offers to do, and the meters it shows.
+    Extension { ext: String, command: String, item: String, actions: Vec<ItemAction>, meters: Vec<orbit_core::extension::Meter> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -179,6 +214,8 @@ pub struct Row {
     pub primary: Option<Op>,
     /// A key combination to show as key caps on the right, such as `Hyper+C`.
     pub keys: Option<String>,
+    /// Text on the right in place of `kind`, for rows whose kind isn't known in advance.
+    pub accessory: Option<String>,
 }
 
 impl Row {
@@ -192,6 +229,7 @@ impl Row {
             source: RowSource::Plain,
             primary: None,
             keys: None,
+            accessory: None,
         }
     }
 
@@ -278,8 +316,6 @@ pub enum Op {
     RefreshVault(Tool),
     /// Fetch one value and put it on the clipboard.
     CopySecret { tool: Tool, id: String, field: Field },
-    /// The Integrations page in Settings.
-    OpenIntegrations,
     /// A command from a menu, as if it had been searched for and run.
     RunBuiltin(Builtin),
     EmojiPaste(u16),
@@ -313,6 +349,27 @@ pub enum Op {
     StopwatchPause,
     StopwatchReset,
     PickColour,
+    /// A file or folder, in the app Windows uses for it.
+    OpenFile(String),
+    /// A file or folder, selected in File Explorer.
+    RevealFile(String),
+    CopyPath(String),
+    /// The file itself, to paste into a folder or an email.
+    CopyFile(String),
+    /// Windows' "Open with" box for a file.
+    OpenFileWith(String),
+    FileAsAdmin(String),
+    /// A terminal in this folder.
+    TerminalHere(String),
+    EverythingInstall,
+    EverythingStart,
+    /// Search again, after Everything had a problem.
+    EverythingRetry,
+    /// Open an extension's command: its list, or run it.
+    /// Do one of an extension item's actions.
+    ExtAction { ext: String, command: String, item: String, action: ItemAction },
+    /// Settings, on the Extensions page.
+    OpenExtensionsSettings,
 }
 
 /// Short labels for the footer: what Enter and Ctrl+Enter do on this row.
@@ -340,7 +397,6 @@ pub fn primary_label(op: &Op) -> &'static str {
         Op::CopySecret { field: Field::Password, .. } => "Copy password",
         Op::CopySecret { field: Field::Username, .. } => "Copy username",
         Op::CopySecret { field: Field::OneTimeCode, .. } => "Copy code",
-        Op::OpenIntegrations => "Open Settings",
         Op::EmojiPaste(_) => "Paste",
         Op::EmojiCopy(_) => "Copy",
         Op::NewLinkFor(_) => "Save",
@@ -361,8 +417,30 @@ pub fn primary_label(op: &Op) -> &'static str {
         Op::TimerCancel => "Cancel",
         Op::StopwatchReset => "Reset",
         Op::PickColour => "Pick",
+        Op::OpenFile(_) => "Open",
+        Op::RevealFile(_) => "Show in folder",
+        Op::CopyPath(_) => "Copy path",
+        Op::CopyFile(_) => "Copy file",
+        Op::EverythingInstall => "Install",
+        Op::EverythingStart => "Start",
+        Op::EverythingRetry => "Try again",
+        Op::OpenExtensionsSettings => "Open Settings",
+        Op::ExtAction { action, .. } => match action.kind {
+            ActionKind::Open(_) => "Open",
+            ActionKind::Reveal(_) => "Show in folder",
+            ActionKind::Copy(_) => "Copy",
+            ActionKind::Paste(_) => "Paste",
+            ActionKind::Callback(_) => "Run",
+            ActionKind::SetQuery(_) => "Search",
+        },
         _ => "Run",
     }
+}
+
+/// Whether a file is a program, so it can be offered as administrator.
+pub fn is_program(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    [".exe", ".lnk", ".bat", ".cmd", ".msi", ".ps1"].iter().any(|ext| lower.ends_with(ext))
 }
 
 /// The Ctrl+Enter action, if the row has one.
@@ -381,6 +459,11 @@ pub fn secondary_for(row: &Row, app_item_id: Option<&str>) -> Option<(&'static s
         RowSource::SpeedTest { .. } => None,
         RowSource::Clock { .. } => None,
         RowSource::Colour(colour) => Some(("Copy RGB", Op::Copy(colour.rgb()))),
+        RowSource::File { path, .. } => Some(("Show in folder", Op::RevealFile(path.clone()))),
+        RowSource::Extension { ext, command, item, actions, .. } => actions.get(1).map(|action| {
+            let op = Op::ExtAction { ext: ext.clone(), command: command.clone(), item: item.clone(), action: action.clone() };
+            (primary_label(&op), op)
+        }),
         RowSource::Plain | RowSource::Header | RowSource::Secret { .. } => None,
     }
 }
@@ -519,6 +602,43 @@ pub fn menu_for(row: &Row, app_item_id: Option<&str>, is_pinned: bool, hotkey: O
             out.push(Row::op("Copy RGB", colour.rgb(), GLYPH_COPY, Op::Copy(colour.rgb())).with_keys("Ctrl+Enter"));
             out.push(Row::op("Copy HSL", colour.hsl(), GLYPH_COPY, Op::Copy(colour.hsl())).with_keys("Ctrl+Shift+Enter"));
             out.push(Row::op("Pick another colour", "", GLYPH_PICKER, Op::PickColour));
+        }
+        RowSource::File { path, is_folder } => {
+            out.push(Row::op("Show in folder", "", GLYPH_FOLDER, Op::RevealFile(path.clone())).with_keys("Ctrl+Enter"));
+            if is_program(path) {
+                out.push(Row::op("Run as administrator", "", GLYPH_SHIELD, Op::FileAsAdmin(path.clone())).with_keys("Ctrl+Shift+Enter"));
+            }
+            if !*is_folder {
+                out.push(Row::op("Open with\u{2026}", "", GLYPH_PLAY, Op::OpenFileWith(path.clone())).with_keys("Ctrl+O"));
+            }
+            out.push(Row::op("Copy path", path.clone(), GLYPH_COPY, Op::CopyPath(path.clone())).with_keys("Ctrl+Shift+C"));
+            out.push(Row::op(if *is_folder { "Copy folder" } else { "Copy file" }, "To paste into a folder or an email", GLYPH_COPY, Op::CopyFile(path.clone())).with_keys("Ctrl+Shift+F"));
+            if *is_folder {
+                out.push(Row::op("Open in Terminal", "", GLYPH_COMMAND, Op::TerminalHere(path.clone())).with_keys("Ctrl+Shift+T"));
+            }
+        }
+        RowSource::Extension { ext, command, item, actions, .. } => {
+            // The extension names its own actions, so the plain label goes.
+            out.clear();
+            for (at, action) in actions.iter().enumerate() {
+                let op = Op::ExtAction { ext: ext.clone(), command: command.clone(), item: item.clone(), action: action.clone() };
+                let glyph = match action.kind {
+                    ActionKind::Open(_) => GLYPH_PLAY,
+                    ActionKind::Reveal(_) => GLYPH_FOLDER,
+                    ActionKind::Copy(_) => GLYPH_COPY,
+                    ActionKind::Paste(_) => GLYPH_CLIPBOARD,
+                    ActionKind::Callback(_) => GLYPH_PLAY,
+                    ActionKind::SetQuery(_) => GLYPH_SEARCH,
+                };
+                let keys = match at {
+                    0 => Some("Enter".to_string()),
+                    1 => Some("Ctrl+Enter".to_string()),
+                    _ => action.shortcut.clone(),
+                };
+                let mut row = Row::op(action.title.clone(), "", glyph, op);
+                row.keys = keys;
+                out.push(row);
+            }
         }
     }
     out

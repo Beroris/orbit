@@ -7,7 +7,7 @@
 //! something that makes no sense. They keep their last good value, and nothing else waits for them.
 
 use crate::app_picker::{self, Candidate, Row as PickerRow};
-use crate::app::{WM_ORBIT_ENTE_ACCOUNT, WM_ORBIT_IMPORT, WM_ORBIT_LINK_REQUEST, WM_ORBIT_RUN_BUILTIN, WM_ORBIT_SET_ALIAS, WM_ORBIT_SET_HIDDEN, WM_ORBIT_SETTINGS_APPLY, WM_ORBIT_SETTINGS_RECORDING, WM_ORBIT_SETTINGS_REOPEN, WM_ORBIT_SETTINGS_TOOL_DONE};
+use crate::app::{WM_ORBIT_ENTE_ACCOUNT, WM_ORBIT_EXTENSIONS_CHANGED, WM_ORBIT_LINK_REQUEST, WM_ORBIT_RUN_BUILTIN, WM_ORBIT_SET_ALIAS, WM_ORBIT_SET_HIDDEN, WM_ORBIT_SETTINGS_APPLY, WM_ORBIT_SETTINGS_RECORDING, WM_ORBIT_SETTINGS_REOPEN, WM_ORBIT_SETTINGS_TOOL_DONE};
 use crate::editor::{EditorContext, register_form, unregister_form};
 use crate::forms::{self, Builder, ButtonKind, ListPart, ManagedRow, Style, Tile, get_lines, get_text, is_checked, selected, set_status, set_text};
 use crate::link_form::LinkRequest;
@@ -15,8 +15,9 @@ use crate::worker::{DataRow, Req};
 use crate::gfx::Backbuffer;
 use crate::keys;
 use crate::integrations::{self, Tool};
+use orbit_core::builtin_ext::BuiltinExt;
 use crate::screen_picker;
-use crate::rows::{GLYPH_SEARCH, GLYPH_CLIPBOARD, GLYPH_COMMAND, GLYPH_FOLDER, GLYPH_KEY, GLYPH_KEYBOARD, GLYPH_LINK, GLYPH_NOTE, GLYPH_SNIPPET};
+use crate::rows::{GLYPH_SEARCH, GLYPH_CLIPBOARD, GLYPH_COMMAND, GLYPH_FOLDER, GLYPH_KEYBOARD, GLYPH_LINK, GLYPH_NOTE, GLYPH_SNIPPET};
 use crate::util::{SendHwnd, wide};
 use orbit_core::bindings_text::*;
 use orbit_core::hotkeys::{self, Hotkey, same_target};
@@ -48,7 +49,7 @@ const PAGES: &[(&str, char)] = &[
     ("Clipboard", GLYPH_CLIPBOARD),
     ("Snippets", GLYPH_SNIPPET),
     ("Links & commands", GLYPH_LINK),
-    ("Integrations", GLYPH_KEY),
+    ("Extensions", crate::rows::GLYPH_EXTENSION),
     ("Data", GLYPH_FOLDER),
 ];
 
@@ -62,7 +63,7 @@ const PAGE_COLORS: [crate::gfx::Rgb; 10] = [
     crate::gfx::Rgb(48, 176, 120),
     crate::gfx::Rgb(255, 55, 95),
     crate::gfx::Rgb(0, 168, 160),
-    crate::gfx::Rgb(232, 62, 62),
+    crate::gfx::Rgb(120, 170, 40),
     crate::gfx::Rgb(110, 110, 118),
 ];
 /// What each page is for, under its name.
@@ -75,7 +76,7 @@ const PAGE_ABOUT: [&str; 10] = [
     "What you copy, kept on this PC to find and paste again.",
     "Text you use often, typed for you when you type its keyword.",
     "Websites, searches and programs you open by name or alias.",
-    "Orbit fetches one value when you pick it, and keeps none. Copies clear after 30 seconds.",
+    "Turn on only what you use. One that's off is gone from the launcher, and none of it runs.",
     "Where Orbit keeps your things, and how to move them or start over.",
 ];
 /// The strip across the top that the window is dragged by, with its own buttons at the right.
@@ -90,7 +91,8 @@ const PAGE_HYPER: usize = 3;
 const PAGE_CLIPBOARD: usize = 5;
 const PAGE_SNIPPETS: usize = 6;
 const PAGE_LINKS: usize = 7;
-const PAGE_INTEGRATIONS: usize = 8;
+const PAGE_EXTENSIONS: usize = 8;
+const PAGE_DATA: usize = 9;
 
 const SIDEBAR_DIP: i32 = 208;
 const WINDOW_WIDTH_DIP: i32 = 892;
@@ -130,7 +132,20 @@ const SEARCH_LIST_SUBCLASS: usize = 0x4F4A;
 const ID_SEARCH_FILTER: i32 = 170;
 const ID_SEARCH_LIST: i32 = 171;
 const ID_ALIAS_EDIT: i32 = 172;
+const ID_EXT_FILTER: i32 = 174;
+const ID_EXT_LIST: i32 = 175;
+const ID_EXT_ALIAS_EDIT: i32 = 176;
 const ALIAS_EDIT_SUBCLASS: usize = 0x4F4B;
+/// The search at the top of the page list, and the list of settings it finds.
+const ID_FIND: i32 = 180;
+const ID_FIND_LIST: i32 = 181;
+const FIND_LIST_SUBCLASS: usize = 0x4F4C;
+const FIND_ROW_DIP: i32 = 44;
+/// The search box, as drawn, and the space under it before the page list.
+const FIND_BOX_DIP: i32 = 28;
+const FIND_GAP_DIP: i32 = 10;
+/// The most settings one search lists.
+const FIND_LIMIT: usize = 60;
 const EM_SETSEL: u32 = 0x00B1;
 const ACTION_SEARCH_SUBCLASS: usize = 0x4F49;
 const NO_HOTKEYS: &str = "No hotkeys yet. Search above, or press Ctrl+K on anything in the launcher.";
@@ -153,6 +168,19 @@ const ID_IMPORT: i32 = 141;
 const ID_OPEN_DIR: i32 = 142;
 const ID_REINDEX: i32 = 143;
 const ID_DIAGNOSTICS: i32 = 144;
+const ID_EXT_ADD: i32 = 145;
+const ID_EXT_FOLDER: i32 = 146;
+const ID_EVERYTHING: i32 = 147;
+const ID_UPDATE: i32 = 148;
+/// Each extension's Remove button, from here on.
+const ID_EXT_REMOVE: i32 = 600;
+const LABEL_REMOVE: &str = "Remove";
+/// The orders the file search can list files in, as the Extensions page names them.
+const FILE_SORTS: &[(&str, orbit_core::settings::FileSort)] = &[
+    ("Most recently changed", orbit_core::settings::FileSort::Recent),
+    ("Most often opened", orbit_core::settings::FileSort::MostOpened),
+    ("By name", orbit_core::settings::FileSort::Name),
+];
 const ID_TOOL_OP: i32 = 150;
 const ID_TOOL_ENTE: i32 = 151;
 const ID_ENTE_SIGN_IN: i32 = 152;
@@ -169,6 +197,7 @@ const LIST_COMMANDS: usize = 2;
 /// Each picker has three controls from here on: search box, Browse, list.
 const ID_PICKERS: i32 = 200;
 const PICKER_IDS: i32 = 10;
+const PICKER_COUNT: i32 = 5;
 const PICKER_HYPER: usize = 0;
 const PICKER_CLIPBOARD: usize = 1;
 const PICKER_SNIPPETS: usize = 2;
@@ -181,6 +210,9 @@ const SAVE_TIMER: usize = 1;
 const STATUS_TIMER: usize = 2;
 /// Takes back a first press on something dangerous.
 const ARM_TIMER: usize = 3;
+/// Takes away the outline round a setting that a search went to.
+const FLASH_TIMER: usize = 4;
+const FLASH_MS: u32 = 1800;
 /// How long typing has to pause before a text box saves.
 const TEXT_SAVE_DELAY_MS: u32 = 500;
 const SAVED_MS: u32 = 2200;
@@ -216,8 +248,6 @@ thread_local! {
 }
 
 struct Controls {
-    /// What the Search page has to say about an alias or a hotkey being changed there.
-    search_note: HWND,
     hotkey: HWND,
     hotkey_note: HWND,
     login: HWND,
@@ -241,7 +271,10 @@ struct Controls {
     link_icons: HWND,
     exchange_rates: HWND,
     copy_formatted: HWND,
-    weather: HWND,
+    check_updates: HWND,
+    /// Where an update has got to, and what its button does now.
+    update_status: HWND,
+    update_button: HWND,
     hotkey_list: HWND,
     hotkeys_note: HWND,
     action_search: HWND,
@@ -258,8 +291,6 @@ struct Controls {
     clip_persist: HWND,
     clip_images: HWND,
     expansion: HWND,
-    op_on: HWND,
-    ente_on: HWND,
     op_status: HWND,
     op_note: HWND,
     ente_status: HWND,
@@ -270,6 +301,93 @@ struct Controls {
     hidden_note: HWND,
     hidden_button: HWND,
     suggest: HWND,
+    ext: ExtControls,
+}
+
+/// The Extensions page's details, under its table.
+struct ExtControls {
+    /// Everything's own settings, which mean nothing while it's off.
+    in_search: HWND,
+    sort: HWND,
+    everything_children: Vec<HWND>,
+    everything_status: HWND,
+    everything_button: HWND,
+    github_status: HWND,
+    github_button: HWND,
+    /// The folder each Remove button takes away, by the button's id.
+    removes: Vec<(i32, std::path::PathBuf)>,
+}
+
+/// GitHub's tool is being installed from Settings.
+const ID_GITHUB: i32 = 153;
+/// GitHub's tool was installed, or its sign-in window closed. A message to say may come with it.
+const WM_SETTINGS_GITHUB: u32 = WM_APP + 52;
+
+thread_local! {
+    static GITHUB_BUSY: Cell<bool> = const { Cell::new(false) };
+}
+
+/// What GitHub's tool row says, and what its button does.
+fn github_row() -> (String, &'static str, bool) {
+    use crate::providers::GitHubState;
+    if GITHUB_BUSY.with(|busy| busy.get()) {
+        return ("Installing with Windows Package Manager. This can take a minute.".into(), LABEL_INSTALLING, false);
+    }
+    match crate::providers::github_state() {
+        GitHubState::NotInstalled if integrations::winget().is_some() => ("Not installed. Orbit can install it with Windows Package Manager.".into(), "Install", true),
+        GitHubState::NotInstalled => ("Not installed. Get it from cli.github.com.".into(), "Website", true),
+        GitHubState::SignedOut => ("Installed, not signed in. GitHub's sign-in opens in your browser.".into(), "Sign in\u{2026}", true),
+        GitHubState::SignedIn(login) => (format!("Signed in as {login}."), "Sign in again\u{2026}", true),
+    }
+}
+
+fn refresh_github_row(s: &mut State) {
+    let (text, label, can_press) = github_row();
+    let (status, button) = (s.controls.ext.github_status, s.controls.ext.github_button);
+    forms::set_text_only(status, &text);
+    set_text(button, label);
+    if !can_press {
+        move_focus_off(s, button);
+    }
+    unsafe {
+        let _ = EnableWindow(button, can_press);
+        let _ = InvalidateRect(Some(button), None, false);
+    }
+}
+
+fn github_pressed(s: &mut State, hwnd: HWND) {
+    use crate::providers::GitHubState;
+    let reply = crate::util::SendHwnd::new(hwnd);
+    match crate::providers::github_state() {
+        GitHubState::NotInstalled if integrations::winget().is_none() => {
+            crate::launch::spawn(crate::launch::LaunchRequest::open("https://cli.github.com/"), s.context.main, crate::app::WM_ORBIT_LAUNCH_FAILED);
+        }
+        GitHubState::NotInstalled => {
+            GITHUB_BUSY.with(|busy| busy.set(true));
+            refresh_github_row(s);
+            let _ = std::thread::Builder::new().name("orbit-github-install".into()).spawn(move || {
+                let (message, _) = crate::providers::install_gh();
+                reply.post(WM_SETTINGS_GITHUB, crate::util::box_for_post(message), 0);
+            });
+        }
+        GitHubState::SignedOut | GitHubState::SignedIn(_) => {
+            let done = move || reply.post(WM_SETTINGS_GITHUB, 0, 0);
+            match crate::providers::open_gh_sign_in(done) {
+                Ok(()) => show_status(s, "GitHub's sign-in is open in a terminal window.", MESSAGE_MS),
+                Err(why) => show_problem(s, &why),
+            }
+        }
+    }
+}
+
+/// What AI Usage can find on this PC, for its card.
+fn ai_usage_found() -> String {
+    let found: Vec<&str> = crate::providers::ai_services_found().iter().map(|service| service.app()).collect();
+    match found.as_slice() {
+        [] => "Neither Claude Code nor Codex is signed in on this PC yet. Sign in to either, and it shows up here.".into(),
+        [one] => format!("Found {one} on this PC."),
+        many => format!("Found {} on this PC.", many.join(" and ")),
+    }
 }
 
 /// A drop-down of sensible values. One set by hand in settings.json is offered too, so that opening
@@ -396,10 +514,12 @@ pub fn tool_done(tool: Tool, message: &str, succeeded: bool) -> bool {
     let Some(s) = CURRENT.with(|c| c.get()).and_then(state) else { return false };
     refresh_tool_row(s, tool);
     // Having just installed it, the user wants to see it, and once it's gone there's nothing to
-    // show. One that failed leaves the switch as the user had it.
-    let switch = if tool == Tool::OnePassword { s.controls.op_on } else { s.controls.ente_on };
+    // show. One that failed leaves it as the user had it.
     if succeeded {
-        forms::set_checked(switch, installing);
+        let ext = if tool == Tool::OnePassword { BuiltinExt::OnePassword } else { BuiltinExt::EnteAuth };
+        ext.set_on(&mut s.base, installing);
+        refresh_tables(s);
+        redraw_tables(s);
     }
     if tool == Tool::EnteAuth && installing && succeeded {
         integrations::check_ente_account(s.context.main, WM_ORBIT_ENTE_ACCOUNT);
@@ -470,11 +590,28 @@ struct ManagedList {
     empty: &'static str,
 }
 
-/// The kinds of thing the Search page lists, in the order it lists them.
-const SEARCH_GROUPS: [&str; 5] = ["Orbit commands", "Apps", "Quicklinks", "Your commands", "Integrations"];
+/// The kinds of thing the Search page lists, in the order it lists them. Each extension that's on
+/// has a group of its own after these.
+const SEARCH_GROUPS: [&str; 4] = ["Orbit commands", "Apps", "Quicklinks", "Your commands"];
 const GROUP_LINKS: usize = 2;
 const GROUP_COMMANDS: usize = 3;
+/// The first extension's group: those that come with Orbit, in order, then those from folders. An
+/// extension's group is this plus its place in the Extensions page's table.
+const GROUP_EXTENSIONS: usize = 4;
 const SEARCH_HINT: &str = "Press the keys you want. Backspace removes the hotkey, and Esc cancels.";
+/// Everything's key. Its alias is a keyword too: typed with a space after it, it searches files.
+pub const FILES_KEY: &str = "cmd:files";
+
+/// The two tables of things to give an alias or a hotkey: the Search page's, of everything the
+/// launcher finds, and the Extensions page's, of extensions and their commands.
+const TABLE_SEARCH: usize = 0;
+const TABLE_EXTENSIONS: usize = 1;
+/// The Extensions table's first row, which names its columns.
+const COLUMN_TITLES: usize = usize::MAX;
+const EXT_TITLES_DIP: i32 = 30;
+const EXT_ROW_DIP: i32 = 56;
+const EXT_COMMAND_DIP: i32 = 40;
+const EXT_TILE_DIP: i32 = 30;
 
 /// Something that can come up when searching in Orbit, which the Search page can turn off, give
 /// an alias, or give a hotkey.
@@ -483,25 +620,208 @@ struct SearchItem {
     key: String,
     name: String,
     group: usize,
+    /// The group's heading.
+    group_name: String,
     icon: Option<u64>,
     tile: Tile,
     /// What a hotkey for it runs. `None` for what can't have one, such as something that asks first.
     action: Option<Action>,
+    /// For a command that opens a list, its own keyword: its alias is that keyword, which also
+    /// opens the list with what's typed after it and a space.
+    keyword: Option<String>,
 }
 
-/// One row of the Search page's list.
+/// An extension, as the Extensions page's table shows it.
+struct ExtEntry {
+    /// What turns it on: a built-in one's id, or a folder extension's.
+    id: String,
+    builtin: Option<BuiltinExt>,
+    name: String,
+    /// One short line on what it does.
+    about: String,
+    glyph: char,
+}
+
+/// Every extension Orbit has, those it comes with first, then those from folders.
+fn ext_entries(installed: &[crate::extensions::Installed]) -> Vec<ExtEntry> {
+    let mut entries: Vec<ExtEntry> = BuiltinExt::ALL
+        .into_iter()
+        .map(|ext| ExtEntry { id: ext.id().to_string(), builtin: Some(ext), name: ext.name().to_string(), about: ext.about().to_string(), glyph: crate::rows::extension_glyph(ext) })
+        .collect();
+    entries.extend(installed.iter().map(|extension| {
+        let manifest = &extension.manifest;
+        let about = if !manifest.description.is_empty() {
+            manifest.description.clone()
+        } else if !manifest.author.is_empty() {
+            format!("By {}", manifest.author)
+        } else {
+            "Added from a folder".to_string()
+        };
+        ExtEntry { id: extension.id().to_string(), builtin: None, name: manifest.name.clone(), about, glyph: crate::rows::GLYPH_EXTENSION }
+    }));
+    entries
+}
+
+fn ext_is_on(settings: &Settings, entry: &ExtEntry) -> bool {
+    match entry.builtin {
+        Some(ext) => ext.is_on(settings),
+        None => settings.extensions.enabled.iter().any(|id| *id == entry.id),
+    }
+}
+
+/// The tile colour of an extension, for its card's badge.
+fn ext_color(glyph: char) -> crate::gfx::Rgb {
+    let (light, deep) = crate::rows::tile_colors(glyph);
+    light.mix(deep, 0.5)
+}
+
+/// Every extension's commands, on or off, as items, each extension in a group of its own.
+fn extension_search_items(installed: &[crate::extensions::Installed]) -> Vec<SearchItem> {
+    let mut items = Vec::new();
+    for (at, ext) in BuiltinExt::ALL.into_iter().enumerate() {
+        let group = GROUP_EXTENSIONS + at;
+        let item = |key: String, name: &str, glyph: char, action: Action, keyword: Option<&str>| SearchItem {
+            key,
+            name: name.to_string(),
+            group,
+            group_name: ext.name().to_string(),
+            icon: None,
+            tile: Tile::Glyph(glyph),
+            action: Some(action),
+            keyword: keyword.map(str::to_string),
+        };
+        for &command in ext.builtins() {
+            let Some(&(_, key, title, _, _)) = Builtin::ALL.iter().find(|entry| entry.0 == command) else { continue };
+            // Everything has no keyword of its own, until it's given an alias.
+            let keyword = (key == FILES_KEY).then_some("");
+            items.push(item(key.to_string(), title, crate::catalog::glyph_for_builtin(command), Action::Builtin { command }, keyword));
+        }
+        if let Some(tool) = Tool::of_extension(ext) {
+            items.push(item(tool.key().to_string(), tool.name(), tool.glyph(), tool.action(), None));
+        }
+        for command in ext.list_commands() {
+            let action = Action::Extension { ext: ext.id().to_string(), command: command.id.to_string() };
+            items.push(item(crate::catalog::extension_key(ext.id(), command.id), command.title, crate::rows::extension_glyph(ext), action, Some(command.keyword)));
+        }
+    }
+    for (at, extension) in installed.iter().enumerate() {
+        for spec in &extension.manifest.commands {
+            items.push(SearchItem {
+                key: crate::catalog::extension_key(extension.id(), &spec.id),
+                name: spec.title.clone(),
+                group: GROUP_EXTENSIONS + BuiltinExt::ALL.len() + at,
+                group_name: extension.manifest.name.clone(),
+                icon: None,
+                tile: Tile::Glyph(crate::rows::GLYPH_EXTENSION),
+                action: Some(Action::Extension { ext: extension.id().to_string(), command: spec.id.clone() }),
+                keyword: (spec.mode == orbit_core::extension::Mode::List).then(|| spec.keyword.clone()),
+            });
+        }
+    }
+    items
+}
+
+/// An extension's commands, as places in `items`.
+fn ext_commands(items: &[SearchItem], e: usize) -> Vec<usize> {
+    (0..items.len()).filter(|&at| items[at].group == GROUP_EXTENSIONS + e).collect()
+}
+
+/// A group's heading on the Search page.
+fn group_title(items: &[SearchItem], group: usize) -> &str {
+    match SEARCH_GROUPS.get(group) {
+        Some(title) => title,
+        None => items.iter().find(|item| item.group == group).map_or("", |item| item.group_name.as_str()),
+    }
+}
+
+/// What an item answers to when typed: its keyword, for a command that opens a list, or its alias.
+fn alias_of(settings: &Settings, item: &SearchItem) -> String {
+    match &item.keyword {
+        Some(own) => item_keyword(settings, &item.key, own),
+        None => item_alias(settings, &item.key),
+    }
+}
+
+/// The keyword that opens a list: the one set, or its own. An empty one set means none.
+fn item_keyword(settings: &Settings, key: &str, own: &str) -> String {
+    if key == FILES_KEY {
+        return settings.extensions.everything.alias.clone();
+    }
+    let id = key.strip_prefix("ext:").unwrap_or(key);
+    settings.extensions.keywords.get(id).cloned().unwrap_or_else(|| own.to_string())
+}
+
+/// Sets the keyword that opens a list, where the launcher reads it.
+pub fn set_item_keyword(settings: &mut Settings, key: &str, keyword: &str) {
+    if key == FILES_KEY {
+        settings.extensions.everything.alias = keyword.to_string();
+    } else if let Some(id) = key.strip_prefix("ext:") {
+        settings.extensions.keywords.insert(id.to_string(), keyword.to_string());
+    }
+}
+
+/// Gives an item what it answers to, a keyword or an alias, in Settings' copy and in what was last
+/// saved, and tells the launcher. Both tables show it.
+fn change_alias(s: &mut State, item: usize, typed: &str) {
+    let key = s.search_items[item].key.clone();
+    let keyword = s.search_items[item].keyword.is_some();
+    for settings in [&mut s.base, &mut s.last_saved] {
+        if keyword {
+            set_item_keyword(settings, &key, typed);
+        } else {
+            set_item_alias(settings, &key, typed);
+        }
+    }
+    s.context.main.post(WM_ORBIT_SET_ALIAS, crate::util::box_for_post((key, typed.to_string(), keyword)), 0);
+    redraw_tables(s);
+}
+
+/// One row of a table.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum SearchRow {
+    /// A group's heading, or the Extensions table's column titles.
     Header(usize),
     Item(usize),
+    /// An extension, by its place in the Extensions table.
+    Extension(usize),
 }
 
-/// The parts of a Search row that do something, left to right.
+/// The parts of a row that do something, left to right.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum SearchCell {
     Alias,
     Hotkey,
     Switch,
+}
+
+/// A table of things to give an alias or a hotkey, and to turn on and off.
+struct Table {
+    filter: HWND,
+    list: HWND,
+    /// What it has to say about an alias or a hotkey being changed in it.
+    note: HWND,
+    rows: Vec<SearchRow>,
+    /// It's filled the first time its page shows, so it costs nothing until then.
+    filled: bool,
+    /// The row under the pointer, and which of its parts.
+    hover: Option<(usize, Option<SearchCell>)>,
+    tracking: bool,
+    /// The part of the chosen row that the keyboard acts on.
+    cell: SearchCell,
+    /// The box for typing an alias, and the row it's open on.
+    alias_edit: HWND,
+    alias_row: Option<usize>,
+}
+
+impl Table {
+    fn new(filter: HWND, list: HWND, note: HWND, alias_edit: HWND) -> Table {
+        Table { filter, list, note, rows: Vec::new(), filled: false, hover: None, tracking: false, cell: SearchCell::Switch, alias_edit, alias_row: None }
+    }
+}
+
+/// The table a list or its alias box belongs to.
+fn table_of(s: &State, control: HWND) -> Option<usize> {
+    s.tables.iter().position(|table| table.list == control || table.alias_edit == control)
 }
 
 /// The quicklinks and commands you made, as Search page items.
@@ -510,45 +830,55 @@ fn own_search_items(settings: &Settings) -> Vec<SearchItem> {
         key: crate::catalog::link_key(&link.id),
         name: link.name.clone(),
         group: GROUP_LINKS,
+        group_name: SEARCH_GROUPS[GROUP_LINKS].to_string(),
         icon: None,
         tile: Tile::Glyph(GLYPH_LINK),
         action: Some(Action::Url { url: link.url.clone() }),
+        keyword: None,
     });
     let commands = settings.custom_commands.iter().map(|command| SearchItem {
         key: crate::catalog::custom_key(&command.id),
         name: command.name.clone(),
         group: GROUP_COMMANDS,
+        group_name: SEARCH_GROUPS[GROUP_COMMANDS].to_string(),
         icon: None,
         tile: Tile::Glyph(GLYPH_COMMAND),
         action: Some(Action::Custom { id: command.id.clone() }),
+        keyword: None,
     });
     links.chain(commands).collect()
 }
 
-/// Everything the launcher can find, grouped and in name order.
-fn search_items(apps: &[crate::indexer::AppEntry], settings: &Settings) -> Vec<SearchItem> {
+/// Everything the launcher can find, grouped and in name order, with every extension's commands
+/// whether it's on or not. The Search page shows those of extensions that are on.
+fn search_items(apps: &[crate::indexer::AppEntry], settings: &Settings, installed: &[crate::extensions::Installed]) -> Vec<SearchItem> {
     let mut items: Vec<SearchItem> = Builtin::ALL
         .iter()
+        .filter(|entry| BuiltinExt::of_builtin(entry.0).is_none())
         .map(|&(command, key, title, _, _)| SearchItem {
             key: key.to_string(),
             name: title.to_string(),
             group: 0,
+            group_name: SEARCH_GROUPS[0].to_string(),
             icon: None,
             tile: Tile::Glyph(crate::catalog::glyph_for_builtin(command)),
             // What asks first in the launcher shouldn't be a key away.
             action: (!command.needs_confirmation()).then_some(Action::Builtin { command }),
+            keyword: None,
         })
         .collect();
     items.extend(apps.iter().map(|app| SearchItem {
         key: crate::catalog::app_key(&app.id),
         name: app.name.clone(),
         group: 1,
+        group_name: SEARCH_GROUPS[1].to_string(),
         icon: Some(crate::indexer::icon_hash(&app.id)),
         tile: forms::letter_tile(&app.name),
         action: Some(Action::FocusOrLaunchApp { id: app.id.clone(), name: app.name.clone() }),
+        keyword: None,
     }));
     items.extend(own_search_items(settings));
-    items.extend(Tool::ALL.iter().map(|tool| SearchItem { key: tool.key().to_string(), name: tool.name().to_string(), group: 4, icon: None, tile: Tile::Glyph(GLYPH_KEY), action: None }));
+    items.extend(extension_search_items(installed));
     sort_search_items(&mut items);
     items
 }
@@ -557,13 +887,28 @@ fn sort_search_items(items: &mut [SearchItem]) {
     items.sort_by_cached_key(|item| (item.group, item.name.to_lowercase()));
 }
 
-/// The rows for what's typed in the filter: each group that has a match, under its heading. An
-/// alias counts as a match too.
-fn search_rows(items: &[SearchItem], settings: &Settings, query: &str) -> Vec<SearchRow> {
+/// Whether a group is shown on the Search page: all of Orbit's own are, and an extension's is
+/// while it's on.
+fn group_on(settings: &Settings, entries: &[ExtEntry], group: usize) -> bool {
+    group < GROUP_EXTENSIONS || entries.get(group - GROUP_EXTENSIONS).is_some_and(|entry| ext_is_on(settings, entry))
+}
+
+/// The Search page's rows for what's typed in its filter: each group that has a match, under its
+/// heading. An alias counts as a match too, and so does the start of an extension's name, for all
+/// of its commands.
+fn search_rows(items: &[SearchItem], entries: &[ExtEntry], settings: &Settings, query: &str) -> Vec<SearchRow> {
     let query = query.trim().to_lowercase();
-    let matches = |item: &SearchItem| query.is_empty() || item.name.to_lowercase().contains(&query) || item_alias(settings, &item.key).to_lowercase() == query;
+    let matches = |item: &SearchItem| {
+        query.is_empty()
+            || item.name.to_lowercase().contains(&query)
+            || alias_of(settings, item).to_lowercase() == query
+            || (item.group >= GROUP_EXTENSIONS && query.chars().count() >= 2 && item.group_name.to_lowercase().starts_with(&query))
+    };
+    let mut groups: Vec<usize> = items.iter().map(|item| item.group).filter(|group| group_on(settings, entries, *group)).collect();
+    groups.sort_unstable();
+    groups.dedup();
     let mut rows = Vec::new();
-    for group in 0..SEARCH_GROUPS.len() {
+    for group in groups {
         let matching: Vec<usize> = (0..items.len()).filter(|&at| items[at].group == group && matches(&items[at])).collect();
         if !matching.is_empty() {
             rows.push(SearchRow::Header(group));
@@ -571,6 +916,27 @@ fn search_rows(items: &[SearchItem], settings: &Settings, query: &str) -> Vec<Se
         }
     }
     rows
+}
+
+/// The Extensions table's rows for what's typed in its filter: the column titles, then each
+/// extension that matches. One that's on and has more than one command has them under it.
+fn extension_rows(items: &[SearchItem], entries: &[ExtEntry], settings: &Settings, query: &str) -> Vec<SearchRow> {
+    let query = query.trim().to_lowercase();
+    let mut rows = vec![SearchRow::Header(COLUMN_TITLES)];
+    for (e, entry) in entries.iter().enumerate() {
+        let commands = ext_commands(items, e);
+        let named = query.is_empty() || entry.name.to_lowercase().contains(&query) || entry.about.to_lowercase().contains(&query);
+        let matching: Vec<usize> =
+            commands.iter().copied().filter(|&at| named || items[at].name.to_lowercase().contains(&query) || alias_of(settings, &items[at]).to_lowercase() == query).collect();
+        if !named && matching.is_empty() {
+            continue;
+        }
+        rows.push(SearchRow::Extension(e));
+        if ext_is_on(settings, entry) && commands.len() > 1 {
+            rows.extend(matching.into_iter().map(SearchRow::Item));
+        }
+    }
+    if rows.len() == 1 { Vec::new() } else { rows }
 }
 
 /// The alias an item answers to: a quicklink's or command's own, or one given to it since.
@@ -596,7 +962,7 @@ fn item_hotkey(settings: &Settings, action: &Action) -> Option<String> {
         .or_else(|| settings.shortcuts.iter().find(|binding| same_target(&binding.action, action)).map(|binding| binding.chord.display("Win")))
 }
 
-/// Where a Search row's alias, hotkey and switch go, as left and right edges, in a list this wide.
+/// Where a row's alias, hotkey and switch go, as left and right edges, in a list this wide.
 fn search_columns(dpi: u32, width: i32) -> [(i32, i32); 3] {
     let px = |value: i32| forms::scale(value, dpi);
     let narrow = width < px(520);
@@ -622,6 +988,46 @@ fn search_cell_at(dpi: u32, width: i32, x: i32) -> Option<SearchCell> {
     }
 }
 
+/// The command whose alias and hotkey a row shows: its own, or an extension's only one.
+fn row_command(s: &State, t: usize, at: usize) -> Option<usize> {
+    match *s.tables[t].rows.get(at)? {
+        SearchRow::Item(item) => Some(item),
+        SearchRow::Extension(e) => {
+            let commands = ext_commands(&s.search_items, e);
+            (commands.len() == 1).then(|| commands[0])
+        }
+        SearchRow::Header(_) => None,
+    }
+}
+
+/// The command a row changes, which an extension's row has only while the extension is on.
+fn row_item(s: &State, t: usize, at: usize) -> Option<usize> {
+    let item = row_command(s, t, at)?;
+    match s.tables[t].rows[at] {
+        SearchRow::Extension(e) if !ext_is_on(&s.base, &s.ext_entries[e]) => None,
+        _ => Some(item),
+    }
+}
+
+/// The parts of a row that do something, left to right. A command under an extension has no
+/// switch, since the extension's own turns it on and off.
+fn row_cells(s: &State, t: usize, at: usize) -> &'static [SearchCell] {
+    const ALL: &[SearchCell] = &[SearchCell::Alias, SearchCell::Hotkey, SearchCell::Switch];
+    match s.tables[t].rows.get(at) {
+        Some(SearchRow::Item(_)) if t == TABLE_SEARCH => ALL,
+        Some(SearchRow::Item(_)) => &ALL[..2],
+        Some(SearchRow::Extension(_)) if row_item(s, t, at).is_some() => ALL,
+        Some(SearchRow::Extension(_)) => &ALL[2..],
+        _ => &[],
+    }
+}
+
+/// The part of a row the keyboard is on: the table's, if the row has it, or else its last part.
+fn current_cell(s: &State, t: usize, at: usize) -> Option<SearchCell> {
+    let cells = row_cells(s, t, at);
+    if cells.contains(&s.tables[t].cell) { Some(s.tables[t].cell) } else { cells.last().copied() }
+}
+
 /// Why an alias can't be used for this item, if it can't.
 fn alias_problem(s: &State, key: &str, alias: &str) -> Option<String> {
     if alias.chars().any(char::is_whitespace) {
@@ -635,67 +1041,114 @@ fn alias_problem(s: &State, key: &str, alias: &str) -> Option<String> {
     }
     s.search_items
         .iter()
-        .find(|item| item.key != key && item_alias(&s.base, &item.key).eq_ignore_ascii_case(alias))
+        .find(|item| item.key != key && alias_of(&s.base, item).eq_ignore_ascii_case(alias))
         .map(|item| format!("\u{201C}{}\u{201D} already uses that alias.", item.name))
 }
 
-/// Says something under the Search page's description, or nothing.
-fn say_search_note(s: &mut State, text: &str, alert: bool) {
-    let note = s.controls.search_note;
+/// Says something above a table, or nothing.
+fn say_table_note(s: &mut State, t: usize, text: &str, alert: bool) {
+    let note = s.tables[t].note;
     s.style.set_alert(note, alert);
     set_note_text(s, note, text);
 }
 
-/// Fills the Search page's list from the filter, and sizes it to fit.
-fn refresh_search_list(s: &mut State) {
-    let list = s.search_list;
-    s.search_filled = true;
-    finish_alias_edit(s, false);
+/// How tall a row is, in DIP.
+fn table_row_dip(s: &State, t: usize, at: usize) -> i32 {
+    if t == TABLE_SEARCH {
+        return HOTKEY_ROW_DIP;
+    }
+    match s.tables[t].rows.get(at) {
+        Some(SearchRow::Header(_)) => EXT_TITLES_DIP,
+        Some(SearchRow::Extension(_)) => EXT_ROW_DIP,
+        _ => EXT_COMMAND_DIP,
+    }
+}
+
+/// Fills a table from its filter, and sizes it to fit.
+fn refresh_table(s: &mut State, t: usize) {
+    finish_alias_edit(s, t, false);
+    let list = s.tables[t].list;
+    s.tables[t].filled = true;
     let chosen = unsafe { SendMessageW(list, LB_GETCURSEL, None, None) }.0;
-    s.search_rows = search_rows(&s.search_items, &s.base, &get_text(s.search_filter));
-    s.search_hover = None;
+    let query = get_text(s.tables[t].filter);
+    s.tables[t].rows = if t == TABLE_SEARCH {
+        search_rows(&s.search_items, &s.ext_entries, &s.base, &query)
+    } else {
+        extension_rows(&s.search_items, &s.ext_entries, &s.base, &query)
+    };
+    s.tables[t].hover = None;
     unsafe {
         SendMessageW(list, WM_SETREDRAW, Some(WPARAM(0)), None);
         SendMessageW(list, LB_RESETCONTENT, None, None);
-        for row in &s.search_rows {
-            let text = match row {
-                SearchRow::Header(group) => SEARCH_GROUPS[*group].to_string(),
-                SearchRow::Item(at) => search_row_text(s, *at),
-            };
-            let text = wide(&text);
+        for at in 0..s.tables[t].rows.len() {
+            let text = wide(&search_row_text(s, t, at));
             SendMessageW(list, LB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
         }
-        if chosen >= 0 && !s.search_rows.is_empty() {
-            let at = (chosen as usize).min(s.search_rows.len() - 1);
-            let at = nearest_search_row(&s.search_rows, at, 1).unwrap_or(at);
+        let rows = &s.tables[t].rows;
+        if chosen >= 0 && !rows.is_empty() {
+            let at = (chosen as usize).min(rows.len() - 1);
+            let at = nearest_search_row(rows, at, 1).unwrap_or(at);
             SendMessageW(list, LB_SETCURSEL, Some(WPARAM(at)), None);
         }
         SendMessageW(list, WM_SETREDRAW, Some(WPARAM(1)), None);
     }
-    let height = forms::scale(HOTKEY_ROW_DIP * s.search_rows.len().max(1) as i32, s.style.dpi);
+    let dip = if s.tables[t].rows.is_empty() { HOTKEY_ROW_DIP } else { (0..s.tables[t].rows.len()).map(|at| table_row_dip(s, t, at)).sum() };
+    let height = forms::scale(dip, s.style.dpi);
     resize_on_page(s, list, height);
     unsafe {
         let _ = InvalidateRect(Some(list), None, true);
     }
 }
 
-/// What a screen reader hears for a row.
-fn search_row_text(s: &State, at: usize) -> String {
-    let item = &s.search_items[at];
-    let mut text = format!("{}, {}", item.name, if s.base.hidden.contains(&item.key) { "off" } else { "on" });
-    let alias = item_alias(&s.base, &item.key);
-    if !alias.is_empty() {
-        text.push_str(&format!(", alias {alias}"));
+/// Both tables again, where they've been filled, after what they list changed.
+fn refresh_tables(s: &mut State) {
+    for t in [TABLE_SEARCH, TABLE_EXTENSIONS] {
+        if s.tables[t].filled {
+            refresh_table(s, t);
+        }
     }
-    if let Some(keys) = item.action.as_ref().and_then(|action| item_hotkey(&s.base, action)) {
-        text.push_str(&format!(", hotkey {keys}"));
+}
+
+/// Both tables show what an item answers to, so both are drawn again when it changes.
+fn redraw_tables(s: &State) {
+    for table in &s.tables {
+        unsafe {
+            let _ = InvalidateRect(Some(table.list), None, false);
+        }
+    }
+}
+
+/// What a screen reader hears for a row.
+fn search_row_text(s: &State, t: usize, at: usize) -> String {
+    let mut text = match s.tables[t].rows[at] {
+        SearchRow::Header(COLUMN_TITLES) => return "Extension, alias, hotkey, on".to_string(),
+        SearchRow::Header(group) => return group_title(&s.search_items, group).to_string(),
+        SearchRow::Item(item) if t == TABLE_SEARCH => {
+            let entry = &s.search_items[item];
+            format!("{}, {}", entry.name, if s.base.hidden.contains(&entry.key) { "off" } else { "on" })
+        }
+        SearchRow::Item(item) => s.search_items[item].name.clone(),
+        SearchRow::Extension(e) => {
+            let entry = &s.ext_entries[e];
+            format!("{}, {}, {}", entry.name, if ext_is_on(&s.base, entry) { "on" } else { "off" }, entry.about)
+        }
+    };
+    if let Some(item) = row_item(s, t, at) {
+        let entry = &s.search_items[item];
+        let alias = alias_of(&s.base, entry);
+        if !alias.is_empty() {
+            text.push_str(&format!(", alias {alias}"));
+        }
+        if let Some(keys) = entry.action.as_ref().and_then(|action| item_hotkey(&s.base, action)) {
+            text.push_str(&format!(", hotkey {keys}"));
+        }
     }
     text
 }
 
-/// The first item row going this way from `from`, or the other way if there's none.
+/// The first row going this way from `from` that isn't a heading, or the other way if there's none.
 fn nearest_search_row(rows: &[SearchRow], from: usize, step: isize) -> Option<usize> {
-    let usable = |at: isize| at >= 0 && (at as usize) < rows.len() && matches!(rows[at as usize], SearchRow::Item(_));
+    let usable = |at: isize| at >= 0 && (at as usize) < rows.len() && !matches!(rows[at as usize], SearchRow::Header(_));
     for direction in [step, -step] {
         let mut at = from as isize;
         while at >= 0 && (at as usize) < rows.len() {
@@ -708,35 +1161,39 @@ fn nearest_search_row(rows: &[SearchRow], from: usize, step: isize) -> Option<us
     None
 }
 
-fn redraw_search_row(s: &State, at: usize) {
+fn redraw_table_row(s: &State, t: usize, at: usize) {
+    let list = s.tables[t].list;
     unsafe {
         let mut row = RECT::default();
-        if SendMessageW(s.search_list, LB_GETITEMRECT, Some(WPARAM(at)), Some(LPARAM(&mut row as *mut RECT as isize))).0 >= 0 {
-            let _ = InvalidateRect(Some(s.search_list), Some(&row), false);
+        if SendMessageW(list, LB_GETITEMRECT, Some(WPARAM(at)), Some(LPARAM(&mut row as *mut RECT as isize))).0 >= 0 {
+            let _ = InvalidateRect(Some(list), Some(&row), false);
         }
     }
 }
 
 /// The row's text changed, so a screen reader hears the new one.
-fn retext_search_row(s: &State, at: usize) {
-    let Some(SearchRow::Item(item)) = s.search_rows.get(at).copied() else { return };
-    let text = wide(&search_row_text(s, item));
-    unsafe {
-        let chosen = SendMessageW(s.search_list, LB_GETCURSEL, None, None).0;
-        SendMessageW(s.search_list, WM_SETREDRAW, Some(WPARAM(0)), None);
-        SendMessageW(s.search_list, LB_DELETESTRING, Some(WPARAM(at)), None);
-        SendMessageW(s.search_list, LB_INSERTSTRING, Some(WPARAM(at)), Some(LPARAM(text.as_ptr() as isize)));
-        if chosen >= 0 {
-            SendMessageW(s.search_list, LB_SETCURSEL, Some(WPARAM(chosen as usize)), None);
-        }
-        SendMessageW(s.search_list, WM_SETREDRAW, Some(WPARAM(1)), None);
+fn retext_table_row(s: &State, t: usize, at: usize) {
+    if at >= s.tables[t].rows.len() {
+        return;
     }
-    redraw_search_row(s, at);
+    let list = s.tables[t].list;
+    let text = wide(&search_row_text(s, t, at));
+    unsafe {
+        let chosen = SendMessageW(list, LB_GETCURSEL, None, None).0;
+        SendMessageW(list, WM_SETREDRAW, Some(WPARAM(0)), None);
+        SendMessageW(list, LB_DELETESTRING, Some(WPARAM(at)), None);
+        SendMessageW(list, LB_INSERTSTRING, Some(WPARAM(at)), Some(LPARAM(text.as_ptr() as isize)));
+        if chosen >= 0 {
+            SendMessageW(list, LB_SETCURSEL, Some(WPARAM(chosen as usize)), None);
+        }
+        SendMessageW(list, WM_SETREDRAW, Some(WPARAM(1)), None);
+    }
+    redraw_table_row(s, t, at);
 }
 
-/// Turns a row's item on or off. The launcher keeps the list and says when it changes.
+/// Turns a Search row's item on or off. The launcher keeps the list and says when it changes.
 fn toggle_search_row(s: &mut State, at: usize) {
-    let Some(SearchRow::Item(item)) = s.search_rows.get(at).copied() else { return };
+    let Some(SearchRow::Item(item)) = s.tables[TABLE_SEARCH].rows.get(at).copied() else { return };
     let key = s.search_items[item].key.clone();
     let hide = !s.base.hidden.contains(&key);
     if hide {
@@ -750,86 +1207,128 @@ fn toggle_search_row(s: &mut State, at: usize) {
     unsafe {
         let _ = EnableWindow(s.controls.hidden_button, !s.base.hidden.is_empty());
     }
-    retext_search_row(s, at);
+    retext_table_row(s, TABLE_SEARCH, at);
+}
+
+/// The tool an extension can't be turned on without, while it isn't installed.
+fn missing_tool(entry: &ExtEntry) -> Option<Tool> {
+    entry.builtin.and_then(Tool::of_extension).filter(|tool| integrations::find(*tool).is_none())
+}
+
+/// Turns an extension on or off. Its commands come and go with it, on both tables.
+fn switch_extension(s: &mut State, e: usize) {
+    let entry = &s.ext_entries[e];
+    let on = !ext_is_on(&s.base, entry);
+    if on && let Some(tool) = missing_tool(entry) {
+        let text = format!("{} needs its command-line tool. Install it from {}'s card, below.", entry.name, tool.name());
+        say_table_note(s, TABLE_EXTENSIONS, &text, false);
+        return;
+    }
+    match entry.builtin {
+        Some(ext) => ext.set_on(&mut s.base, on),
+        None => {
+            let id = entry.id.clone();
+            s.base.extensions.enabled.retain(|enabled| *enabled != id);
+            if on {
+                s.base.extensions.enabled.push(id);
+            }
+        }
+    }
+    say_table_note(s, TABLE_EXTENSIONS, "", false);
+    refresh_tables(s);
+    apply_dependents(s);
+    save_soon(s, 1);
 }
 
 /// Does what a row's part is for: edit the alias, listen for a hotkey, or turn it on or off.
-fn act_on_search_cell(s: &mut State, at: usize, cell: SearchCell) {
-    s.search_cell = cell;
-    match cell {
-        SearchCell::Alias => start_alias_edit(s, at),
-        SearchCell::Hotkey => start_search_record(s, at),
-        SearchCell::Switch => toggle_search_row(s, at),
+fn act_on_cell(s: &mut State, t: usize, at: usize, cell: SearchCell) {
+    if !row_cells(s, t, at).contains(&cell) {
+        return;
     }
-    redraw_search_row(s, at);
+    s.tables[t].cell = cell;
+    match (cell, s.tables[t].rows[at]) {
+        (SearchCell::Alias, _) => start_alias_edit(s, t, at),
+        (SearchCell::Hotkey, _) => start_search_record(s, t, at),
+        (SearchCell::Switch, SearchRow::Extension(e)) => switch_extension(s, e),
+        (SearchCell::Switch, _) => toggle_search_row(s, at),
+    }
+    redraw_table_row(s, t, at);
+}
+
+/// Takes away a row's alias, from the keyboard.
+fn remove_alias(s: &mut State, t: usize, at: usize) {
+    let Some(item) = row_item(s, t, at) else { return };
+    if !alias_of(&s.base, &s.search_items[item]).is_empty() {
+        change_alias(s, item, "");
+        show_status(s, "Alias removed", SAVED_MS);
+        retext_table_row(s, t, at);
+    }
 }
 
 /// Opens the box for a row's alias, over its alias column.
-fn start_alias_edit(s: &mut State, at: usize) {
-    let Some(SearchRow::Item(item)) = s.search_rows.get(at).copied() else { return };
+fn start_alias_edit(s: &mut State, t: usize, at: usize) {
+    let Some(item) = row_item(s, t, at) else { return };
     stop_hotkey_record(s);
-    finish_alias_edit(s, true);
+    for other in [TABLE_SEARCH, TABLE_EXTENSIONS] {
+        finish_alias_edit(s, other, true);
+    }
     let dpi = s.style.dpi;
     let px = |value: i32| forms::scale(value, dpi);
+    let (list, edit) = (s.tables[t].list, s.tables[t].alias_edit);
     let mut row = RECT::default();
     unsafe {
-        if SendMessageW(s.search_list, LB_GETITEMRECT, Some(WPARAM(at)), Some(LPARAM(&mut row as *mut RECT as isize))).0 < 0 {
+        if SendMessageW(list, LB_GETITEMRECT, Some(WPARAM(at)), Some(LPARAM(&mut row as *mut RECT as isize))).0 < 0 {
             return;
         }
-        SendMessageW(s.search_list, LB_SETCURSEL, Some(WPARAM(at)), None);
+        SendMessageW(list, LB_SETCURSEL, Some(WPARAM(at)), None);
     }
     let [alias, _, _] = search_columns(s.style.dpi, row.right - row.left);
     let box_height = px(20);
     let middle = (row.top + row.bottom) / 2;
-    let text = item_alias(&s.base, &s.search_items[item].key);
-    s.alias_row = Some(at);
-    s.search_cell = SearchCell::Alias;
-    say_search_note(s, "Type an alias, then press Enter. Esc cancels, and an empty one removes it.", false);
+    let text = alias_of(&s.base, &s.search_items[item]);
+    s.tables[t].alias_row = Some(at);
+    s.tables[t].cell = SearchCell::Alias;
+    say_table_note(s, t, "Type an alias, then press Enter. Esc cancels, and an empty one removes it.", false);
     unsafe {
-        let _ = SetWindowPos(s.alias_edit, Some(HWND_TOP), alias.0 + px(10), middle - box_height / 2, alias.1 - alias.0 - px(16), box_height, SWP_SHOWWINDOW);
-        set_text(s.alias_edit, &text);
-        SendMessageW(s.alias_edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
-        let _ = SetFocus(Some(s.alias_edit));
+        let _ = SetWindowPos(edit, Some(HWND_TOP), alias.0 + px(10), middle - box_height / 2, alias.1 - alias.0 - px(16), box_height, SWP_SHOWWINDOW);
+        set_text(edit, &text);
+        SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+        let _ = SetFocus(Some(edit));
     }
-    redraw_search_row(s, at);
+    redraw_table_row(s, t, at);
 }
 
-/// Closes the alias box, keeping what's in it if `keep` and it can be used. Gives false if it
-/// can't, and the box stays open to fix it.
-fn finish_alias_edit(s: &mut State, keep: bool) -> bool {
-    let Some(at) = s.alias_row else { return true };
-    let Some(SearchRow::Item(item)) = s.search_rows.get(at).copied() else {
-        s.alias_row = None;
-        unsafe {
-            let _ = ShowWindow(s.alias_edit, SW_HIDE);
-        }
-        return true;
-    };
-    let key = s.search_items[item].key.clone();
-    let typed = get_text(s.alias_edit).trim().to_string();
-    if keep {
+/// Closes a table's alias box, keeping what's in it if `keep` and it can be used. Gives false if
+/// it can't, and the box stays open to fix it.
+fn finish_alias_edit(s: &mut State, t: usize, keep: bool) -> bool {
+    let Some(at) = s.tables[t].alias_row else { return true };
+    let (list, edit) = (s.tables[t].list, s.tables[t].alias_edit);
+    let item = if keep { row_item(s, t, at).filter(|item| *item < s.search_items.len()) } else { None };
+    let typed = get_text(edit).trim().to_string();
+    if let Some(item) = item {
+        let key = s.search_items[item].key.clone();
         if let Some(problem) = alias_problem(s, &key, &typed) {
-            say_search_note(s, &problem, true);
+            say_table_note(s, t, &problem, true);
             return false;
         }
     }
-    s.alias_row = None;
-    say_search_note(s, "", false);
-    let had_focus = unsafe { GetFocus() } == s.alias_edit;
+    s.tables[t].alias_row = None;
+    say_table_note(s, t, "", false);
+    let had_focus = unsafe { GetFocus() } == edit;
     unsafe {
         if had_focus {
-            let _ = SetFocus(Some(s.search_list));
+            let _ = SetFocus(Some(list));
         }
-        let _ = ShowWindow(s.alias_edit, SW_HIDE);
+        let _ = ShowWindow(edit, SW_HIDE);
     }
-    if keep && typed != item_alias(&s.base, &key) {
-        set_item_alias(&mut s.base, &key, &typed);
-        set_item_alias(&mut s.last_saved, &key, &typed);
-        s.context.main.post(WM_ORBIT_SET_ALIAS, crate::util::box_for_post((key, typed.clone())), 0);
+    if let Some(item) = item
+        && typed != alias_of(&s.base, &s.search_items[item])
+    {
+        change_alias(s, item, &typed);
         show_status(s, if typed.is_empty() { "Alias removed" } else { "Alias saved" }, SAVED_MS);
-        retext_search_row(s, at);
+        retext_table_row(s, t, at);
     }
-    redraw_search_row(s, at);
+    redraw_table_row(s, t, at);
     true
 }
 
@@ -852,16 +1351,18 @@ pub fn set_item_alias(settings: &mut Settings, key: &str, alias: &str) {
 }
 
 /// Starts listening for a row's hotkey, in the row itself.
-fn start_search_record(s: &mut State, at: usize) {
-    let Some(SearchRow::Item(item)) = s.search_rows.get(at).copied() else { return };
-    finish_alias_edit(s, true);
+fn start_search_record(s: &mut State, t: usize, at: usize) {
+    let Some(item) = row_item(s, t, at) else { return };
+    for other in [TABLE_SEARCH, TABLE_EXTENSIONS] {
+        finish_alias_edit(s, other, true);
+    }
     let Some(action) = s.search_items[item].action.clone() else {
-        say_search_note(s, "This can't have a hotkey, because it asks before it does anything.", false);
+        say_table_note(s, t, "This can't have a hotkey, because it asks before it does anything.", false);
         return;
     };
     let starting = s.hotkey_target.is_none();
     s.hotkey_target = Some(RecordTarget::New(action));
-    s.search_recording = Some(s.search_items[item].key.clone());
+    s.search_recording = Some((t, s.search_items[item].key.clone()));
     s.hotkey_problem = None;
     s.hotkey_asking = None;
     s.held_keys.clear();
@@ -869,13 +1370,13 @@ fn start_search_record(s: &mut State, at: usize) {
         pause_shortcuts(s, true);
     }
     say_hotkey_problem(s, None);
-    forms::focus(s.search_list);
-    redraw_search_row(s, at);
+    forms::focus(s.tables[t].list);
+    redraw_table_row(s, t, at);
 }
 
 /// Takes away whatever hotkey runs a row's item.
-fn remove_search_hotkey(s: &mut State, at: usize) {
-    let Some(SearchRow::Item(item)) = s.search_rows.get(at).copied() else { return };
+fn remove_search_hotkey(s: &mut State, t: usize, at: usize) {
+    let Some(item) = row_item(s, t, at) else { return };
     let Some(action) = s.search_items[item].action.clone() else { return };
     let before = s.base.hyper.bindings.len() + s.base.shortcuts.len();
     s.base.hyper.bindings.retain(|binding| !same_target(&binding.action, &action));
@@ -884,23 +1385,25 @@ fn remove_search_hotkey(s: &mut State, at: usize) {
         refresh_hotkey_list(s);
         fill_hotkey_text(s);
         save_soon(s, 1);
-        retext_search_row(s, at);
+        retext_table_row(s, t, at);
+        redraw_tables(s);
     }
 }
 
-/// The row whose item is listening for its hotkey, if one is.
-fn search_recording_row(s: &State) -> Option<usize> {
-    let key = s.search_recording.as_ref()?;
-    s.search_rows.iter().position(|row| matches!(row, SearchRow::Item(at) if s.search_items[*at].key == *key))
+/// The table and row whose item is listening for its hotkey, if one is.
+fn search_recording_row(s: &State) -> Option<(usize, usize)> {
+    let (t, key) = s.search_recording.as_ref()?;
+    let at = (0..s.tables[*t].rows.len()).find(|&at| row_item(s, *t, at).is_some_and(|item| s.search_items[item].key == *key))?;
+    Some((*t, at))
 }
 
-fn draw_search_item(s: &mut State, item: &DRAWITEMSTRUCT) {
+fn draw_table_item(s: &mut State, t: usize, item: &DRAWITEMSTRUCT) {
     let (width, height) = (item.rcItem.right - item.rcItem.left, item.rcItem.bottom - item.rcItem.top);
     let Some(mut buffer) = Backbuffer::new(width, height) else { return };
     let dpi = s.style.dpi;
     let px = |value: i32| forms::scale(value, dpi);
     let at = item.itemID as usize;
-    let row = s.search_rows.get(at).copied();
+    let row = s.tables[t].rows.get(at).copied();
     let tile_size = px(PICKER_ICON_DIP);
     let pixels = match row {
         Some(SearchRow::Item(at)) => s.search_items[at].icon.and_then(|hash| icon_pixels(s, hash, tile_size as usize)),
@@ -909,25 +1412,32 @@ fn draw_search_item(s: &mut State, item: &DRAWITEMSTRUCT) {
     let s: &State = s;
     let style = &s.style;
     let theme = &style.theme;
+    let table = &s.tables[t];
     buffer.fill(theme.card);
     let [alias_col, hotkey_col, switch_col] = search_columns(dpi, width);
     let middle = height / 2;
     match row {
         Some(SearchRow::Header(group)) => {
-            let top = height / 3;
-            buffer.text(SEARCH_GROUPS[group], style.small, theme.secondary, RECT { left: px(8), top, right: alias_col.0 - px(8), bottom: height }, false);
+            let (title, switch_title, top) = if group == COLUMN_TITLES { ("Extension", "On", 0) } else { (group_title(&s.search_items, group), "Shown", height / 3) };
+            let ink = if group == COLUMN_TITLES { theme.tertiary } else { theme.secondary };
+            buffer.text(title, style.small, ink, RECT { left: px(8), top, right: alias_col.0 - px(8), bottom: height }, false);
             buffer.text("Alias", style.small, theme.tertiary, RECT { left: alias_col.0 + px(10), top, right: alias_col.1, bottom: height }, false);
             buffer.text("Hotkey", style.small, theme.tertiary, RECT { left: hotkey_col.0 + px(10), top, right: hotkey_col.1, bottom: height }, false);
-            buffer.text("Shown", style.small, theme.tertiary, RECT { left: switch_col.0 - px(20), top, right: switch_col.1, bottom: height }, true);
+            buffer.text(switch_title, style.small, theme.tertiary, RECT { left: switch_col.0 - px(20), top, right: switch_col.1, bottom: height }, true);
+            if group == COLUMN_TITLES {
+                let rule = 1.max(dpi as i32 / 96);
+                buffer.fill_round_rect(0, height - rule, width, rule, 0.0, theme.divider);
+            }
         }
-        Some(SearchRow::Item(index)) => {
-            let entry = &s.search_items[index];
-            let on = !s.base.hidden.contains(&entry.key);
-            let focused = unsafe { GetFocus() } == s.search_list;
-            let editing = s.alias_row == Some(at);
-            let recording = search_recording_row(s) == Some(at);
+        Some(row) => {
+            let command = row_command(s, t, at);
+            let active = row_item(s, t, at).is_some();
+            let cells = row_cells(s, t, at);
+            let focused = unsafe { GetFocus() } == table.list;
+            let editing = table.alias_row == Some(at);
+            let recording = search_recording_row(s) == Some((t, at));
             let chosen = item.itemState.0 & ODS_SELECTED.0 != 0 && (focused || editing);
-            let hover = s.search_hover.filter(|hover| hover.0 == at).map(|hover| hover.1);
+            let hover = table.hover.filter(|hover| hover.0 == at).map(|hover| hover.1);
             let surface = if chosen {
                 theme.selection
             } else if hover.is_some() {
@@ -938,16 +1448,44 @@ fn draw_search_item(s: &mut State, item: &DRAWITEMSTRUCT) {
             if surface != theme.card {
                 buffer.fill_round_rect(0, px(2), width, height - px(4), px(forms::RADIUS_SELECTION) as f32, surface);
             }
-            let (tile_x, tile_y) = (px(8), (height - tile_size) / 2);
-            match pixels {
-                Some(pixels) => buffer.blit_premultiplied(tile_x, tile_y, tile_size, &pixels),
-                None => draw_small_tile(style, &mut buffer, (tile_x, tile_y, tile_size), entry.tile, if chosen { theme.keycap_on_selection } else { theme.keycap }),
-            }
-            let text_left = tile_x + tile_size + px(10);
-            let ink = if on { theme.text } else { theme.secondary };
-            buffer.text(&entry.name, style.font, ink, RECT { left: text_left, top: 0, right: alias_col.0 - px(10), bottom: height }, false);
-
             let cap = if chosen { theme.keycap_on_selection } else { theme.keycap };
+            let on = match row {
+                SearchRow::Item(index) if t == TABLE_SEARCH => !s.base.hidden.contains(&s.search_items[index].key),
+                SearchRow::Extension(e) => ext_is_on(&s.base, &s.ext_entries[e]),
+                _ => true,
+            };
+            let ink = if on { theme.text } else { theme.secondary };
+            // An extension with several commands has them in rows of their own, so its own row's
+            // words can run on to the switch.
+            let name_right = if command.is_none() { switch_col.0 - px(20) } else { alias_col.0 - px(10) };
+            match row {
+                SearchRow::Extension(e) => {
+                    let entry = &s.ext_entries[e];
+                    let size = px(EXT_TILE_DIP);
+                    let (tile_x, tile_y) = (px(8), (height - size) / 2);
+                    draw_small_tile(style, &mut buffer, (tile_x, tile_y, size), Tile::Glyph(entry.glyph), cap);
+                    let text_left = tile_x + size + px(12);
+                    // Geist's line box is a little tall, so the line under the name sits closer.
+                    let (name_height, about_height) = (px(19), px(16));
+                    let top = middle - (name_height + about_height) / 2;
+                    buffer.text(&entry.name, style.font, ink, RECT { left: text_left, top, right: name_right, bottom: top + name_height }, false);
+                    buffer.text(&entry.about, style.small, theme.secondary, RECT { left: text_left, top: top + name_height, right: name_right, bottom: top + name_height + about_height }, false);
+                }
+                SearchRow::Item(index) => {
+                    let entry = &s.search_items[index];
+                    // A command sits under its extension's name.
+                    let indent = if t == TABLE_EXTENSIONS { px(EXT_TILE_DIP) + px(12) } else { 0 };
+                    let (tile_x, tile_y) = (px(8) + indent, (height - tile_size) / 2);
+                    match pixels {
+                        Some(pixels) => buffer.blit_premultiplied(tile_x, tile_y, tile_size, &pixels),
+                        None => draw_small_tile(style, &mut buffer, (tile_x, tile_y, tile_size), entry.tile, cap),
+                    }
+                    let text_left = tile_x + tile_size + px(10);
+                    buffer.text(&entry.name, style.font, ink, RECT { left: text_left, top: 0, right: name_right, bottom: height }, false);
+                }
+                SearchRow::Header(_) => {}
+            }
+
             let field_height = px(26);
             let field_top = middle - field_height / 2;
             let radius = px(forms::RADIUS_ROW) as f32;
@@ -962,103 +1500,115 @@ fn draw_search_item(s: &mut State, item: &DRAWITEMSTRUCT) {
                 buffer.fill_round_rect(left - inset * 2, field_top - inset * 2, right - left + inset * 4, field_height + inset * 4, radius + 2.0, theme.text);
                 buffer.fill_round_rect(left - inset, field_top - inset, right - left + inset * 2, field_height + inset * 2, radius + 1.0, surface);
             };
-            let keyboard_here = |cell: SearchCell| chosen && focused && style.focus_by_keyboard && s.search_cell == cell && !recording;
+            let keyboard_cell = if chosen && focused && style.focus_by_keyboard && !recording { current_cell(s, t, at) } else { None };
+            let keyboard_here = |cell: SearchCell| keyboard_cell == Some(cell);
+            // What a part offers when there's nothing in it yet, under the pointer or the keyboard.
+            let offer = |buffer: &mut Backbuffer, col: (i32, i32), text: &str, lit: bool| {
+                if lit {
+                    buffer.fill_round_rect(col.0, field_top, col.1 - col.0, field_height, radius, cap.mix(surface, 0.5));
+                }
+                let color = if lit { theme.secondary } else { theme.tertiary };
+                buffer.text(text, style.small, color, RECT { left: col.0 + px(10), top: field_top, right: col.1 - px(4), bottom: field_top + field_height }, false);
+            };
 
-            // Alias.
-            let alias = item_alias(&s.base, &entry.key);
-            if editing {
-                field(&mut buffer, alias_col);
-            } else {
-                let lit = hover == Some(Some(SearchCell::Alias));
-                let pill = if alias.is_empty() {
-                    None
-                } else {
-                    let room = alias_col.1 - alias_col.0;
-                    Some((alias_col.0, alias_col.0 + (buffer.text_width(&alias, style.small) + px(20)).min(room)))
-                };
-                let span = pill.unwrap_or(alias_col);
-                if keyboard_here(SearchCell::Alias) {
-                    ring(&mut buffer, span);
-                }
-                match pill {
-                    Some(pill) => {
-                        buffer.fill_round_rect(pill.0, field_top, pill.1 - pill.0, field_height, radius, if lit { cap.mix(theme.text, 0.15) } else { cap });
-                        buffer.text(&alias, style.small, ink, RECT { left: pill.0 + px(10), top: field_top, right: pill.1 - px(6), bottom: field_top + field_height }, false);
-                    }
-                    None if lit || keyboard_here(SearchCell::Alias) => {
-                        buffer.fill_round_rect(alias_col.0, field_top, alias_col.1 - alias_col.0, field_height, radius, cap.mix(surface, 0.5));
-                        buffer.text("Add alias", style.small, theme.secondary, RECT { left: alias_col.0 + px(10), top: field_top, right: alias_col.1 - px(4), bottom: field_top + field_height }, false);
-                    }
-                    None if hover.is_some() || chosen => {
-                        buffer.text("Add alias", style.small, theme.tertiary, RECT { left: alias_col.0 + px(10), top: field_top, right: alias_col.1 - px(4), bottom: field_top + field_height }, false);
-                    }
-                    None => {}
-                }
-            }
+            if let Some(index) = command {
+                let entry = &s.search_items[index];
+                // An extension that's off shows what its command answers to, quietly.
+                let ink = if active { ink } else { theme.tertiary };
+                let wants = |cell: SearchCell| active && (hover.is_some() || chosen) && cells.contains(&cell);
 
-            // Hotkey.
-            if recording {
-                field(&mut buffer, hotkey_col);
-                let shown = if s.held_keys.is_empty() { s.hotkey_asking.as_ref().map(|hotkey| hotkey.label("Win")).unwrap_or_default() } else { s.held_keys.clone() };
-                if shown.is_empty() {
-                    buffer.text("Press keys\u{2026}", style.small, theme.accent, RECT { left: hotkey_col.0 + px(10), top: field_top, right: hotkey_col.1 - px(4), bottom: field_top + field_height }, false);
+                // Alias.
+                let alias = alias_of(&s.base, entry);
+                if editing {
+                    field(&mut buffer, alias_col);
                 } else {
-                    crate::ui::draw_keycaps(&mut buffer, &shown, hotkey_col.0 + px(6), middle, style.small, style.icon_small, (theme.keycap, 255), theme.text, dpi);
+                    let lit = active && hover == Some(Some(SearchCell::Alias));
+                    let pill = if alias.is_empty() {
+                        None
+                    } else {
+                        let room = alias_col.1 - alias_col.0;
+                        Some((alias_col.0, alias_col.0 + (buffer.text_width(&alias, style.small) + px(20)).min(room)))
+                    };
+                    if keyboard_here(SearchCell::Alias) {
+                        ring(&mut buffer, pill.unwrap_or(alias_col));
+                    }
+                    match pill {
+                        Some(pill) => {
+                            buffer.fill_round_rect(pill.0, field_top, pill.1 - pill.0, field_height, radius, if lit { cap.mix(theme.text, 0.15) } else { cap });
+                            buffer.text(&alias, style.small, ink, RECT { left: pill.0 + px(10), top: field_top, right: pill.1 - px(6), bottom: field_top + field_height }, false);
+                        }
+                        None if wants(SearchCell::Alias) => offer(&mut buffer, alias_col, "Add alias", lit || keyboard_here(SearchCell::Alias)),
+                        None => {}
+                    }
                 }
-            } else if let Some(action) = &entry.action {
-                let lit = hover == Some(Some(SearchCell::Hotkey));
-                match item_hotkey(&s.base, action) {
-                    Some(keys) => {
-                        let caps = crate::ui::keycaps_width(&buffer, &keys, style.small, style.icon_small, dpi);
-                        // Long ones run into the space before the switch, never over it.
-                        let x = hotkey_col.0.min(switch_col.0 - px(12) - caps);
-                        if keyboard_here(SearchCell::Hotkey) {
-                            ring(&mut buffer, (x, x + caps));
+
+                // Hotkey.
+                if recording {
+                    field(&mut buffer, hotkey_col);
+                    let shown = if s.held_keys.is_empty() { s.hotkey_asking.as_ref().map(|hotkey| hotkey.label("Win")).unwrap_or_default() } else { s.held_keys.clone() };
+                    if shown.is_empty() {
+                        buffer.text("Press keys\u{2026}", style.small, theme.accent, RECT { left: hotkey_col.0 + px(10), top: field_top, right: hotkey_col.1 - px(4), bottom: field_top + field_height }, false);
+                    } else {
+                        crate::ui::draw_keycaps(&mut buffer, &shown, hotkey_col.0 + px(6), middle, style.small, style.icon_small, (theme.keycap, 255), theme.text, dpi);
+                    }
+                } else if let Some(action) = &entry.action {
+                    let lit = active && hover == Some(Some(SearchCell::Hotkey));
+                    match item_hotkey(&s.base, action) {
+                        Some(keys) => {
+                            let caps = crate::ui::keycaps_width(&buffer, &keys, style.small, style.icon_small, dpi);
+                            // Long ones run into the space before the switch, never over it.
+                            let x = hotkey_col.0.min(switch_col.0 - px(12) - caps);
+                            if keyboard_here(SearchCell::Hotkey) {
+                                ring(&mut buffer, (x, x + caps));
+                            }
+                            let fill = if lit { cap.mix(theme.text, 0.15) } else { cap };
+                            crate::ui::draw_keycaps(&mut buffer, &keys, x, middle, style.small, style.icon_small, (fill, 255), ink, dpi);
                         }
-                        let fill = if lit { cap.mix(theme.text, 0.15) } else { cap };
-                        crate::ui::draw_keycaps(&mut buffer, &keys, x, middle, style.small, style.icon_small, (fill, 255), ink, dpi);
-                    }
-                    None if lit || keyboard_here(SearchCell::Hotkey) => {
-                        if keyboard_here(SearchCell::Hotkey) {
-                            ring(&mut buffer, hotkey_col);
+                        None if wants(SearchCell::Hotkey) => {
+                            if keyboard_here(SearchCell::Hotkey) {
+                                ring(&mut buffer, hotkey_col);
+                            }
+                            offer(&mut buffer, hotkey_col, "Record hotkey", lit || keyboard_here(SearchCell::Hotkey));
                         }
-                        buffer.fill_round_rect(hotkey_col.0, field_top, hotkey_col.1 - hotkey_col.0, field_height, radius, cap.mix(surface, 0.5));
-                        buffer.text("Record hotkey", style.small, theme.secondary, RECT { left: hotkey_col.0 + px(10), top: field_top, right: hotkey_col.1 - px(4), bottom: field_top + field_height }, false);
+                        None => {}
                     }
-                    None if hover.is_some() || chosen => {
-                        buffer.text("Record hotkey", style.small, theme.tertiary, RECT { left: hotkey_col.0 + px(10), top: field_top, right: hotkey_col.1 - px(4), bottom: field_top + field_height }, false);
-                    }
-                    None => {}
                 }
             }
 
             // On or off.
-            let switch_top = middle - px(10);
-            if keyboard_here(SearchCell::Switch) {
-                let ring_px = px(2);
-                buffer.fill_round_rect(switch_col.0 - ring_px, switch_top - ring_px, px(36) + ring_px * 2, px(20) + ring_px * 2, (px(10) + ring_px) as f32, theme.text);
-                buffer.fill_round_rect(switch_col.0 - ring_px / 2, switch_top - ring_px / 2, px(36) + ring_px, px(20) + ring_px, px(10) as f32, surface);
+            if cells.contains(&SearchCell::Switch) {
+                let switch_top = middle - px(10);
+                if keyboard_here(SearchCell::Switch) {
+                    let ring_px = px(2);
+                    buffer.fill_round_rect(switch_col.0 - ring_px, switch_top - ring_px, px(36) + ring_px * 2, px(20) + ring_px * 2, (px(10) + ring_px) as f32, theme.text);
+                    buffer.fill_round_rect(switch_col.0 - ring_px / 2, switch_top - ring_px / 2, px(36) + ring_px, px(20) + ring_px, px(10) as f32, surface);
+                }
+                // One that needs a tool first looks it, and says why when it's pressed.
+                let waiting = matches!(row, SearchRow::Extension(e) if !on && missing_tool(&s.ext_entries[e]).is_some());
+                style.draw_switch(&mut buffer, switch_col.0, switch_top, on, waiting, surface);
             }
-            style.draw_switch(&mut buffer, switch_col.0, switch_top, on, false, surface);
         }
         None => {}
     }
     buffer.copy_to_dc_at(item.hDC, item.rcItem.left, item.rcItem.top);
 }
 
-/// The Search page's list. A click on a row's alias, hotkey or switch changes it. From the keyboard,
-/// Left and Right move between those, and Enter or Space changes the one that's lit.
-unsafe extern "system" fn search_list_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+/// A table's list. A click on a row's alias, hotkey or switch changes it. From the keyboard, Left
+/// and Right move between those, and Enter or Space changes the one that's lit.
+unsafe extern "system" fn table_list_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
     unsafe {
         if message == WM_NCDESTROY {
-            let _ = RemoveWindowSubclass(hwnd, Some(search_list_proc), SEARCH_LIST_SUBCLASS);
+            let _ = RemoveWindowSubclass(hwnd, Some(table_list_proc), SEARCH_LIST_SUBCLASS);
             return DefSubclassProc(hwnd, message, wparam, lparam);
         }
         let Some(s) = state(GetAncestor(hwnd, GA_ROOT)) else {
             return DefSubclassProc(hwnd, message, wparam, lparam);
         };
+        let Some(t) = table_of(s, hwnd) else {
+            return DefSubclassProc(hwnd, message, wparam, lparam);
+        };
         let key = wparam.0 as u16;
-        let recording = s.search_recording.is_some() && s.hotkey_target.is_some();
+        let recording = s.search_recording.as_ref().is_some_and(|(at, _)| *at == t) && s.hotkey_target.is_some();
         if s.swallow_keys && swallow_after_recording(s, message, lparam) {
             return LRESULT(0);
         }
@@ -1070,11 +1620,11 @@ unsafe extern "system" fn search_list_proc(hwnd: HWND, message: u32, wparam: WPA
         let x_of = |lparam: LPARAM| (lparam.0 & 0xFFFF) as i16 as i32;
         let chosen = || SendMessageW(hwnd, LB_GETCURSEL, None, None).0;
         match message {
-            WM_PAINT if s.search_rows.is_empty() => {
+            WM_PAINT if s.tables[t].rows.is_empty() => {
                 s.style.paint_empty_list(hwnd, "Nothing matches that.");
                 LRESULT(0)
             }
-            WM_ERASEBKGND if s.search_rows.is_empty() => LRESULT(1),
+            WM_ERASEBKGND if s.tables[t].rows.is_empty() => LRESULT(1),
             // The alias box sits on the list, so its colours are asked for here.
             WM_CTLCOLOREDIT => s.style.handle(hwnd, message, wparam, lparam).unwrap_or_else(|| DefSubclassProc(hwnd, message, wparam, lparam)),
             WM_GETDLGCODE => {
@@ -1097,10 +1647,10 @@ unsafe extern "system" fn search_list_proc(hwnd: HWND, message: u32, wparam: WPA
                     stop_hotkey_record(s);
                     s.swallow_keys = true;
                 } else if plain && (key == VK_BACK.0 || key == VK_DELETE.0) {
-                    let at = search_recording_row(s);
+                    let row = search_recording_row(s);
                     stop_hotkey_record(s);
-                    if let Some(at) = at {
-                        remove_search_hotkey(s, at);
+                    if let Some((t, at)) = row {
+                        remove_search_hotkey(s, t, at);
                     }
                     s.swallow_keys = true;
                 } else if let Some((mods, name)) = pressed_keys(key) {
@@ -1124,60 +1674,51 @@ unsafe extern "system" fn search_list_proc(hwnd: HWND, message: u32, wparam: WPA
             WM_CHAR if wparam.0 == 0x20 || wparam.0 == 0x0D || wparam.0 == 0x08 => LRESULT(0),
             WM_KEYDOWN => {
                 let at = chosen();
-                let cells = [SearchCell::Alias, SearchCell::Hotkey, SearchCell::Switch];
-                let place = cells.iter().position(|cell| *cell == s.search_cell).unwrap_or(2);
                 if key == VK_LEFT.0 || key == VK_RIGHT.0 {
-                    let next = if key == VK_LEFT.0 { place.saturating_sub(1) } else { (place + 1).min(2) };
-                    s.search_cell = cells[next];
-                    set_focus_rings(s, true);
                     if at >= 0 {
-                        redraw_search_row(s, at as usize);
+                        let cells = row_cells(s, t, at as usize);
+                        let place = current_cell(s, t, at as usize).and_then(|cell| cells.iter().position(|c| *c == cell));
+                        if let Some(place) = place {
+                            let next = if key == VK_LEFT.0 { place.saturating_sub(1) } else { (place + 1).min(cells.len() - 1) };
+                            s.tables[t].cell = cells[next];
+                        }
+                        set_focus_rings(s, true);
+                        redraw_table_row(s, t, at as usize);
                     }
                     return LRESULT(0);
                 }
                 if key == VK_UP.0 || key == VK_DOWN.0 {
                     let step: isize = if key == VK_DOWN.0 { 1 } else { -1 };
                     let from = at.max(0) + step;
-                    let found = (from >= 0 && (from as usize) < s.search_rows.len())
-                        .then(|| nearest_search_row(&s.search_rows, from as usize, step))
-                        .flatten()
-                        .filter(|next| (*next as isize - at) * step > 0);
+                    let rows = &s.tables[t].rows;
+                    let found = (from >= 0 && (from as usize) < rows.len()).then(|| nearest_search_row(rows, from as usize, step)).flatten().filter(|next| (*next as isize - at) * step > 0);
                     match found {
                         Some(next) => {
                             SendMessageW(hwnd, LB_SETCURSEL, Some(WPARAM(next)), None);
                             reveal_list_row(s, hwnd);
                         }
                         None if step < 0 => {
-                            let _ = SetFocus(Some(s.search_filter));
+                            let _ = SetFocus(Some(s.tables[t].filter));
                         }
                         None => {}
                     }
                     return LRESULT(0);
                 }
                 if at >= 0 && (key == VK_RETURN.0 || key == VK_SPACE.0) {
-                    act_on_search_cell(s, at as usize, s.search_cell);
+                    if let Some(cell) = current_cell(s, t, at as usize) {
+                        act_on_cell(s, t, at as usize, cell);
+                    }
                     return LRESULT(0);
                 }
                 if at >= 0 && key == VK_F2.0 {
-                    act_on_search_cell(s, at as usize, SearchCell::Alias);
+                    act_on_cell(s, t, at as usize, SearchCell::Alias);
                     return LRESULT(0);
                 }
                 if at >= 0 && (key == VK_DELETE.0 || key == VK_BACK.0) {
-                    match s.search_cell {
-                        SearchCell::Alias => {
-                            if let Some(SearchRow::Item(item)) = s.search_rows.get(at as usize).copied() {
-                                let key = s.search_items[item].key.clone();
-                                if !item_alias(&s.base, &key).is_empty() {
-                                    set_item_alias(&mut s.base, &key, "");
-                                    set_item_alias(&mut s.last_saved, &key, "");
-                                    s.context.main.post(WM_ORBIT_SET_ALIAS, crate::util::box_for_post((key, String::new())), 0);
-                                    show_status(s, "Alias removed", SAVED_MS);
-                                    retext_search_row(s, at as usize);
-                                }
-                            }
-                        }
-                        SearchCell::Hotkey => remove_search_hotkey(s, at as usize),
-                        SearchCell::Switch => {}
+                    match current_cell(s, t, at as usize) {
+                        Some(SearchCell::Alias) => remove_alias(s, t, at as usize),
+                        Some(SearchCell::Hotkey) => remove_search_hotkey(s, t, at as usize),
+                        _ => {}
                     }
                     return LRESULT(0);
                 }
@@ -1188,7 +1729,7 @@ unsafe extern "system" fn search_list_proc(hwnd: HWND, message: u32, wparam: WPA
                 if message == WM_KILLFOCUS && recording {
                     stop_hotkey_record(s);
                 } else if message == WM_SETFOCUS && chosen() < 0 {
-                    if let Some(first) = nearest_search_row(&s.search_rows, 0, 1) {
+                    if let Some(first) = nearest_search_row(&s.tables[t].rows, 0, 1) {
                         SendMessageW(hwnd, LB_SETCURSEL, Some(WPARAM(first)), None);
                     }
                 }
@@ -1197,24 +1738,25 @@ unsafe extern "system" fn search_list_proc(hwnd: HWND, message: u32, wparam: WPA
             }
             WM_MOUSEMOVE => {
                 let row = picker_row_at(hwnd, lparam);
-                let hover = (row >= 0 && matches!(s.search_rows.get(row as usize), Some(SearchRow::Item(_)))).then(|| (row as usize, search_cell_at(s.style.dpi, width(), x_of(lparam))));
-                if hover != s.search_hover {
-                    for old in [s.search_hover.map(|h| h.0), hover.map(|h| h.0)].into_iter().flatten() {
-                        redraw_search_row(s, old);
+                let hover = (row >= 0 && matches!(s.tables[t].rows.get(row as usize), Some(SearchRow::Item(_) | SearchRow::Extension(_))))
+                    .then(|| (row as usize, search_cell_at(s.style.dpi, width(), x_of(lparam)).filter(|cell| row_cells(s, t, row as usize).contains(cell))));
+                if hover != s.tables[t].hover {
+                    for old in [s.tables[t].hover.map(|h| h.0), hover.map(|h| h.0)].into_iter().flatten() {
+                        redraw_table_row(s, t, old);
                     }
-                    s.search_hover = hover;
+                    s.tables[t].hover = hover;
                 }
-                if !s.search_tracking {
-                    s.search_tracking = true;
+                if !s.tables[t].tracking {
+                    s.tables[t].tracking = true;
                     let mut track = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
                     let _ = TrackMouseEvent(&mut track);
                 }
                 DefSubclassProc(hwnd, message, wparam, lparam)
             }
             WM_MOUSELEAVE => {
-                s.search_tracking = false;
-                if let Some((old, _)) = s.search_hover.take() {
-                    redraw_search_row(s, old);
+                s.tables[t].tracking = false;
+                if let Some((old, _)) = s.tables[t].hover.take() {
+                    redraw_table_row(s, t, old);
                 }
                 LRESULT(0)
             }
@@ -1224,12 +1766,12 @@ unsafe extern "system" fn search_list_proc(hwnd: HWND, message: u32, wparam: WPA
                     stop_hotkey_record(s);
                 }
                 // A heading can't be chosen, so the press never reaches the list.
-                if !matches!(s.search_rows.get(row.max(0) as usize), Some(SearchRow::Item(_))) || row < 0 {
+                if row < 0 || matches!(s.tables[t].rows.get(row as usize), Some(SearchRow::Header(_)) | None) {
                     return LRESULT(0);
                 }
                 let result = DefSubclassProc(hwnd, message, wparam, lparam);
                 if let Some(cell) = search_cell_at(s.style.dpi, width(), x_of(lparam)) {
-                    act_on_search_cell(s, row as usize, cell);
+                    act_on_cell(s, t, row as usize, cell);
                 }
                 result
             }
@@ -1238,7 +1780,7 @@ unsafe extern "system" fn search_list_proc(hwnd: HWND, message: u32, wparam: WPA
     }
 }
 
-/// The box for an alias, over the Search list: Enter keeps it, Esc puts it back, and Tab keeps it
+/// The box for an alias, over a table's list: Enter keeps it, Esc puts it back, and Tab keeps it
 /// and goes back to the list.
 unsafe extern "system" fn alias_edit_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
     unsafe {
@@ -1249,15 +1791,18 @@ unsafe extern "system" fn alias_edit_proc(hwnd: HWND, message: u32, wparam: WPAR
         let Some(s) = state(GetAncestor(hwnd, GA_ROOT)) else {
             return DefSubclassProc(hwnd, message, wparam, lparam);
         };
+        let Some(t) = table_of(s, hwnd) else {
+            return DefSubclassProc(hwnd, message, wparam, lparam);
+        };
         let key = wparam.0 as u16;
         match message {
             WM_GETDLGCODE => LRESULT(DLGC_WANTALLKEYS as isize | DefSubclassProc(hwnd, message, wparam, lparam).0),
             WM_KEYDOWN if key == VK_RETURN.0 || key == VK_TAB.0 => {
-                finish_alias_edit(s, true);
+                finish_alias_edit(s, t, true);
                 LRESULT(0)
             }
             WM_KEYDOWN if key == VK_ESCAPE.0 => {
-                finish_alias_edit(s, false);
+                finish_alias_edit(s, t, false);
                 LRESULT(0)
             }
             // A space can't be in an alias, so it isn't typed.
@@ -1265,15 +1810,42 @@ unsafe extern "system" fn alias_edit_proc(hwnd: HWND, message: u32, wparam: WPAR
             WM_KILLFOCUS => {
                 let result = DefSubclassProc(hwnd, message, wparam, lparam);
                 // Leaving with something that can't be used puts back what was there.
-                if !finish_alias_edit(s, true) {
-                    let problem = get_text(s.controls.search_note);
-                    finish_alias_edit(s, false);
-                    say_search_note(s, &problem, true);
+                if !finish_alias_edit(s, t, true) {
+                    let problem = get_text(s.tables[t].note);
+                    finish_alias_edit(s, t, false);
+                    say_table_note(s, t, &problem, true);
                 }
                 result
             }
             _ => DefSubclassProc(hwnd, message, wparam, lparam),
         }
+    }
+}
+
+/// The box an alias is typed in, which lives on a table's list over the row being changed, and
+/// hides until then.
+unsafe fn alias_box(list: HWND, font: HFONT, id: i32) -> HWND {
+    unsafe {
+        SetWindowLongPtrW(list, GWL_STYLE, GetWindowLongPtrW(list, GWL_STYLE) | WS_CLIPCHILDREN.0 as isize);
+        let edit = CreateWindowExW(
+            WS_EX_NOPARENTNOTIFY,
+            w!("EDIT"),
+            None,
+            WS_CHILD | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
+            0,
+            0,
+            0,
+            0,
+            Some(list),
+            Some(HMENU(id as isize as *mut _)),
+            None,
+            None,
+        )
+        .unwrap_or_default();
+        SendMessageW(edit, WM_SETFONT, Some(WPARAM(font.0 as usize)), Some(LPARAM(0)));
+        // As long as an alias can be.
+        SendMessageW(edit, 0x00C5, Some(WPARAM(24)), None);
+        edit
     }
 }
 
@@ -1397,27 +1969,27 @@ struct State {
     snippet_ids: Vec<i64>,
     /// Scaled icons read so far. Freed with the window.
     icons: std::collections::HashMap<u64, Option<Vec<u8>>>,
-    /// The Search page: its filter, its list, what it lists and the rows shown. The list is
-    /// filled the first time the page is shown, so it costs nothing until then.
-    search_filter: HWND,
-    search_list: HWND,
+    /// The Search page's table, and the Extensions page's, by `TABLE_SEARCH` and
+    /// `TABLE_EXTENSIONS`.
+    tables: [Table; 2],
+    /// Everything the launcher can find, which both tables list: every extension's commands, on
+    /// or off, with the rest.
     search_items: Vec<SearchItem>,
-    search_rows: Vec<SearchRow>,
-    search_filled: bool,
-    /// The Search row under the pointer, and which of its parts.
-    search_hover: Option<(usize, Option<SearchCell>)>,
-    search_tracking: bool,
-    /// The part of the chosen Search row that the keyboard acts on.
-    search_cell: SearchCell,
-    /// The box for typing an alias, and the row it's open on.
-    alias_edit: HWND,
-    alias_row: Option<usize>,
-    /// The item whose hotkey is being listened for on the Search page.
-    search_recording: Option<String>,
+    /// Every extension, in the Extensions table's order.
+    ext_entries: Vec<ExtEntry>,
+    /// The table, and the item in it, whose hotkey is being listened for.
+    search_recording: Option<(usize, String)>,
     /// The window's own Minimize and Close: which the pointer is over, and which is held down.
     caption_hover: Option<usize>,
     caption_press: Option<usize>,
     caption_tracking: bool,
+    /// The search at the top of the page list: its box, the list that takes the page list's
+    /// place while it has something to find, everything it can find, and the rows showing, as
+    /// places in that.
+    find: HWND,
+    find_list: HWND,
+    findable: Vec<Found>,
+    find_rows: Vec<usize>,
 }
 
 fn state(hwnd: HWND) -> Option<&'static mut State> {
@@ -1448,9 +2020,15 @@ const APPEARANCE: &[(&str, Appearance)] =
     &[("Match Windows", Appearance::System), ("Light", Appearance::Light), ("Dark", Appearance::Dark)];
 
 fn show_page(state: &mut State, page: usize) {
+    end_flash(state);
     state.page = page;
-    if page == PAGE_SEARCH && !state.search_filled {
-        refresh_search_list(state);
+    let table = match page {
+        PAGE_SEARCH => Some(TABLE_SEARCH),
+        PAGE_EXTENSIONS => Some(TABLE_EXTENSIONS),
+        _ => None,
+    };
+    if let Some(t) = table.filter(|t| !state.tables[*t].filled) {
+        refresh_table(state, t);
     }
     for (i, controls) in state.pages.iter().enumerate() {
         for control in controls {
@@ -1552,7 +2130,7 @@ pub fn focus_moved(dialog: HWND) {
 
 /// One of the lists on a page, as opposed to any other control.
 fn is_row_list(s: &State, control: HWND) -> bool {
-    control == s.controls.hotkey_list || control == s.search_list || s.lists.iter().any(|list| list.hwnd == control) || s.pickers.iter().any(|picker| picker.list == control)
+    control == s.controls.hotkey_list || s.tables.iter().any(|table| table.list == control) || s.lists.iter().any(|list| list.hwnd == control) || s.pickers.iter().any(|picker| picker.list == control)
 }
 
 /// Scrolls the page so the row that's selected in this list can be seen.
@@ -1784,13 +2362,14 @@ pub fn links_changed(settings: &Settings) {
     fill_managed(s, LIST_LINKS, link_rows(&settings.links, settings.fetch_link_icons.then_some(dir.as_path())));
     fill_managed(s, LIST_COMMANDS, command_rows(&settings.custom_commands));
     refresh_hotkey_list(s);
-    // The Search page lists them too.
+    // The Search page lists them too. Both tables keep places in the list, so both fill again.
+    for t in [TABLE_SEARCH, TABLE_EXTENSIONS] {
+        finish_alias_edit(s, t, false);
+    }
     s.search_items.retain(|item| item.group != GROUP_LINKS && item.group != GROUP_COMMANDS);
     s.search_items.extend(own_search_items(settings));
     sort_search_items(&mut s.search_items);
-    if s.search_filled {
-        refresh_search_list(s);
-    }
+    refresh_tables(s);
 }
 
 /// An alias was given in the launcher.
@@ -1799,11 +2378,12 @@ pub fn aliases_changed(settings: &Settings) {
     let Some(s) = state(hwnd) else { return };
     s.base.aliases = settings.aliases.clone();
     s.last_saved.aliases = settings.aliases.clone();
-    if s.search_filled {
-        unsafe {
-            let _ = InvalidateRect(Some(s.search_list), None, false);
-        }
+    // A list's alias is its keyword, so the launcher may have changed one of those instead.
+    for kept in [&mut s.base, &mut s.last_saved] {
+        kept.extensions.keywords = settings.extensions.keywords.clone();
+        kept.extensions.everything.alias = settings.extensions.everything.alias.clone();
     }
+    redraw_tables(s);
 }
 
 /// Snippets may have changed. If Settings is showing them, it asks for the list again.
@@ -2492,11 +3072,12 @@ fn start_hotkey_record(s: &mut State, target: RecordTarget) {
 
 fn stop_hotkey_record(s: &mut State) {
     if s.hotkey_target.is_some() && s.search_recording.is_some() {
-        let at = search_recording_row(s);
-        s.search_recording = None;
-        say_search_note(s, "", false);
-        if let Some(at) = at {
-            redraw_search_row(s, at);
+        let row = search_recording_row(s);
+        if let Some((t, _)) = s.search_recording.take() {
+            say_table_note(s, t, "", false);
+        }
+        if let Some((t, at)) = row {
+            redraw_table_row(s, t, at);
         }
     }
     if s.hotkey_target.take().is_some() {
@@ -2517,13 +3098,13 @@ fn hotkey_message_room(s: &State, width: i32) -> i32 {
 /// Says why keys can't be used, or what they'd replace, on the row that's listening. If that would
 /// cut it short, the whole thing goes above the list as well.
 fn say_hotkey_problem(s: &mut State, problem: Option<String>) {
-    if s.search_recording.is_some() && s.hotkey_target.is_some() {
+    if let Some(t) = s.search_recording.as_ref().map(|(t, _)| *t).filter(|_| s.hotkey_target.is_some()) {
         let alert = problem.is_some() && s.hotkey_asking.is_none();
         let text = problem.clone().unwrap_or_else(|| SEARCH_HINT.to_string());
         s.hotkey_problem = problem;
-        say_search_note(s, &text, alert);
-        if let Some(at) = search_recording_row(s) {
-            redraw_search_row(s, at);
+        say_table_note(s, t, &text, alert);
+        if let Some((t, at)) = search_recording_row(s) {
+            redraw_table_row(s, t, at);
         }
         return;
     }
@@ -2643,7 +3224,25 @@ pub fn eats_key_text(message: &MSG) -> bool {
             if !repeat {
                 end_just_added(s);
             }
+            // Ctrl+F searches from anywhere in the window, unless keys are being recorded.
+            let held = |vk: u16| unsafe { GetKeyState(vk as i32) } < 0;
+            if key == u16::from(b'F') && held(VK_CONTROL.0) && !held(VK_MENU.0) && !held(VK_LWIN.0) && !held(VK_RWIN.0) && !keys_taken(s) {
+                focus_find(s);
+                return true;
+            }
+            if find_key(s, message.hwnd, key, repeat) {
+                return true;
+            }
             held_enter || (repeat && key == VK_ESCAPE.0)
+        }
+        // So does /, except where it's typed as text.
+        WM_CHAR if message.wParam.0 == '/' as usize => {
+            let Some(s) = settings_of(message.hwnd) else { return false };
+            if keys_taken(s) || is_of_class(message.hwnd, "edit") {
+                return false;
+            }
+            focus_find(s);
+            true
         }
         WM_LBUTTONDOWN => {
             if let Some(s) = settings_of(message.hwnd) {
@@ -2757,8 +3356,8 @@ fn finish_hotkey_record(s: &mut State, hotkey: Result<Hotkey, String>) {
             }
             hotkeys::assign(&mut s.base, hotkey, action.clone());
             let search_row = search_recording_row(s);
-            if s.search_recording.take().is_some() {
-                say_search_note(s, "", false);
+            if let Some((t, _)) = s.search_recording.take() {
+                say_table_note(s, t, "", false);
             }
             say_hotkey_problem(s, None);
             s.hotkey_asking = None;
@@ -2766,8 +3365,9 @@ fn finish_hotkey_record(s: &mut State, hotkey: Result<Hotkey, String>) {
             s.held_keys.clear();
             pause_shortcuts(s, false);
             refresh_hotkey_list(s);
-            if let Some(at) = search_row {
-                retext_search_row(s, at);
+            if let Some((t, at)) = search_row {
+                retext_table_row(s, t, at);
+                redraw_tables(s);
             }
             // The keyboard carries on from the row that was just changed, on the Hotkeys page.
             if let Some(at) = s.hotkey_rows.iter().position(|row| row.binding_action(&s.base).is_some_and(|bound| same_target(&bound, &action))).filter(|_| search_row.is_none()) {
@@ -3452,6 +4052,7 @@ fn save_now(s: &mut State) -> Option<String> {
         let _ = KillTimer(Some(window_of(s)), SAVE_TIMER);
     }
     let (settings, problem) = collect(s);
+    s.base.extensions.everything = settings.extensions.everything.clone();
     // This is now the last good text, which a later mistake falls back to.
     if s.text_mode && problem.is_none() {
         s.base.hyper.bindings = settings.hyper.bindings.clone();
@@ -3509,9 +4110,7 @@ pub fn applied(saved: Option<bool>, problems: &[String], active_hotkey: &str, hi
     if s.base.hidden != hidden_items {
         s.base.hidden = hidden_items.to_vec();
         s.last_saved.hidden = s.base.hidden.clone();
-        unsafe {
-            let _ = InvalidateRect(Some(s.search_list), None, false);
-        }
+        redraw_tables(s);
     }
     s.active_hotkey = active_hotkey.to_string();
     s.hotkey_problems = problems.join(" ");
@@ -3612,12 +4211,17 @@ fn apply_dependents(s: &mut State) {
             }
         }
     }
-    // A switch has nothing to search until its tool is installed, unless it's already on.
-    for (switch, tool) in [(s.controls.op_on, Tool::OnePassword), (s.controls.ente_on, Tool::EnteAuth)] {
-        let usable = is_checked(switch) || integrations::find(tool).is_some();
+    // Everything's own settings mean nothing while it's off. Its switch is in the table.
+    let everything_on = s.base.extensions.everything.enabled;
+    for index in 0..s.controls.ext.everything_children.len() {
+        let child = s.controls.ext.everything_children[index];
         unsafe {
-            let _ = EnableWindow(switch, usable);
-            let _ = InvalidateRect(Some(switch), None, false);
+            if is_plain_text(child) {
+                s.style.set_dimmed(child, !everything_on);
+            } else {
+                let _ = EnableWindow(child, everything_on);
+            }
+            let _ = InvalidateRect(Some(child), None, true);
         }
     }
     unsafe {
@@ -3835,8 +4439,6 @@ fn collect(state: &State) -> (Settings, Option<String>) {
     s.launcher.hotkey_toggles_app = is_checked(c.toggles_app);
     s.launcher.preserve_query = is_checked(c.preserve);
     s.launcher.favorites_only = is_checked(c.favorites_only);
-    s.integrations.one_password = is_checked(c.op_on);
-    s.integrations.ente_auth = is_checked(c.ente_on);
     s.mac_feel.enabled = is_checked(c.mac_on);
     s.mac_feel.text_keys = is_checked(c.mac_text);
     s.mac_feel.app_keys = is_checked(c.mac_apps);
@@ -3853,8 +4455,8 @@ fn collect(state: &State) -> (Settings, Option<String>) {
     s.low_resource_mode = is_checked(c.low_resource);
     s.fetch_link_icons = is_checked(c.link_icons);
     s.fetch_exchange_rates = is_checked(c.exchange_rates);
+    s.check_updates = is_checked(c.check_updates);
     s.launcher.copy_formatted = is_checked(c.copy_formatted);
-    s.fetch_weather = is_checked(c.weather);
 
     if state.text_mode {
         match parse_hotkey_text(state, launcher_chord_of(state).as_ref()) {
@@ -3889,6 +4491,11 @@ fn collect(state: &State) -> (Settings, Option<String>) {
     s.snippets.expansion_enabled = is_checked(c.expansion);
     s.snippets.excluded_apps = state.pickers[PICKER_SNIPPETS].chosen.clone();
 
+    // Which extensions are on, and what they answer to, are changed in place, in the tables.
+    let e = &c.ext;
+    s.extensions.everything.in_search = is_checked(e.in_search);
+    s.extensions.everything.sort = FILE_SORTS[selected(e.sort).min(FILE_SORTS.len() - 1)].1;
+
     // Links, commands and emoji are kept by the launcher, which changes them at once.
     if state.unhide_all {
         s.hidden.clear();
@@ -3909,10 +4516,6 @@ fn post_confirmed(main: SendHwnd, command: Builtin) {
     }
 }
 
-fn pick_import_file(owner: HWND) -> Option<std::path::PathBuf> {
-    pick_file(owner, "Orbit export (*.json)\0*.json\0All files\0*.*\0")
-}
-
 fn pick_file(owner: HWND, filter: &str) -> Option<std::path::PathBuf> {
     let mut buffer = vec![0u16; 1024];
     let filter = wide(filter);
@@ -3929,6 +4532,410 @@ fn pick_file(owner: HWND, filter: &str) -> Option<std::path::PathBuf> {
         let end = buffer.iter().position(|u| *u == 0).unwrap_or(0);
         std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..end]))
     })
+}
+
+// --- Finding a setting ---
+//
+// The box under the title searches every page. Each page tells the search what's on it as it's
+// built (`Builder::take_found`), so nothing here lists the settings by hand. While there's
+// something to find, a list of what matches takes the page list's place. Choosing one opens its
+// page, scrolls to it and outlines it for a moment. Ctrl+F, or / anywhere but a text box, comes
+// back to the box.
+
+/// A setting, or a whole page, that the search can find.
+#[derive(Clone, Debug)]
+struct Found {
+    page: usize,
+    title: String,
+    heading: String,
+    note: String,
+    /// Other words that find it.
+    words: String,
+    /// What to go to on the page. `None` is the page itself.
+    anchor: Option<HWND>,
+}
+
+/// More words that find each page, for what people call it.
+const PAGE_WORDS: [&str; 10] = [
+    "startup appearance launcher",
+    "aliases apps commands results",
+    "shortcuts keybindings keys",
+    "caps lock modifier hyper",
+    "mac cmd command",
+    "copy paste history",
+    "text expansion",
+    "quicklinks bookmarks websites programs",
+    "plugins integrations files everything 1password ente passwords two-factor 2fa otp weather forecast speed test github ai usage claude codex quota limits",
+    "backup export import folder reset",
+];
+
+/// More words that find a setting, by its name.
+const FIND_WORDS: &[(&str, &str)] = &[
+    ("Start Orbit when I sign in", "startup login autostart boot"),
+    ("Theme", "appearance dark mode light mode colours"),
+    ("See-through launcher", "transparent transparency glass blur acrylic mica"),
+    ("Shrink to fit results", "height size"),
+    ("Open on", "monitor display screen"),
+    ("Open Orbit with", "hotkey shortcut keybinding alt space"),
+    ("Keyboard", "vim hjkl"),
+    ("Low resource mode", "memory ram battery"),
+    ("Convert currencies", "exchange rates money euro pound dollar"),
+    ("Weather", "forecast temperature open-meteo"),
+    ("Keep clipboard history", "copy paste"),
+    ("Expand snippet keywords as I type", "text expansion"),
+    ("Turn on HyperKey", "caps lock"),
+    ("1Password", "passwords vault"),
+    ("Ente Auth", "two-factor 2fa otp codes authenticator"),
+    ("Speed Test", "internet bandwidth ookla"),
+    ("GitHub", "issues pull requests notifications stars gh"),
+    ("AI Usage", "claude codex chatgpt quota limits"),
+    ("Everything", "files file search find voidtools"),
+    ("Export", "backup"),
+    ("Delete all data", "reset wipe erase"),
+];
+
+/// Everything the search can find: each page, then what's on it, in order. Rows of the hotkeys'
+/// text view are left out, since it's usually hidden.
+fn findable_settings(found: Vec<Vec<forms::Findable>>, hidden: &[HWND]) -> Vec<Found> {
+    let mut out = Vec::new();
+    for (page, rows) in found.into_iter().enumerate() {
+        let (Some((name, _)), Some(about)) = (PAGES.get(page), PAGE_ABOUT.get(page)) else { continue };
+        out.push(Found { page, title: name.to_string(), heading: String::new(), note: about.to_string(), words: PAGE_WORDS[page].to_string(), anchor: None });
+        for row in rows {
+            if row.title.trim().is_empty() || hidden.contains(&row.anchor) {
+                continue;
+            }
+            let extra = FIND_WORDS.iter().find(|(title, _)| *title == row.title).map_or("", |(_, words)| words);
+            out.push(Found { page, title: row.title, heading: row.heading, note: row.note, words: format!("{} {extra}", row.words), anchor: Some(row.anchor) });
+        }
+    }
+    out
+}
+
+/// Lower case, without accents, split into words.
+fn find_words(text: &str) -> Vec<String> {
+    orbit_core::search::folded(text).split(|c: char| !c.is_alphanumeric()).filter(|word| !word.is_empty()).map(str::to_string).collect()
+}
+
+/// What a search finds, best first, as places in `findable`. Every word typed has to start a word
+/// somewhere in a setting: its name counts most, then its other words, its page and heading, and
+/// last what's said under it. A page comes before a setting that matches as well.
+fn find_settings(findable: &[Found], query: &str) -> Vec<usize> {
+    let wanted = find_words(query);
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let mut found: Vec<(u32, bool, usize)> = findable
+        .iter()
+        .enumerate()
+        .filter_map(|(at, entry)| {
+            let title = find_words(&entry.title);
+            let words = find_words(&entry.words);
+            let place = find_words(&format!("{} {}", PAGES.get(entry.page).map_or("", |page| page.0), entry.heading));
+            let note = find_words(&entry.note);
+            let starts = |list: &[String], word: &str| list.iter().any(|each| each.starts_with(word));
+            let mut score = 0;
+            for word in &wanted {
+                score += if title.first().is_some_and(|first| first.starts_with(word.as_str())) {
+                    0
+                } else if starts(&title, word) {
+                    1
+                } else if starts(&words, word) {
+                    2
+                } else if starts(&place, word) {
+                    3
+                } else if starts(&note, word) {
+                    4
+                } else if word.chars().count() >= 3 && title.iter().any(|each| each.contains(word.as_str())) {
+                    5
+                } else {
+                    return None;
+                };
+            }
+            Some((score, entry.anchor.is_some(), at))
+        })
+        .collect();
+    found.sort();
+    found.truncate(FIND_LIMIT);
+    found.into_iter().map(|entry| entry.2).collect()
+}
+
+/// Shows what the box finds in place of the page list, or the page list again when it's empty.
+fn refresh_find(s: &mut State) {
+    let query = get_text(s.find);
+    let searching = !query.trim().is_empty();
+    s.find_rows = find_settings(&s.findable, &query);
+    unsafe {
+        let list = s.find_list;
+        SendMessageW(list, WM_SETREDRAW, Some(WPARAM(0)), None);
+        SendMessageW(list, LB_RESETCONTENT, None, None);
+        for at in &s.find_rows {
+            // The text is what a screen reader says. The row is drawn by `draw_find_item`.
+            let text = wide(&s.findable[*at].title);
+            SendMessageW(list, LB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
+        }
+        if !s.find_rows.is_empty() {
+            SendMessageW(list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        }
+        SendMessageW(list, WM_SETREDRAW, Some(WPARAM(1)), None);
+        let _ = InvalidateRect(Some(list), None, true);
+        let _ = ShowWindow(list, if searching { SW_SHOWNA } else { SW_HIDE });
+        let _ = ShowWindow(s.list, if searching { SW_HIDE } else { SW_SHOWNA });
+    }
+}
+
+/// Ctrl+F, or /: into the box, with what's there chosen, so typing replaces it.
+fn focus_find(s: &mut State) {
+    set_focus_rings(s, true);
+    forms::focus(s.find);
+    unsafe {
+        SendMessageW(s.find, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+    }
+}
+
+/// Up and Down in the box move through what it found.
+fn move_find(s: &mut State, step: isize) {
+    let count = s.find_rows.len() as isize;
+    if count == 0 {
+        return;
+    }
+    unsafe {
+        let at = SendMessageW(s.find_list, LB_GETCURSEL, None, None).0 as isize;
+        let next = if at < 0 { 0 } else { (at + step).clamp(0, count - 1) };
+        SendMessageW(s.find_list, LB_SETCURSEL, Some(WPARAM(next as usize)), None);
+    }
+}
+
+fn chosen_find_row(s: &State) -> Option<usize> {
+    let at = unsafe { SendMessageW(s.find_list, LB_GETCURSEL, None, None).0 };
+    if at >= 0 { Some(at as usize) } else if s.find_rows.is_empty() { None } else { Some(0) }
+}
+
+/// The row a control is in, in the page's coordinates: between the lines of its card, or just
+/// round it when it isn't on one.
+fn row_of(s: &State, control: HWND) -> RECT {
+    let (x, y, height) = place_on_page(s, control);
+    let px = |value: i32| forms::scale(value, s.style.dpi);
+    s.style.row_around(s.content, y + 1).unwrap_or_else(|| {
+        let mut rect = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(control, &mut rect);
+        }
+        RECT { left: x - px(8), top: y - px(6), right: x + rect.right - rect.left + px(8), bottom: y + height.min(px(48)) + px(6) }
+    })
+}
+
+/// The first thing in this row the keyboard can use, from `anchor` on.
+fn control_in_row(s: &State, page: usize, anchor: HWND, row: RECT) -> Option<HWND> {
+    let controls = s.pages.get(page)?;
+    let start = controls.iter().position(|control| *control == anchor)?;
+    controls[start..].iter().copied().find(|control| unsafe {
+        let style = GetWindowLongPtrW(*control, GWL_STYLE);
+        let top = place_on_page(s, *control).1;
+        style & WS_TABSTOP.0 as isize != 0 && IsWindowVisible(*control).as_bool() && IsWindowEnabled(*control).as_bool() && top >= row.top && top < row.bottom
+    })
+}
+
+/// Opens the page of a row the search found, and shows the setting: scrolled to, near the top,
+/// and outlined for a moment. `take_focus`, from the keyboard, also puts the focus on it, so
+/// Space can change it straight away.
+fn go_to_found(s: &mut State, row: usize, take_focus: bool) {
+    let Some(entry) = s.find_rows.get(row).and_then(|at| s.findable.get(*at)) else { return };
+    let (page, anchor) = (entry.page, entry.anchor);
+    disarm_button(s);
+    select_page(s, page);
+    let Some(anchor) = anchor else { return };
+    if !unsafe { IsWindowVisible(anchor) }.as_bool() {
+        return;
+    }
+    let rect = row_of(s, anchor);
+    scroll_to(s, rect.top - forms::scale(48, s.style.dpi));
+    s.style.flash = Some((s.content, rect));
+    unsafe {
+        let _ = InvalidateRect(Some(s.content), None, false);
+        SetTimer(Some(window_of(s)), FLASH_TIMER, FLASH_MS, None);
+    }
+    if take_focus && let Some(control) = control_in_row(s, page, anchor, rect) {
+        set_focus_rings(s, true);
+        forms::focus(control);
+    }
+}
+
+fn end_flash(s: &mut State) {
+    if s.style.flash.take().is_some() {
+        unsafe {
+            let _ = KillTimer(Some(window_of(s)), FLASH_TIMER);
+            let _ = InvalidateRect(Some(s.content), None, false);
+        }
+    }
+}
+
+/// What the keyboard does in the search box and its list, before the window's own handling.
+/// True if it's done with the key.
+fn find_key(s: &mut State, control: HWND, key: u16, repeat: bool) -> bool {
+    if control == s.find {
+        match key {
+            k if k == VK_DOWN.0 => move_find(s, 1),
+            k if k == VK_UP.0 => move_find(s, -1),
+            k if k == VK_RETURN.0 && !repeat => {
+                if let Some(row) = chosen_find_row(s) {
+                    go_to_found(s, row, true);
+                }
+            }
+            // Esc clears the search first, and only then closes the window.
+            k if k == VK_ESCAPE.0 && !repeat && !get_text(s.find).is_empty() => {
+                set_text(s.find, "");
+                refresh_find(s);
+            }
+            _ => return false,
+        }
+        return true;
+    }
+    if control == s.find_list {
+        match key {
+            k if k == VK_RETURN.0 && !repeat => {
+                if let Some(row) = chosen_find_row(s) {
+                    go_to_found(s, row, true);
+                }
+            }
+            k if k == VK_UP.0 && chosen_find_row(s) == Some(0) => focus_find(s),
+            k if k == VK_ESCAPE.0 && !repeat => {
+                focus_find(s);
+                set_text(s.find, "");
+                refresh_find(s);
+            }
+            _ => return false,
+        }
+        return true;
+    }
+    false
+}
+
+/// Keys that something on the page is listening for, which mustn't go to the search instead.
+fn keys_taken(s: &State) -> bool {
+    s.swallow_keys || s.recording_launcher || s.hotkey_target.is_some()
+}
+
+/// Where a found row's parts go: its name, on up to three lines, then where it is on one.
+struct FindRowLayout {
+    height: i32,
+    /// Where the text starts, and how many lines the name takes, each this tall.
+    left: i32,
+    lines: i32,
+    line: i32,
+    place: i32,
+}
+
+fn find_row_layout(s: &State, row: usize) -> FindRowLayout {
+    let px = |value: i32| forms::scale(value, s.style.dpi);
+    let left = px(10) + px(PAGE_BADGE_DIP) + px(10);
+    let mut client = RECT::default();
+    unsafe {
+        let _ = GetClientRect(s.find_list, &mut client);
+    }
+    let title = s.find_rows.get(row).and_then(|at| s.findable.get(*at)).map_or("", |entry| entry.title.as_str());
+    let line = forms::text_height_in(s.find_list, "Ag", i32::MAX / 4).max(1);
+    let lines = ((forms::text_height_in(s.find_list, title, client.right - left - px(6)) + line / 2) / line).clamp(1, 3);
+    let place = px(17);
+    let height = (px(10) + lines * line + place).max(px(FIND_ROW_DIP));
+    FindRowLayout { height, left, lines, line, place }
+}
+
+fn draw_find_item(s: &State, item: &DRAWITEMSTRUCT) {
+    let style = &s.style;
+    let theme = &style.theme;
+    let (width, height) = (item.rcItem.right - item.rcItem.left, item.rcItem.bottom - item.rcItem.top);
+    let Some(mut buffer) = Backbuffer::new(width, height) else { return };
+    let px = |value: i32| forms::scale(value, style.dpi);
+    buffer.fill(rail_color(theme));
+    if let Some(entry) = s.find_rows.get(item.itemID as usize).and_then(|at| s.findable.get(*at)) {
+        if item.itemState.0 & ODS_SELECTED.0 != 0 {
+            let fill = if theme.high_contrast { theme.selection } else if theme.background.0 < 128 { theme.selection.mix(rail_color(theme), 0.15) } else { theme.card };
+            buffer.fill_round_rect(0, px(2), width, height - px(4), px(forms::RADIUS_SELECTION) as f32, fill);
+        }
+        let layout = find_row_layout(s, item.itemID as usize);
+        let size = px(PAGE_BADGE_DIP);
+        let color = PAGE_COLORS.get(entry.page).copied().unwrap_or(theme.secondary);
+        let glyph = PAGES.get(entry.page).map_or(GLYPH_SEARCH, |page| page.1);
+        forms::draw_badge(&mut buffer, theme, style.icon_small, px(10), (height - size) / 2, size, color, glyph);
+        let page = PAGES.get(entry.page).map_or("", |page| page.0);
+        // Under a page: what it's for. Under a setting: where it is.
+        let place = match (entry.anchor, entry.heading.is_empty()) {
+            (None, _) => entry.note.clone(),
+            (Some(_), true) => page.to_string(),
+            (Some(_), false) => format!("{page} \u{203A} {}", entry.heading),
+        };
+        let right = width - px(6);
+        let top = (height - layout.lines * layout.line - layout.place) / 2;
+        let name = RECT { left: layout.left, top, right, bottom: top + layout.lines * layout.line };
+        if layout.lines == 1 {
+            buffer.text(&entry.title, style.font, theme.text, name, false);
+        } else {
+            buffer.text_wrapped(&entry.title, style.font, theme.text, name);
+        }
+        buffer.text(&place, style.small, theme.secondary, RECT { left: layout.left, top: name.bottom, right, bottom: name.bottom + layout.place }, false);
+    }
+    buffer.copy_to_dc_at(item.hDC, item.rcItem.left, item.rcItem.top);
+}
+
+/// The list of what the search found: says so when nothing matches, scrolls by the wheel without a
+/// scroll bar in the narrow rail, and goes to a row when it's clicked.
+unsafe extern "system" fn find_list_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    unsafe {
+        if message == WM_NCDESTROY {
+            let _ = RemoveWindowSubclass(hwnd, Some(find_list_proc), FIND_LIST_SUBCLASS);
+            return DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+        let Some(s) = state(GetAncestor(hwnd, GA_ROOT)) else { return DefSubclassProc(hwnd, message, wparam, lparam) };
+        match message {
+            WM_ERASEBKGND if s.find_rows.is_empty() => LRESULT(1),
+            WM_PAINT if s.find_rows.is_empty() => {
+                let mut ps = PAINTSTRUCT::default();
+                let dc = BeginPaint(hwnd, &mut ps);
+                let mut client = RECT::default();
+                let _ = GetClientRect(hwnd, &mut client);
+                if let Some(mut buffer) = Backbuffer::new(client.right, client.bottom) {
+                    let px = |value: i32| forms::scale(value, s.style.dpi);
+                    buffer.fill(rail_color(&s.style.theme));
+                    let text = RECT { left: px(10), top: px(10), right: client.right - px(10), bottom: client.bottom };
+                    buffer.text_wrapped("No settings match that.", s.style.note, s.style.theme.secondary, text);
+                    buffer.copy_to_dc(dc);
+                }
+                let _ = EndPaint(hwnd, &ps);
+                LRESULT(0)
+            }
+            WM_MOUSEWHEEL => {
+                // Rows differ in height, so it overflows if they add up to more than it shows.
+                let mut client = RECT::default();
+                let _ = GetClientRect(hwnd, &mut client);
+                let count = SendMessageW(hwnd, LB_GETCOUNT, None, None).0.max(0) as usize;
+                let total: i32 = (0..count).map(|at| SendMessageW(hwnd, LB_GETITEMHEIGHT, Some(WPARAM(at)), None).0 as i32).sum();
+                if total <= client.bottom {
+                    // Nothing to scroll here, so the page does, as it does over the page list.
+                    return match GetParent(hwnd) {
+                        Ok(parent) => SendMessageW(parent, message, Some(wparam), Some(lparam)),
+                        Err(_) => LRESULT(0),
+                    };
+                }
+                let delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let top = SendMessageW(hwnd, LB_GETTOPINDEX, None, None).0 as i32;
+                let rows = (delta.abs() / 120).max(1) * 2;
+                let next = if delta > 0 { top - rows } else { top + rows }.clamp(0, count.saturating_sub(1) as i32);
+                SendMessageW(hwnd, LB_SETTOPINDEX, Some(WPARAM(next as usize)), None);
+                LRESULT(0)
+            }
+            WM_LBUTTONUP => {
+                let result = DefSubclassProc(hwnd, message, wparam, lparam);
+                let hit = SendMessageW(hwnd, LB_ITEMFROMPOINT, None, Some(lparam)).0 as u32;
+                // The high word says the point is past the last row.
+                if hit >> 16 == 0 && let Some(s) = state(GetAncestor(hwnd, GA_ROOT)) {
+                    go_to_found(s, (hit & 0xFFFF) as usize, false);
+                }
+                result
+            }
+            _ => DefSubclassProc(hwnd, message, wparam, lparam),
+        }
+    }
 }
 
 fn draw_page_item(s: &State, item: &DRAWITEMSTRUCT) {
@@ -4054,6 +5061,7 @@ fn action_tile(action: &Action) -> (Option<u64>, Tile) {
         Action::Custom { .. } => (None, Tile::Glyph(GLYPH_COMMAND)),
         Action::OpenNote { .. } => (None, Tile::Glyph(GLYPH_NOTE)),
         Action::InsertSnippet { .. } => (None, Tile::Glyph(GLYPH_SNIPPET)),
+        Action::Extension { .. } => (None, Tile::Glyph(crate::rows::GLYPH_EXTENSION)),
     }
 }
 
@@ -4068,7 +5076,8 @@ fn draw_small_tile(style: &Style, buffer: &mut Backbuffer, place: (i32, i32, i32
     {
         let (light, deep) = crate::rows::tile_colors(glyph);
         buffer.fill_tile(x, y, size, radius, (style.dpi as f32 / 96.0).max(1.0), light, deep);
-        buffer.symbol_centered(&glyph.to_string(), style.icon_small, forms::scale(13, style.dpi), true, crate::gfx::Rgb(255, 255, 255), area);
+        // 13 on a 22 tile, and as much more on a bigger one.
+        buffer.symbol_centered(&glyph.to_string(), style.icon_small, size * 3 / 5, true, crate::gfx::Rgb(255, 255, 255), area);
         return;
     }
     buffer.fill_round_rect(x, y, size, size, radius, fill);
@@ -4249,11 +5258,27 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
             // Sent while the lists are created, before the window has any state.
             let item = &mut *(lparam.0 as *mut MEASUREITEMSTRUCT);
             let id = item.CtlID as i32;
+            // What the search found: each row as tall as its name needs, as it's added.
+            if id == ID_FIND_LIST {
+                if let Some(s) = state(hwnd) {
+                    item.itemHeight = find_row_layout(s, item.itemID as usize).height as u32;
+                    return LRESULT(1);
+                }
+            }
+            // An extension's row is taller than a command's under it.
+            if id == ID_EXT_LIST {
+                if let Some(s) = state(hwnd) {
+                    item.itemHeight = forms::scale(table_row_dip(s, TABLE_EXTENSIONS, item.itemID as usize), s.style.dpi) as u32;
+                    return LRESULT(1);
+                }
+            }
             let dip = if id == ID_PAGES {
                 PAGE_ROW_DIP
+            } else if id == ID_FIND_LIST {
+                FIND_ROW_DIP
             } else if (ID_SNIPPET_LIST..=ID_COMMAND_LIST).contains(&id) {
                 forms::MANAGED_ROW_DIP
-            } else if id >= ID_PICKERS {
+            } else if picker_of(id).is_some() {
                 PICKER_ROW_DIP
             } else {
                 HOTKEY_ROW_DIP
@@ -4341,17 +5366,19 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
                     let item = &*(lparam.0 as *const DRAWITEMSTRUCT);
                     match item.CtlID as i32 {
                         ID_PAGES => draw_page_item(s, item),
+                        ID_FIND_LIST => draw_find_item(s, item),
                         ID_HOTKEY_LIST => draw_hotkey_item(s, item),
-                        ID_SEARCH_LIST => draw_search_item(s, item),
+                        ID_SEARCH_LIST => draw_table_item(s, TABLE_SEARCH, item),
+                        ID_EXT_LIST => draw_table_item(s, TABLE_EXTENSIONS, item),
                         id if (ID_SNIPPET_LIST..=ID_COMMAND_LIST).contains(&id) => draw_managed_item(s, (id - ID_SNIPPET_LIST) as usize, item),
-                        id if id >= ID_PICKERS => draw_picker_item(s, ((id - ID_PICKERS) / PICKER_IDS) as usize, item),
+                        id if picker_of(id).is_some() => draw_picker_item(s, picker_of(id).map_or(0, |(index, _)| index), item),
                         _ => {
                             let _ = s.style.handle(hwnd, message, wparam, lparam);
                         }
                     }
                     return LRESULT(1);
                 }
-                WM_CTLCOLORLISTBOX if HWND(lparam.0 as *mut _) == s.list => {
+                WM_CTLCOLORLISTBOX if HWND(lparam.0 as *mut _) == s.list || HWND(lparam.0 as *mut _) == s.find_list => {
                     return LRESULT(s.style.rail_brush().unwrap_or(s.style.side).0 as isize);
                 }
                 // From over the page list: the page still scrolls.
@@ -4369,8 +5396,8 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
                 let notification = (wparam.0 >> 16) as u32;
                 let Some(s) = state(hwnd) else { return LRESULT(0) };
                 match id {
-                    id if id >= ID_PICKERS => {
-                        let (index, part) = (((id - ID_PICKERS) / PICKER_IDS) as usize, (id - ID_PICKERS) % PICKER_IDS);
+                    id if picker_of(id).is_some() => {
+                        let (index, part) = picker_of(id).unwrap_or_default();
                         if part == 0 && notification == EN_CHANGE {
                             refresh_picker(s, index);
                         }
@@ -4419,7 +5446,9 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
                     }
                     ID_SUGGEST => add_suggested(s),
                     ID_ACTION_SEARCH if notification == EN_CHANGE => refresh_hotkey_list(s),
-                    ID_SEARCH_FILTER if notification == EN_CHANGE => refresh_search_list(s),
+                    ID_SEARCH_FILTER if notification == EN_CHANGE => refresh_table(s, TABLE_SEARCH),
+                    ID_EXT_FILTER if notification == EN_CHANGE => refresh_table(s, TABLE_EXTENSIONS),
+                    ID_FIND if notification == EN_CHANGE => refresh_find(s),
                     ID_HOTKEY_TEXT => toggle_hotkey_text(s),
                     ID_CLEAR_CLIPS => {
                         if confirm_in_place(s, HWND(lparam.0 as *mut _), LABEL_CLEAR) {
@@ -4444,10 +5473,24 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
                         post_builtin(s.context.main, Builtin::ExportData);
                         show_status(s, "Exporting. Orbit will open the file when it's ready.", MESSAGE_MS);
                     }
-                    ID_IMPORT => {
-                        if let Some(path) = pick_import_file(hwnd) {
-                            s.context.main.post(WM_ORBIT_IMPORT, crate::util::box_for_post(path), 0);
-                            show_status(s, "Importing. Orbit will report the result.", MESSAGE_MS);
+                    // The Import page knows other launchers as well as Orbit's own files.
+                    ID_IMPORT => post_builtin(s.context.main, Builtin::ImportData),
+                    ID_EXT_ADD => add_extension(s, hwnd),
+                    ID_EXT_FOLDER => {
+                        let folder = crate::extensions::folder(&s.dir);
+                        let _ = std::fs::create_dir_all(&folder);
+                        crate::launch::spawn(crate::launch::LaunchRequest::open(&folder.to_string_lossy()), s.context.main, crate::app::WM_ORBIT_LAUNCH_FAILED);
+                    }
+                    ID_EVERYTHING => everything_pressed(s, hwnd),
+                    ID_UPDATE => update_pressed(s),
+                    ID_GITHUB => github_pressed(s, hwnd),
+                    x if (ID_EXT_REMOVE..ID_EXT_REMOVE + 200).contains(&x) => {
+                        if confirm_in_place(s, HWND(lparam.0 as *mut _), LABEL_REMOVE) {
+                            let folder = s.controls.ext.removes.iter().find(|(at, _)| *at == x).map(|(_, folder)| folder.clone());
+                            if let Some(folder) = folder {
+                                let _ = save_now(s);
+                                s.context.main.post(WM_ORBIT_EXTENSIONS_CHANGED, crate::util::box_for_post(crate::extensions::Change::Remove(folder)), 0);
+                            }
                         }
                     }
                     ID_OPEN_DIR => {
@@ -4528,6 +5571,31 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
                 }
                 LRESULT(0)
             }
+            WM_TIMER if wparam.0 == FLASH_TIMER => {
+                let _ = KillTimer(Some(hwnd), FLASH_TIMER);
+                if let Some(s) = state(hwnd) {
+                    end_flash(s);
+                }
+                LRESULT(0)
+            }
+            WM_SETTINGS_EVERYTHING => {
+                if let Some(s) = state(hwnd) {
+                    refresh_everything_row(s);
+                }
+                LRESULT(0)
+            }
+            WM_SETTINGS_GITHUB => {
+                // An install says how it went. A sign-in window that closed says nothing.
+                let message = (wparam.0 != 0).then(|| crate::util::take_posted::<String>(wparam.0)).flatten();
+                GITHUB_BUSY.with(|busy| busy.set(false));
+                if let Some(s) = state(hwnd) {
+                    refresh_github_row(s);
+                    if let Some(message) = message {
+                        show_result(s, &message);
+                    }
+                }
+                LRESULT(0)
+            }
             WM_SETTINGS_CANDIDATES => {
                 if let Some(found) = crate::util::take_posted::<Vec<Candidate>>(wparam.0) {
                     if let Some(s) = state(hwnd) {
@@ -4566,6 +5634,13 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, message: u32, wparam: WPARAM
     }
 }
 
+/// Which picker a control belongs to, and which of its parts it is: 0 its search box, 1 Browse and
+/// 2 its list. Only the pickers' own ids, so buttons numbered after them still reach their own
+/// handlers.
+fn picker_of(id: i32) -> Option<(usize, i32)> {
+    (ID_PICKERS..ID_PICKERS + PICKER_COUNT * PICKER_IDS).contains(&id).then(|| (((id - ID_PICKERS) / PICKER_IDS) as usize, (id - ID_PICKERS) % PICKER_IDS))
+}
+
 /// A card holding a search box, a Browse button and a list of apps. The list sizes itself to fit.
 fn build_picker(b: &mut Builder, index: usize) -> (HWND, HWND, HWND) {
     let id = ID_PICKERS + index as i32 * PICKER_IDS;
@@ -4589,10 +5664,154 @@ fn wire_picker(index: usize, edit: HWND, list: HWND) {
     }
 }
 
-/// Opens Settings on the page where a tool can be installed.
-pub fn open_on_integrations(context: EditorContext, settings: Settings, dir: std::path::PathBuf, apps: &[crate::indexer::AppEntry]) {
-    START_PAGE.with(|page| page.set(PAGE_INTEGRATIONS));
+/// Opens Settings on the Extensions page.
+pub fn open_on_extensions(context: EditorContext, settings: Settings, dir: std::path::PathBuf, apps: &[crate::indexer::AppEntry]) {
+    START_PAGE.with(|page| page.set(PAGE_EXTENSIONS));
     open(context, settings, dir, apps);
+}
+
+thread_local! {
+    /// Everything is being installed from Settings.
+    static EVERYTHING_BUSY: Cell<bool> = const { Cell::new(false) };
+}
+/// Everything has started, or stopped trying to: its row says so.
+const WM_SETTINGS_EVERYTHING: u32 = WM_APP + 51;
+
+/// What the Everything row says, what its button says, and whether the button can be pressed.
+pub(crate) fn everything_row() -> (String, &'static str, bool) {
+    if EVERYTHING_BUSY.with(|busy| busy.get()) {
+        return ("Installing with Windows Package Manager. Windows asks for permission once.".into(), LABEL_INSTALLING, false);
+    }
+    if crate::everything::window().is_some() {
+        return ("Running. Orbit finds files with it.".into(), "Open", true);
+    }
+    if crate::everything::find_exe().is_some() {
+        return ("Installed, but not running. Orbit needs it running to find files.".into(), "Start", true);
+    }
+    if crate::integrations::winget().is_some() {
+        return ("Not installed. It's free, and Orbit can install it for you.".into(), "Install", true);
+    }
+    ("Not installed. It's free from voidtools.com.".into(), "Website", true)
+}
+
+fn refresh_everything_row(s: &mut State) {
+    let (text, label, can_press) = everything_row();
+    set_status(s.controls.ext.everything_status, &text);
+    set_text(s.controls.ext.everything_button, label);
+    unsafe {
+        let _ = EnableWindow(s.controls.ext.everything_button, can_press);
+        let _ = InvalidateRect(Some(s.controls.ext.everything_button), None, true);
+    }
+}
+
+thread_local! {
+    /// The Updates button is being handled, which refreshes the row itself afterwards.
+    static UPDATE_PRESSED: Cell<bool> = const { Cell::new(false) };
+}
+
+fn refresh_update_row(s: &mut State) {
+    let (text, label, can_press) = crate::update::row();
+    set_status(s.controls.update_status, &text);
+    set_text(s.controls.update_button, label);
+    unsafe {
+        let _ = EnableWindow(s.controls.update_button, can_press);
+        let _ = InvalidateRect(Some(s.controls.update_button), None, true);
+    }
+}
+
+/// An update has moved on: the Updates row on the General page shows where it's got to.
+pub fn update_changed() {
+    if UPDATE_PRESSED.with(|pressed| pressed.get()) {
+        return;
+    }
+    if let Some(s) = CURRENT.with(|c| c.get()).and_then(state) {
+        refresh_update_row(s);
+    }
+}
+
+/// Checks now, installs what's downloaded, or opens the release page, as the row says.
+fn update_pressed(s: &mut State) {
+    UPDATE_PRESSED.with(|pressed| pressed.set(true));
+    let _ = crate::update::press(crate::update::Ask::FromSettings);
+    UPDATE_PRESSED.with(|pressed| pressed.set(false));
+    refresh_update_row(s);
+}
+
+/// Installing Everything finished, wherever it was started.
+pub fn everything_changed() {
+    EVERYTHING_BUSY.with(|busy| busy.set(false));
+    if let Some(s) = CURRENT.with(|c| c.get()).and_then(state) {
+        refresh_everything_row(s);
+    }
+}
+
+fn everything_pressed(s: &mut State, hwnd: HWND) {
+    let refresh = everything_row().1 == "Install";
+    match press_everything(s.context.main, crate::util::SendHwnd::new(hwnd), WM_SETTINGS_EVERYTHING) {
+        Ok(Some(note)) => show_status(s, note, SAVED_MS),
+        Ok(None) => {}
+        Err(why) => show_problem(s, &why),
+    }
+    if refresh {
+        refresh_everything_row(s);
+    }
+}
+
+/// What the Everything button does, from Settings or from Setup: opens it, starts it, installs it
+/// or opens its website. `reply` hears `reply_message` once a started Everything is ready, and the
+/// launcher hears when installing ends. Gives a line to show, or a problem.
+pub(crate) fn press_everything(main: crate::util::SendHwnd, reply: crate::util::SendHwnd, reply_message: u32) -> Result<Option<&'static str>, String> {
+    let (_, label, _) = everything_row();
+    match label {
+        // Its own window, for searching there.
+        "Open" => {
+            if let Some(exe) = crate::everything::find_exe() {
+                crate::launch::spawn(crate::launch::LaunchRequest::open(&exe.to_string_lossy()), main, crate::app::WM_ORBIT_LAUNCH_FAILED);
+            }
+            Ok(None)
+        }
+        "Start" => {
+            if !crate::everything::start() {
+                return Err("Couldn't start Everything. Start it from the Start menu.".into());
+            }
+            // It takes a moment to put up its window, which is what Orbit talks to.
+            let _ = std::thread::Builder::new().name("orbit-everything-start".into()).spawn(move || {
+                for _ in 0..40 {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    if crate::everything::window().is_some() {
+                        break;
+                    }
+                }
+                reply.post(reply_message, 0, 0);
+            });
+            Ok(Some("Starting Everything."))
+        }
+        "Install" => {
+            EVERYTHING_BUSY.with(|busy| busy.set(true));
+            let _ = std::thread::Builder::new().name("orbit-everything-install".into()).spawn(move || {
+                let result = crate::everything::install();
+                main.post(crate::app::WM_ORBIT_EVERYTHING_INSTALLED, crate::util::box_for_post(result), 0);
+            });
+            Ok(None)
+        }
+        "Website" => {
+            crate::launch::spawn(crate::launch::LaunchRequest::open(crate::everything::WEBSITE), main, crate::app::WM_ORBIT_LAUNCH_FAILED);
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Copies an extension's folder in, chosen by its manifest.
+fn add_extension(s: &mut State, hwnd: HWND) {
+    let Some(manifest) = pick_file(hwnd, "Orbit extension (orbit-extension.json)\0orbit-extension.json\0All files\0*.*\0") else { return };
+    match crate::extensions::add(&manifest, &s.dir) {
+        Ok(installed) => {
+            let _ = save_now(s);
+            s.context.main.post(WM_ORBIT_EXTENSIONS_CHANGED, crate::util::box_for_post(crate::extensions::Change::Added(installed.manifest.name.clone())), 0);
+        }
+        Err(why) => show_problem(s, &format!("Couldn't add it. {why}")),
+    }
 }
 
 /// The DPI and work area of the screen the window will open on: the one it was on, if it's being
@@ -4744,11 +5963,16 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let column = view_width - left - px(24);
         let mut b = Builder::new(hwnd, &mut style, left, top, column);
 
-        let list = b.owner_list((px(12), px(TOPBAR_DIP + 8), px(SIDEBAR_DIP - 24), px(PAGE_ROW_DIP * PAGES.len() as i32)), 0, ID_PAGES);
+        // The search sits under the title, and what it finds takes the page list's place.
+        let find = b.search_box("Search settings", px(12), px(TOPBAR_DIP + 2), px(SIDEBAR_DIP - 24), ID_FIND);
+        let rail_list = (px(12), px(TOPBAR_DIP + 2 + FIND_BOX_DIP + FIND_GAP_DIP), px(SIDEBAR_DIP - 24), px(PAGE_ROW_DIP * PAGES.len() as i32));
+        let list = b.owner_list(rail_list, 0, ID_PAGES);
         for (name, _) in PAGES {
             let text = wide(name);
             SendMessageW(list, LB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
         }
+        let find_list = b.variable_list(rail_list, ID_FIND_LIST);
+        let _ = ShowWindow(find_list, SW_HIDE);
         b.take_controls();
 
         // Created after the page list, which is the Tab order.
@@ -4787,18 +6011,29 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let tail = px(12);
 
         let mut pages = Vec::new();
+        let mut finds = Vec::new();
         let mut page_heights = Vec::new();
 
         // General
         b.page_header("General", PAGE_ABOUT[PAGE_GENERAL], PAGES[PAGE_GENERAL].1, PAGE_COLORS[PAGE_GENERAL]);
-        b.heading("Startup and look");
+        b.heading("Startup and updates");
         b.begin_card();
         let login = b.switch("Start Orbit when I sign in", settings.launch_at_login, 0);
         b.note("It waits in the background until you press its shortcut.");
         b.line();
+        let check_updates = b.switch("Check for updates", settings.check_updates, 0);
+        b.note("Once a day, Orbit asks GitHub whether there's a new version, and sends nothing about you. A new version downloads in the background and installs when you say so.");
+        b.line();
+        let (text, label, can_press) = crate::update::row();
+        let (update_status, update_button) = b.titled_action(&format!("Orbit {}", env!("CARGO_PKG_VERSION")), &text, label, ID_UPDATE, ButtonKind::Normal);
+        let _ = EnableWindow(update_button, can_press);
+        b.end_card();
+
+        b.heading("Appearance");
+        b.begin_card();
         let appearance_names: Vec<&str> = APPEARANCE.iter().map(|a| a.0).collect();
         let appearance_at = APPEARANCE.iter().position(|a| a.1 == settings.appearance).unwrap_or(0);
-        let appearance = b.combo("Appearance", &appearance_names, appearance_at, 0);
+        let appearance = b.combo("Theme", &appearance_names, appearance_at, 0);
         b.note("For the launcher and this window.");
         b.line();
         let glass = b.switch("See-through launcher", settings.launcher.glass, 0);
@@ -4850,9 +6085,6 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         b.line();
         let exchange_rates = b.switch("Convert currencies", settings.fetch_exchange_rates, 0);
         b.note("Such as \u{201C}50 euro in pounds\u{201D}. Orbit gets the European Central Bank's daily rates when you convert, at most twice a day. Nothing you type is sent.");
-        b.line();
-        let weather = b.switch("Weather", settings.fetch_weather, 0);
-        b.note("Type \u{201C}weather\u{201D} and a place. Orbit sends the place to Open-Meteo to find it, then asks for its forecast, and remembers it for next time.");
         b.end_card();
 
         b.heading("Performance");
@@ -4861,6 +6093,7 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         b.note("Smaller caches and no clipboard images. Orbit returns memory to Windows sooner.");
         b.end_card();
         pages.push(b.take_controls());
+        finds.push(b.take_found());
         page_heights.push(b.y + tail);
 
         // Search
@@ -4874,26 +6107,9 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let search_list = b.owner_list((b.x, b.y, b.width, px(HOTKEY_ROW_DIP)), 0, ID_SEARCH_LIST);
         b.skip(px(HOTKEY_ROW_DIP));
         b.end_card();
-        // The alias box lives on the list, over the row being changed, and hides until then.
-        SetWindowLongPtrW(search_list, GWL_STYLE, GetWindowLongPtrW(search_list, GWL_STYLE) | WS_CLIPCHILDREN.0 as isize);
-        let alias_edit = CreateWindowExW(
-            WS_EX_NOPARENTNOTIFY,
-            w!("EDIT"),
-            None,
-            WS_CHILD | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
-            0,
-            0,
-            0,
-            0,
-            Some(search_list),
-            Some(HMENU(ID_ALIAS_EDIT as isize as *mut _)),
-            None,
-            None,
-        )
-        .unwrap_or_default();
-        SendMessageW(alias_edit, WM_SETFONT, Some(WPARAM(b.style.small.0 as usize)), Some(LPARAM(0)));
-        SendMessageW(alias_edit, 0x00C5, Some(WPARAM(24)), None);
+        let search_alias_edit = alias_box(search_list, b.style.small, ID_ALIAS_EDIT);
         pages.push(b.take_controls());
+        finds.push(b.take_found());
         page_heights.push(b.y + tail);
 
         // Hotkeys
@@ -4934,6 +6150,7 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         text_controls.push(text_error);
         let text_mode_bottom = b.y;
         pages.push(b.take_controls());
+        finds.push(b.take_found());
         page_heights.push(list_mode_bottom + tail);
 
         // HyperKey
@@ -4969,6 +6186,7 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let (hyper_edit, hyper_browse, hyper_list) = build_picker(&mut b, PICKER_HYPER);
         hyper_children.extend([hyper_edit, hyper_browse, hyper_list]);
         pages.push(b.take_controls());
+        finds.push(b.take_found());
         page_heights.push(b.y + tail);
 
         // macOS feel
@@ -4990,6 +6208,7 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let (mac_edit, mac_browse, mac_list) = build_picker(&mut b, PICKER_MAC);
         mac_children.extend([mac_edit, mac_browse, mac_list]);
         pages.push(b.take_controls());
+        finds.push(b.take_found());
         page_heights.push(b.y + tail);
 
         // Clipboard
@@ -5024,6 +6243,7 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         b.titled_action("Clear history", "Removes everything except pinned items.", LABEL_CLEAR, ID_CLEAR_CLIPS, ButtonKind::Danger);
         b.end_card();
         pages.push(b.take_controls());
+        finds.push(b.take_found());
         page_heights.push(b.y + tail);
 
         // Snippets
@@ -5037,6 +6257,7 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let snippet_caption = b.caption("Don't expand in these apps");
         let (snippet_edit, snippet_browse, snippet_list) = build_picker(&mut b, PICKER_SNIPPETS);
         pages.push(b.take_controls());
+        finds.push(b.take_found());
         page_heights.push(b.y + tail);
 
         // Links and commands
@@ -5053,23 +6274,63 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let _ = EnableWindow(hidden_button, !settings.hidden.is_empty());
         b.end_card();
         pages.push(b.take_controls());
+        finds.push(b.take_found());
         page_heights.push(b.y + tail);
 
-        // Integrations
+        // Extensions
         b.y = top;
-        b.page_header("Integrations", PAGE_ABOUT[PAGE_INTEGRATIONS], PAGES[PAGE_INTEGRATIONS].1, PAGE_COLORS[PAGE_INTEGRATIONS]);
+        b.page_header("Extensions", PAGE_ABOUT[PAGE_EXTENSIONS], PAGES[PAGE_EXTENSIONS].1, PAGE_COLORS[PAGE_EXTENSIONS]);
+        let (installed, broken) = crate::extensions::discover(&dir);
+        let ext_note = b.collapsed_note(forms::ID_NOTE);
+        b.gap(6);
+        // Every extension in one table: each one's switch, and its commands' aliases and hotkeys.
         b.begin_card();
-        let op_on = b.switch("Show 1Password in Orbit", settings.integrations.one_password, 0);
-        b.note("Search your vaults, then copy a password, username or one-time code.");
+        let add_width = px(136);
+        let ext_filter = b.search_box("Filter extensions and commands", b.x, b.y, b.width - add_width - px(10), ID_EXT_FILTER);
+        b.button_at("Add extension\u{2026}", ID_EXT_ADD, b.x + b.width - add_width, b.y - px(1), add_width, ButtonKind::Normal);
+        b.y += px(36);
+        let ext_list = b.variable_list((b.x, b.y, b.width, px(EXT_ROW_DIP)), ID_EXT_LIST);
+        b.skip(px(EXT_ROW_DIP));
+        b.end_card();
+        let ext_alias_edit = alias_box(ext_list, b.style.small, ID_EXT_ALIAS_EDIT);
+
+        // What some of them need, or send, under the table.
+        b.heading("Details");
+        let card_title = |b: &mut Builder, ext: BuiltinExt| {
+            let glyph = crate::rows::extension_glyph(ext);
+            b.card_title(ext.name(), glyph, ext_color(glyph))
+        };
+        let everything = &settings.extensions.everything;
+        b.begin_card();
+        card_title(&mut b, BuiltinExt::Files);
+        b.note("Type \u{201C}everything\u{201D} in the launcher and press Enter to search files. With an alias from the table, the alias and a space search straight away.");
+        b.line();
+        let (text, label, can_press) = everything_row();
+        let (everything_status, everything_button) = b.titled_action("Everything app", &text, label, ID_EVERYTHING, ButtonKind::Normal);
+        let _ = EnableWindow(everything_button, can_press);
+        b.line();
+        let files_in_search = b.switch("Show files under other results", everything.in_search, 0);
+        b.note("A few matching files, last in the list, when you search in the launcher.");
+        b.line();
+        let sort_names: Vec<&str> = FILE_SORTS.iter().map(|entry| entry.0).collect();
+        let sort_at = FILE_SORTS.iter().position(|entry| entry.1 == everything.sort).unwrap_or(0);
+        let files_sort = b.drop_down("Which files come first", &sort_names, sort_at, 0);
+        let everything_children = vec![files_in_search, files_sort, b.last_label];
+        b.end_card();
+
+        b.begin_card();
+        card_title(&mut b, BuiltinExt::OnePassword);
+        b.note("Orbit fetches one value when you pick it, and keeps none. Copies clear after 30 seconds.");
         b.line();
         let (text, label, can_press) = tool_row(Tool::OnePassword);
         let (op_status, op_button) = b.titled_action("Command-line tool", &text, label, ID_TOOL_OP, ButtonKind::Normal);
         let _ = EnableWindow(op_button, can_press);
         let op_note = b.note(one_password_note());
         b.end_card();
+
         b.begin_card();
-        let ente_on = b.switch("Show Ente Auth in Orbit", settings.integrations.ente_auth, 0);
-        b.note("Search your codes, then copy one.");
+        card_title(&mut b, BuiltinExt::EnteAuth);
+        b.note("Orbit fetches one code when you pick it, and keeps none.");
         b.line();
         let (text, label, can_press) = tool_row(Tool::EnteAuth);
         let (ente_status, ente_button) = b.titled_action("Command-line tool", &text, label, ID_TOOL_ENTE, ButtonKind::Normal);
@@ -5078,12 +6339,78 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let (ente_sign_in_note, ente_sign_in) = b.titled_action("Sign in", ENTE_SIGN_IN_NOTE, "Sign in\u{2026}", ID_ENTE_SIGN_IN, ButtonKind::Normal);
         let _ = EnableWindow(ente_sign_in, integrations::find(Tool::EnteAuth).is_some());
         b.end_card();
+
+        b.begin_card();
+        card_title(&mut b, BuiltinExt::Weather);
+        b.note("Orbit sends Open-Meteo the place you look up, and nothing else. It keeps the last place found until Weather is turned off.");
+        b.end_card();
+
+        b.begin_card();
+        card_title(&mut b, BuiltinExt::SpeedTest);
+        b.note("The first test asks you to accept Ookla's terms, then installs it.");
+        b.end_card();
+
+        b.begin_card();
+        card_title(&mut b, BuiltinExt::GitHub);
+        b.note("Orbit asks GitHub through its own command-line tool and sign-in, and never sees your password or token.");
+        b.line();
+        let (text, label, can_press) = github_row();
+        let (github_status, github_button) = b.titled_action("GitHub CLI", &text, label, ID_GITHUB, ButtonKind::Normal);
+        let _ = EnableWindow(github_button, can_press);
+        b.end_card();
+
+        b.begin_card();
+        card_title(&mut b, BuiltinExt::AiUsage);
+        b.note(&format!(
+            "When you open it, Orbit reads Claude Code's and Codex's sign-ins on this PC and sends each only to its own service, Anthropic or OpenAI. It never renews or keeps them. {}",
+            ai_usage_found()
+        ));
+        b.end_card();
+
+        b.heading("From folders");
+        b.begin_card();
+        b.note("An extension is a folder with an orbit-extension.json and a program Orbit talks to. It runs with your permissions, like any program you start, so add only ones you trust. Each one stays off until you turn it on.");
+        b.line();
+        b.titled_action("Extensions folder", "Where added extensions are kept. A folder copied here shows up too, switched off.", "Open folder", ID_EXT_FOLDER, ButtonKind::Normal);
+        b.end_card();
+        let mut ext_removes = Vec::new();
+        for (at, extension) in installed.iter().enumerate() {
+            let manifest = &extension.manifest;
+            b.begin_card();
+            let title = if manifest.version.is_empty() { manifest.name.clone() } else { format!("{} {}", manifest.name, manifest.version) };
+            b.card_title(&title, crate::rows::GLYPH_EXTENSION, ext_color(crate::rows::GLYPH_EXTENSION));
+            let mut about = String::new();
+            if !manifest.description.is_empty() {
+                about.push_str(&manifest.description);
+                about.push_str(". ");
+            }
+            if !manifest.author.is_empty() {
+                about.push_str(&format!("By {}. ", manifest.author));
+            }
+            about.push_str(&format!("Runs {}", extension.command_line()));
+            b.note(&about);
+            b.line();
+            let id = ID_EXT_REMOVE + at as i32;
+            b.titled_action("Remove", "Takes it out of Orbit, with its folder.", LABEL_REMOVE, id, ButtonKind::Danger);
+            b.end_card();
+            ext_removes.push((id, extension.dir.clone()));
+        }
+        if !broken.is_empty() {
+            b.begin_card();
+            for problem in &broken {
+                let name = problem.dir.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+                b.titled_action(&format!("{name} can't be used"), &problem.why, "Show", ID_EXT_FOLDER, ButtonKind::Normal);
+            }
+            b.end_card();
+        }
+        let ext = ExtControls { in_search: files_in_search, sort: files_sort, everything_children, everything_status, everything_button, github_status, github_button, removes: ext_removes };
         pages.push(b.take_controls());
+        finds.push(b.take_found());
         page_heights.push(b.y + tail);
 
         // Data
         b.y = top;
-        b.page_header("Data", PAGE_ABOUT[9], PAGES[9].1, PAGE_COLORS[9]);
+        b.page_header("Data", PAGE_ABOUT[PAGE_DATA], PAGES[PAGE_DATA].1, PAGE_COLORS[PAGE_DATA]);
         b.heading("Your data");
         b.begin_card();
         // Windows shortens the whole path to fit, keeping its start and its end (SS_PATHELLIPSIS).
@@ -5093,7 +6420,7 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         b.line();
         b.titled_action("Export", "Notes, snippets and settings, in a new folder in Documents.", "Export", ID_EXPORT, ButtonKind::Normal);
         b.line();
-        b.titled_action("Import", "Adds notes and snippets, or replaces settings from a settings.json.", "Import\u{2026}", ID_IMPORT, ButtonKind::Normal);
+        b.titled_action("Import", "From Raycast, Flow Launcher, Wox and others, or from an Orbit export.", "Import\u{2026}", ID_IMPORT, ButtonKind::Normal);
         b.end_card();
         b.heading("Troubleshooting");
         b.begin_card();
@@ -5108,15 +6435,16 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         b.titled_action("Delete all data", "Everything Orbit keeps, for good. Orbit then quits.", LABEL_DELETE, ID_DELETE_DATA, ButtonKind::Danger);
         b.end_card();
         pages.push(b.take_controls());
+        finds.push(b.take_found());
         page_heights.push(b.y + tail);
 
         // Messages sit at the foot of the page list. They don't need a bar of their own.
         b.parent = hwnd;
         let status = b.quiet_at(px(24), window_height - px(FOOT_DIP), px(SIDEBAR_DIP - 40), 0);
         b.take_controls();
+        let findable = findable_settings(finds, &text_controls);
 
         let controls = Controls {
-            search_note,
             hotkey,
             hotkey_note,
             login,
@@ -5139,7 +6467,9 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
             link_icons,
             exchange_rates,
             copy_formatted,
-            weather,
+            check_updates,
+            update_status,
+            update_button,
             hotkey_list,
             hotkeys_note,
             action_search,
@@ -5156,8 +6486,6 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
             clip_persist,
             clip_images,
             expansion,
-            op_on,
-            ente_on,
             op_status,
             op_note,
             ente_status,
@@ -5168,6 +6496,7 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
             hidden_note,
             hidden_button,
             suggest,
+            ext,
         };
         // The apps the pickers offer. Finding Steam games' programs reads Steam's folders, which
         // takes a while, so it happens on its own thread and the pickers fill in when it's done.
@@ -5181,7 +6510,8 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         });
         let candidates = Vec::new();
         let action_options = action_options(apps, &settings);
-        let search_items = search_items(apps, &settings);
+        let search_items = search_items(apps, &settings, &installed);
+        let ext_entries = ext_entries(&installed);
         let picker = |edit: HWND, list: HWND, chosen: &[String]| Picker { edit, list, chosen: chosen.to_vec(), rows: Vec::new(), hover: None, tracking: false, expanded: false, just_added: false };
         let pickers = vec![
             picker(hyper_edit, hyper_list, &settings.hyper.excluded_apps),
@@ -5255,27 +6585,27 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
                 ManagedList { hwnd: commands_managed, rows: Vec::new(), armed: None, hover: None, tracking: false, empty: "No commands yet. Press New to add a program to run." },
             ],
             snippet_ids: Vec::new(),
-            search_filter,
-            search_list,
+            tables: [Table::new(search_filter, search_list, search_note, search_alias_edit), Table::new(ext_filter, ext_list, ext_note, ext_alias_edit)],
             search_items,
-            search_rows: Vec::new(),
-            search_filled: false,
-            search_hover: None,
-            search_tracking: false,
-            search_cell: SearchCell::Switch,
-            alias_edit,
-            alias_row: None,
+            ext_entries,
             search_recording: None,
             caption_hover: None,
             caption_press: None,
             caption_tracking: false,
+            find,
+            find_list,
+            findable,
+            find_rows: Vec::new(),
         });
         let pointer = Box::into_raw(owned);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, pointer as isize);
         let owned = &mut *pointer;
+        let _ = SetWindowSubclass(owned.find_list, Some(find_list_proc), FIND_LIST_SUBCLASS, 0);
         let _ = SetWindowSubclass(owned.controls.hotkey_list, Some(hotkey_list_proc), HOTKEY_LIST_SUBCLASS, 0);
-        let _ = SetWindowSubclass(owned.search_list, Some(search_list_proc), SEARCH_LIST_SUBCLASS, 0);
-        let _ = SetWindowSubclass(owned.alias_edit, Some(alias_edit_proc), ALIAS_EDIT_SUBCLASS, 0);
+        for t in [TABLE_SEARCH, TABLE_EXTENSIONS] {
+            let _ = SetWindowSubclass(owned.tables[t].list, Some(table_list_proc), SEARCH_LIST_SUBCLASS, 0);
+            let _ = SetWindowSubclass(owned.tables[t].alias_edit, Some(alias_edit_proc), ALIAS_EDIT_SUBCLASS, 0);
+        }
         let _ = SetWindowSubclass(owned.controls.action_search, Some(action_search_proc), ACTION_SEARCH_SUBCLASS, 0);
         refresh_hotkey_list(owned);
         for index in 0..owned.pickers.len() {
@@ -5386,6 +6716,35 @@ pub fn preview_state(what: &str) {
             s.action_options.insert(0, ActionOption { name: "Example App".to_string(), kind: "App", action: Action::Builtin { command: Builtin::NewNote } });
             set_text(s.controls.action_search, "e");
         }
+        // The Extensions table with GitHub on, so its commands show under it, and the pointer on
+        // one of them.
+        "extensions-github" | "extensions-tool" => {
+            s.base.extensions.github = true;
+            if let Some(item) = s.search_items.iter().position(|item| item.name == "My Pull Requests") {
+                let key = s.search_items[item].key.clone();
+                set_item_keyword(&mut s.base, &key, "pr");
+            }
+            show_page(s, PAGE_EXTENSIONS);
+            refresh_table(s, TABLE_EXTENSIONS);
+            let rows = &s.tables[TABLE_EXTENSIONS].rows;
+            let github = rows.iter().position(|row| matches!(row, SearchRow::Extension(e) if s.ext_entries[*e].builtin == Some(BuiltinExt::GitHub)));
+            if let Some(github) = github {
+                unsafe {
+                    SendMessageW(s.tables[TABLE_EXTENSIONS].list, LB_SETCURSEL, Some(WPARAM(github + 1)), None);
+                }
+                forms::focus(s.tables[TABLE_EXTENSIONS].list);
+                s.tables[TABLE_EXTENSIONS].hover = Some((github + 2, Some(SearchCell::Hotkey)));
+            }
+            if what == "extensions-tool" {
+                // 1Password, pressed without its tool.
+                if let Some(op) = s.tables[TABLE_EXTENSIONS].rows.iter().position(|row| matches!(row, SearchRow::Extension(e) if s.ext_entries[*e].builtin == Some(BuiltinExt::OnePassword))) {
+                    act_on_cell(s, TABLE_EXTENSIONS, op, SearchCell::Switch);
+                }
+            }
+            unsafe {
+                let _ = InvalidateRect(Some(s.tables[TABLE_EXTENSIONS].list), None, false);
+            }
+        }
         "search-filled" | "search-alias" | "search-record" => {
             // A stand-in alias, and a filter that shows a few rows, one of them with a hotkey.
             if let Some(item) = s.search_items.iter().find(|item| item.name == "Clipboard History") {
@@ -5393,29 +6752,43 @@ pub fn preview_state(what: &str) {
                 set_item_alias(&mut s.base, &key, "cb");
             }
             show_page(s, PAGE_SEARCH);
-            set_text(s.search_filter, "clip");
-            refresh_search_list(s);
-            let first = nearest_search_row(&s.search_rows, 0, 1);
+            set_text(s.tables[TABLE_SEARCH].filter, "clip");
+            refresh_table(s, TABLE_SEARCH);
+            let first = nearest_search_row(&s.tables[TABLE_SEARCH].rows, 0, 1);
+            let list = s.tables[TABLE_SEARCH].list;
             if let Some(first) = first {
                 unsafe {
-                    SendMessageW(s.search_list, LB_SETCURSEL, Some(WPARAM(first)), None);
+                    SendMessageW(list, LB_SETCURSEL, Some(WPARAM(first)), None);
                 }
                 match what {
-                    "search-alias" => start_alias_edit(s, first),
+                    "search-alias" => start_alias_edit(s, TABLE_SEARCH, first),
                     "search-record" => {
-                        let bindable = (first..s.search_rows.len()).find(|at| matches!(s.search_rows[*at], SearchRow::Item(item) if s.search_items[item].action.is_some() && s.search_items[item].name.starts_with("Pause")));
-                        start_search_record(s, bindable.unwrap_or(first));
+                        let rows = &s.tables[TABLE_SEARCH].rows;
+                        let bindable = (first..rows.len()).find(|at| matches!(rows[*at], SearchRow::Item(item) if s.search_items[item].action.is_some() && s.search_items[item].name.starts_with("Pause")));
+                        start_search_record(s, TABLE_SEARCH, bindable.unwrap_or(first));
                     }
                     _ => {
-                        forms::focus(s.search_list);
+                        forms::focus(list);
                         s.style.focus_by_keyboard = true;
-                        s.search_cell = SearchCell::Hotkey;
-                        s.search_hover = nearest_search_row(&s.search_rows, first + 1, 1).map(|at| (at, Some(SearchCell::Alias)));
+                        s.tables[TABLE_SEARCH].cell = SearchCell::Hotkey;
+                        s.tables[TABLE_SEARCH].hover = nearest_search_row(&s.tables[TABLE_SEARCH].rows, first + 1, 1).map(|at| (at, Some(SearchCell::Alias)));
                     }
                 }
             }
             unsafe {
-                let _ = InvalidateRect(Some(s.search_list), None, false);
+                let _ = InvalidateRect(Some(list), None, false);
+            }
+        }
+        "find" | "find-go" | "find-none" => {
+            let query = match what {
+                "find-go" => "weather",
+                "find-none" => "zebra crossing",
+                _ => "clip",
+            };
+            set_text(s.find, query);
+            refresh_find(s);
+            if what == "find-go" {
+                go_to_found(s, 0, false);
             }
         }
         "problem" => set_hotkey_note(s, "Alt+Space is in use by another program, so Orbit is using Ctrl+Alt+Space. Free right now: Ctrl+Shift+Space, Alt+F1.", true),
@@ -5487,50 +6860,99 @@ pub fn preview_selfcheck() -> Vec<String> {
     unsafe {
         // The Search page: aliases and hotkeys, changed in its rows.
         select_page(s, PAGE_SEARCH);
-        set_text(s.search_filter, "");
-        refresh_search_list(s);
-        let row_named = |s: &State, name: &str| s.search_rows.iter().position(|row| matches!(row, SearchRow::Item(at) if s.search_items[*at].name == name));
+        set_text(s.tables[TABLE_SEARCH].filter, "");
+        refresh_table(s, TABLE_SEARCH);
+        let row_named = |s: &State, t: usize, name: &str| s.tables[t].rows.iter().position(|row| matches!(row, SearchRow::Item(at) if s.search_items[*at].name == name));
         let builtin_name = |command: Builtin| Builtin::ALL.iter().find(|entry| entry.0 == command).map(|entry| entry.2).unwrap_or("");
         let (first, second) = (builtin_name(Builtin::NewNote), builtin_name(Builtin::SearchNotes));
-        match (row_named(s, first), row_named(s, second)) {
+        let search_note = s.tables[TABLE_SEARCH].note;
+        let search_edit = s.tables[TABLE_SEARCH].alias_edit;
+        match (row_named(s, TABLE_SEARCH, first), row_named(s, TABLE_SEARCH, second)) {
             (Some(one), Some(two)) => {
-                start_alias_edit(s, one);
-                check("an alias box opens on its row", s.alias_row == Some(one) && IsWindowVisible(s.alias_edit).as_bool(), format!("{:?}", s.alias_row));
-                set_text(s.alias_edit, "nn");
-                let kept = finish_alias_edit(s, true);
-                let key_one = match s.search_rows[one] { SearchRow::Item(at) => s.search_items[at].key.clone(), _ => String::new() };
-                check("Enter keeps the alias", kept && item_alias(&s.base, &key_one) == "nn" && !IsWindowVisible(s.alias_edit).as_bool(), item_alias(&s.base, &key_one));
-                start_alias_edit(s, two);
-                set_text(s.alias_edit, "NN");
-                let refused = !finish_alias_edit(s, true);
-                check("the same alias on something else is refused", refused && s.alias_row == Some(two) && s.style.is_alert(s.controls.search_note), get_text(s.controls.search_note));
-                set_text(s.alias_edit, "two words");
-                check("and so is one with a space", !finish_alias_edit(s, true), get_text(s.controls.search_note));
-                finish_alias_edit(s, false);
-                check("Esc puts it back", s.alias_row.is_none() && get_text(s.controls.search_note).is_empty(), get_text(s.controls.search_note));
-                start_alias_edit(s, one);
-                set_text(s.alias_edit, "");
-                finish_alias_edit(s, true);
+                start_alias_edit(s, TABLE_SEARCH, one);
+                check("an alias box opens on its row", s.tables[TABLE_SEARCH].alias_row == Some(one) && IsWindowVisible(search_edit).as_bool(), format!("{:?}", s.tables[TABLE_SEARCH].alias_row));
+                set_text(search_edit, "nn");
+                let kept = finish_alias_edit(s, TABLE_SEARCH, true);
+                let key_one = match s.tables[TABLE_SEARCH].rows[one] { SearchRow::Item(at) => s.search_items[at].key.clone(), _ => String::new() };
+                check("Enter keeps the alias", kept && item_alias(&s.base, &key_one) == "nn" && !IsWindowVisible(search_edit).as_bool(), item_alias(&s.base, &key_one));
+                start_alias_edit(s, TABLE_SEARCH, two);
+                set_text(search_edit, "NN");
+                let refused = !finish_alias_edit(s, TABLE_SEARCH, true);
+                check("the same alias on something else is refused", refused && s.tables[TABLE_SEARCH].alias_row == Some(two) && s.style.is_alert(search_note), get_text(search_note));
+                set_text(search_edit, "two words");
+                check("and so is one with a space", !finish_alias_edit(s, TABLE_SEARCH, true), get_text(search_note));
+                finish_alias_edit(s, TABLE_SEARCH, false);
+                check("Esc puts it back", s.tables[TABLE_SEARCH].alias_row.is_none() && get_text(search_note).is_empty(), get_text(search_note));
+                start_alias_edit(s, TABLE_SEARCH, one);
+                set_text(search_edit, "");
+                finish_alias_edit(s, TABLE_SEARCH, true);
                 check("an empty alias takes it away", item_alias(&s.base, &key_one).is_empty(), item_alias(&s.base, &key_one));
 
-                start_search_record(s, one);
-                check("a hotkey listens in its row", s.search_recording.is_some() && s.hotkey_target.is_some() && get_text(s.controls.search_note) == SEARCH_HINT, get_text(s.controls.search_note));
+                start_search_record(s, TABLE_SEARCH, one);
+                check("a hotkey listens in its row", s.search_recording.is_some() && s.hotkey_target.is_some() && get_text(search_note) == SEARCH_HINT, get_text(search_note));
                 record_hotkey_keys(s, Mods::CTRL.union(Mods::ALT), "J");
                 let action = Action::Builtin { command: Builtin::NewNote };
                 let keys = item_hotkey(&s.base, &action);
                 check("keys pressed there become its hotkey", keys.as_deref() == Some("Ctrl+Alt+J") && s.search_recording.is_none() && s.hotkey_target.is_none(), format!("{keys:?}"));
                 check("and the Hotkeys page lists it", s.hotkey_rows.iter().any(|row| row.binding_action(&s.base).is_some_and(|bound| same_target(&bound, &action))), String::new());
-                remove_search_hotkey(s, one);
+                remove_search_hotkey(s, TABLE_SEARCH, one);
                 check("Delete takes it away", item_hotkey(&s.base, &action).is_none(), String::new());
-                let asks = (0..s.search_rows.len()).find(|at| matches!(s.search_rows[*at], SearchRow::Item(item) if s.search_items[item].action.is_none()));
+                let rows = &s.tables[TABLE_SEARCH].rows;
+                let asks = (0..rows.len()).find(|at| matches!(rows[*at], SearchRow::Item(item) if s.search_items[item].action.is_none()));
                 if let Some(asks) = asks {
-                    start_search_record(s, asks);
-                    check("what asks first can't have a hotkey", s.hotkey_target.is_none() && !get_text(s.controls.search_note).is_empty(), get_text(s.controls.search_note));
-                    say_search_note(s, "", false);
+                    start_search_record(s, TABLE_SEARCH, asks);
+                    check("what asks first can't have a hotkey", s.hotkey_target.is_none() && !get_text(search_note).is_empty(), get_text(search_note));
+                    say_table_note(s, TABLE_SEARCH, "", false);
                 }
             }
-            _ => check("the Search page lists Orbit's commands", false, format!("{} rows", s.search_rows.len())),
+            _ => check("the Search page lists Orbit's commands", false, format!("{} rows", s.tables[TABLE_SEARCH].rows.len())),
         }
+
+        // The Extensions page's table: every extension, its switch, and its commands under it.
+        select_page(s, PAGE_EXTENSIONS);
+        set_text(s.tables[TABLE_EXTENSIONS].filter, "");
+        refresh_table(s, TABLE_EXTENSIONS);
+        let ext_row = |s: &State, ext: BuiltinExt| s.tables[TABLE_EXTENSIONS].rows.iter().position(|row| matches!(row, SearchRow::Extension(e) if s.ext_entries[*e].builtin == Some(ext)));
+        let shown = s.tables[TABLE_EXTENSIONS].rows.iter().filter(|row| matches!(row, SearchRow::Extension(_))).count();
+        check("the Extensions table lists every extension", shown == s.ext_entries.len() && s.tables[TABLE_EXTENSIONS].rows.first() == Some(&SearchRow::Header(COLUMN_TITLES)), format!("{shown} of {}", s.ext_entries.len()));
+        let github_was = s.base.extensions.github;
+        if let Some(github) = ext_row(s, BuiltinExt::GitHub) {
+            if github_was {
+                act_on_cell(s, TABLE_EXTENSIONS, github, SearchCell::Switch);
+            }
+            let rows_off = s.tables[TABLE_EXTENSIONS].rows.len();
+            check("an extension that's off has only its switch", row_cells(s, TABLE_EXTENSIONS, github) == [SearchCell::Switch], format!("{:?}", row_cells(s, TABLE_EXTENSIONS, github)));
+            act_on_cell(s, TABLE_EXTENSIONS, github, SearchCell::Switch);
+            let commands = s.tables[TABLE_EXTENSIONS].rows.len() - rows_off;
+            check("turning it on there turns it on, and lists its commands under it", s.base.extensions.github && commands == 4, format!("{commands} more rows"));
+            let in_search = row_named(s, TABLE_SEARCH, "My Issues").is_some();
+            check("and the Search page lists them too", in_search, String::new());
+            let issues = row_named(s, TABLE_EXTENSIONS, "My Issues");
+            check("a command under it has an alias and a hotkey, but no switch", issues.is_some_and(|at| row_cells(s, TABLE_EXTENSIONS, at) == [SearchCell::Alias, SearchCell::Hotkey]), String::new());
+            if let Some(at) = issues {
+                let edit = s.tables[TABLE_EXTENSIONS].alias_edit;
+                start_alias_edit(s, TABLE_EXTENSIONS, at);
+                set_text(edit, "iss");
+                finish_alias_edit(s, TABLE_EXTENSIONS, true);
+                check("an alias given there is the list's keyword", s.base.extensions.keywords.get("github/issues").map(String::as_str) == Some("iss"), format!("{:?}", s.base.extensions.keywords.get("github/issues")));
+                let key = crate::catalog::extension_key("github", "issues");
+                set_item_keyword(&mut s.base, &key, "ghi");
+                set_item_keyword(&mut s.last_saved, &key, "ghi");
+            }
+            if !github_was {
+                act_on_cell(s, TABLE_EXTENSIONS, github, SearchCell::Switch);
+            }
+            check("and turning it off takes them away again", s.base.extensions.github == github_was && row_named(s, TABLE_SEARCH, "My Issues").is_some() == github_was, String::new());
+        } else {
+            check("the Extensions table lists GitHub", false, String::new());
+        }
+        if let Some(everything) = ext_row(s, BuiltinExt::Files) {
+            let cells = row_cells(s, TABLE_EXTENSIONS, everything);
+            let on = s.base.extensions.everything.enabled;
+            check("Everything has one command, so its row has its alias and hotkey", !on || cells == [SearchCell::Alias, SearchCell::Hotkey, SearchCell::Switch], format!("{cells:?}"));
+        }
+        check("buttons numbered after the pickers aren't taken for them", picker_of(ID_EXT_REMOVE).is_none() && picker_of(ID_PICKERS + 2).is_some(), String::new());
+        let _ = save_now(s);
 
         // The wheel, on the General page.
         select_page(s, PAGE_GENERAL);
@@ -6032,6 +7454,67 @@ pub fn preview_selfcheck() -> Vec<String> {
             check("the screens changing keeps it", s.last_saved.launcher.screen == picked, format!("{:?}", s.last_saved.launcher.screen));
         }
 
+        // Searching Settings from the box at the top of the page list.
+        let pages_found = s.findable.iter().filter(|entry| entry.anchor.is_none()).count();
+        check("the search knows every page", pages_found == PAGES.len(), format!("{pages_found} pages, {} things", s.findable.len()));
+        let lost: Vec<&str> = FIND_WORDS.iter().map(|(title, _)| *title).filter(|title| !s.findable.iter().any(|entry| entry.title == *title)).collect();
+        check("every setting given more words is on a page", lost.is_empty(), lost.join(", "));
+        check("the hotkeys' text view isn't searched while it's hidden", !s.findable.iter().any(|entry| entry.title.starts_with("HyperKey mappings")), String::new());
+        let found = |s: &mut State, query: &str| -> Vec<String> {
+            set_text(s.find, query);
+            refresh_find(s);
+            s.find_rows.iter().map(|at| s.findable[*at].title.clone()).collect()
+        };
+        let titles = found(s, "see through");
+        check("a setting is found by words of its name", titles.first().is_some_and(|title| title == "See-through launcher"), titles.join(", "));
+        check("and the list of what's found takes the page list's place", IsWindowVisible(s.find_list).as_bool() && !IsWindowVisible(s.list).as_bool(), String::new());
+        select_page(s, PAGE_DATA);
+        let went = find_key(s, s.find, VK_RETURN.0, false);
+        check("Enter in the box opens its page", went && s.page == PAGE_GENERAL, format!("page {}", s.page));
+        match s.style.flash {
+            Some((parent, rect)) => {
+                let glass_top = place_on_page(s, s.controls.glass).1;
+                let in_view = rect.top - s.scroll >= 0 && rect.bottom - s.scroll <= view_height(s);
+                check("and outlines the setting's row, in view", parent == s.content && rect.top <= glass_top && glass_top < rect.bottom && in_view, format!("{rect:?}, scroll {}", s.scroll));
+            }
+            None => check("and outlines the setting's row, in view", false, "no outline".to_string()),
+        }
+        check("the box keeps the search", get_text(s.find) == "see through" && IsWindowVisible(s.find_list).as_bool(), get_text(s.find));
+        select_page(s, PAGE_DATA);
+        check("another page takes the outline away", s.style.flash.is_none(), String::new());
+        let titles = found(s, "clipboard");
+        let first = s.find_rows.first().map(|at| &s.findable[*at]);
+        check("a page is found by its name, before what's on it", first.is_some_and(|entry| entry.anchor.is_none() && entry.page == PAGE_CLIPBOARD) && titles.iter().any(|title| title == "Keep clipboard history"), titles.join(", "));
+        let titles = found(s, "dark");
+        check("a drop-down is found by one of its choices", titles.iter().any(|title| title == "Theme"), titles.join(", "));
+        let titles = found(s, "meteo");
+        check("and a setting by what's said under it", titles.iter().any(|title| title == "Weather"), titles.join(", "));
+        let titles = found(s, "monitor");
+        check("and by other words for it", titles.first().is_some_and(|title| title == "Open on"), titles.join(", "));
+        let titles = found(s, "zebra crossing");
+        check("nothing found says so, in place of the page list", titles.is_empty() && IsWindowVisible(s.find_list).as_bool(), titles.join(", "));
+        let cleared = find_key(s, s.find, VK_ESCAPE.0, false);
+        check("Esc in the box clears it first, and the page list comes back", cleared && get_text(s.find).is_empty() && IsWindowVisible(s.list).as_bool() && !IsWindowVisible(s.find_list).as_bool(), get_text(s.find));
+        check("then Esc is left to close the window", !find_key(s, s.find, VK_ESCAPE.0, false), String::new());
+        let _ = found(s, "weather");
+        SendMessageW(s.find_list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        check("Up from the first thing found goes back to the box", find_key(s, s.find_list, VK_UP.0, false), String::new());
+        check("Esc in the list clears the search too", find_key(s, s.find_list, VK_ESCAPE.0, false) && get_text(s.find).is_empty(), get_text(s.find));
+        let slash = |hwnd: HWND| MSG { hwnd, message: WM_CHAR, wParam: WPARAM('/' as usize), ..Default::default() };
+        check("/ on the page list goes to the search", eats_key_text(&slash(s.list)), String::new());
+        check("/ in a text box is typed", !eats_key_text(&slash(s.tables[TABLE_SEARCH].filter)), String::new());
+        let mut keys = [0u8; 256];
+        let _ = GetKeyboardState(&mut keys);
+        keys[VK_CONTROL.0 as usize] = 0x80;
+        let _ = SetKeyboardState(&keys);
+        let ctrl_f = |hwnd: HWND| MSG { hwnd, message: WM_KEYDOWN, wParam: WPARAM(b'F' as usize), ..Default::default() };
+        check("Ctrl+F goes to the search, even from a text box", eats_key_text(&ctrl_f(s.list)) && eats_key_text(&ctrl_f(s.tables[TABLE_SEARCH].filter)), String::new());
+        start_launcher_record(s);
+        check("but not while a shortcut is being recorded", !eats_key_text(&ctrl_f(s.controls.hotkey)) && !eats_key_text(&slash(s.controls.hotkey)), String::new());
+        stop_launcher_record(s);
+        keys[VK_CONTROL.0 as usize] = 0;
+        let _ = SetKeyboardState(&keys);
+
         // The last good text is what a later mistake falls back to.
         select_page(s, PAGE_HOTKEYS);
         toggle_hotkey_text(s);
@@ -6088,6 +7571,43 @@ mod tests {
         assert_eq!(rows[1].title, "Address");
     }
 
+    fn findable_row(title: &str, words: &str, note: &str) -> forms::Findable {
+        forms::Findable { title: title.into(), note: note.into(), heading: String::new(), words: words.into(), anchor: HWND::default() }
+    }
+
+    fn titles(findable: &[Found], query: &str) -> Vec<String> {
+        find_settings(findable, query).into_iter().map(|at| findable[at].title.clone()).collect()
+    }
+
+    #[test]
+    fn the_settings_search_ranks_names_first_and_needs_every_word() {
+        let mut pages: Vec<Vec<forms::Findable>> = vec![Vec::new(); PAGES.len()];
+        pages[PAGE_GENERAL] = vec![
+            findable_row("Theme", "Match Windows Light Dark", "For the launcher and this window."),
+            findable_row("See-through launcher", "", "Solid in high contrast."),
+            findable_row("Weather", "", "Orbit sends the place to Open-Meteo."),
+        ];
+        pages[PAGE_CLIPBOARD] = vec![findable_row("Keep clipboard history", "", "Stays on this PC.")];
+        let hidden = findable_row("HyperKey mappings, as key = action", "", "");
+        let hidden_anchor = HWND(1 as *mut _);
+        pages[PAGE_HOTKEYS] = vec![forms::Findable { anchor: hidden_anchor, ..hidden }];
+        let findable = findable_settings(pages, &[hidden_anchor]);
+
+        assert_eq!(findable.iter().filter(|entry| entry.anchor.is_none()).count(), PAGES.len(), "every page can be found");
+        assert!(!findable.iter().any(|entry| entry.title.starts_with("HyperKey mappings")), "hidden rows are left out");
+        assert!(titles(&findable, "").is_empty() && titles(&findable, "  - ").is_empty());
+        assert_eq!(titles(&findable, "see through").first().map(String::as_str), Some("See-through launcher"));
+        assert_eq!(titles(&findable, "SEE-THR"), ["See-through launcher"], "case and punctuation don't matter");
+        assert_eq!(titles(&findable, "clipboard")[..2], ["Clipboard", "Keep clipboard history"], "the page comes before what's on it");
+        assert!(titles(&findable, "dark").contains(&"Theme".to_string()), "a drop-down's choices find it");
+        assert!(titles(&findable, "appearance").contains(&"Theme".to_string()), "and so do the words given for it");
+        assert_eq!(titles(&findable, "meteo"), ["Weather"], "a note finds its setting");
+        assert!(titles(&findable, "clipboard dark").is_empty(), "every word has to match");
+        assert_eq!(titles(&findable, "general weather"), ["Weather"], "a page's name narrows to what's on it");
+        assert_eq!(titles(&findable, "eather"), ["Weather"], "three letters inside a name are enough");
+        assert!(titles(&findable, "at").iter().all(|title| title != "Weather"), "but two aren't");
+    }
+
     #[test]
     fn the_preview_finds_pages_by_short_names() {
         assert_eq!(preview_page_index("general"), Some(PAGE_GENERAL));
@@ -6096,6 +7616,78 @@ mod tests {
         assert_eq!(preview_page_index("snippets"), Some(PAGE_SNIPPETS));
         assert_eq!(preview_page_index("search"), Some(PAGE_SEARCH));
         assert_eq!(preview_page_index("nope"), None);
+    }
+
+    #[test]
+    fn each_extension_that_is_on_has_a_group_with_its_commands() {
+        let mut settings = Settings::default();
+        let entries = ext_entries(&[]);
+        let items = search_items(&[], &settings, &[]);
+        let names = |items: &[SearchItem], group: &str| items.iter().filter(|item| item.group_name == group).map(|item| item.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&items, "Everything"), ["Everything"]);
+        assert_eq!(names(&items, "Weather"), ["Weather"]);
+        assert_eq!(names(&items, "GitHub").len(), 4, "every extension's commands are there, for the Extensions table");
+        assert!(!names(&items, "Orbit commands").contains(&"Speed Test".to_string()), "an extension's command is only in its own group");
+        let shown = |rows: &[SearchRow]| rows.iter().filter_map(|row| if let SearchRow::Item(at) = row { Some(items[*at].name.clone()) } else { None }).collect::<Vec<_>>();
+        let rows = search_rows(&items, &entries, &settings, "");
+        assert!(!shown(&rows).contains(&"My Issues".to_string()), "but the Search page leaves out those of one that's off, as GitHub starts");
+        settings.extensions.github = true;
+        settings.extensions.speed_test = false;
+        let rows = search_rows(&items, &entries, &settings, "");
+        assert!(shown(&rows).contains(&"My Issues".to_string()));
+        assert!(!shown(&rows).contains(&"Speed Test".to_string()));
+        let github = items.iter().find(|item| item.name == "My Issues").unwrap();
+        assert_eq!(github.action, Some(Action::Extension { ext: "github".into(), command: "issues".into() }));
+        assert_eq!(group_title(&items, github.group), "GitHub");
+        assert_eq!(group_title(&items, GROUP_LINKS), "Quicklinks");
+        assert_eq!(entries[github.group - GROUP_EXTENSIONS].builtin, Some(BuiltinExt::GitHub), "an extension's group is its place in the table");
+        // An extension's name finds all of its commands.
+        let rows = search_rows(&items, &entries, &settings, "GitHub");
+        assert_eq!(rows.iter().filter(|row| matches!(row, SearchRow::Item(_))).count(), 4);
+        let vault = items.iter().find(|item| item.key == "int:1password").unwrap();
+        assert!(vault.action.is_some(), "1Password can have a hotkey");
+    }
+
+    #[test]
+    fn the_extensions_table_shows_each_extension_and_its_commands_while_on() {
+        let mut settings = Settings::default();
+        let entries = ext_entries(&[]);
+        let items = search_items(&[], &settings, &[]);
+        let at_of = |ext: BuiltinExt| entries.iter().position(|entry| entry.builtin == Some(ext)).unwrap();
+        let rows = extension_rows(&items, &entries, &settings, "");
+        assert_eq!(rows[0], SearchRow::Header(COLUMN_TITLES), "the column titles come first");
+        assert_eq!(rows.len(), 1 + entries.len(), "with GitHub off, no commands show");
+        settings.extensions.github = true;
+        let rows = extension_rows(&items, &entries, &settings, "");
+        let github = rows.iter().position(|row| *row == SearchRow::Extension(at_of(BuiltinExt::GitHub))).unwrap();
+        assert!(rows[github + 1..github + 5].iter().all(|row| matches!(row, SearchRow::Item(at) if items[*at].group_name == "GitHub")), "its four commands are under it");
+        let weather = rows.iter().position(|row| *row == SearchRow::Extension(at_of(BuiltinExt::Weather))).unwrap();
+        assert!(matches!(rows[weather + 1], SearchRow::Extension(_)), "one with a single command keeps it in its own row");
+        let rows = extension_rows(&items, &entries, &settings, "starred");
+        assert_eq!(rows.len(), 3, "a command's name finds its extension, with just that command: {rows:?}");
+        let rows = extension_rows(&items, &entries, &settings, "forecast");
+        assert_eq!(rows, [SearchRow::Header(COLUMN_TITLES), SearchRow::Extension(at_of(BuiltinExt::Weather))], "and what it does finds it");
+        assert!(extension_rows(&items, &entries, &settings, "zebra").is_empty(), "nothing found leaves no rows, so the list says so");
+    }
+
+    #[test]
+    fn a_list_command_answers_to_its_keyword() {
+        let mut settings = Settings::default();
+        let items = search_items(&[], &settings, &[]);
+        let issues = items.iter().find(|item| item.name == "My Issues").unwrap();
+        let files = items.iter().find(|item| item.key == FILES_KEY).unwrap();
+        assert_eq!(alias_of(&settings, issues), "ghi", "its own keyword");
+        assert_eq!(alias_of(&settings, files), "", "Everything has none until it's given one, and is found by its name");
+        set_item_keyword(&mut settings, &issues.key, "is");
+        set_item_keyword(&mut settings, FILES_KEY, "ev");
+        assert_eq!(settings.extensions.keywords.get("github/issues").map(String::as_str), Some("is"), "where the launcher reads it");
+        assert_eq!(settings.extensions.everything.alias, "ev");
+        assert_eq!(alias_of(&settings, files), "ev");
+        assert_eq!(alias_of(&settings, issues), "is");
+        assert_eq!(orbit_core::builtin_ext::command_keyword(&settings, "github", "issues", "ghi"), "is");
+        set_item_keyword(&mut settings, &issues.key, "");
+        assert_eq!(alias_of(&settings, issues), "", "taken away, rather than back to its own");
+        assert!(settings.aliases.is_empty(), "a keyword isn't kept as an alias too");
     }
 
     #[test]
@@ -6128,8 +7720,9 @@ mod tests {
     #[test]
     fn every_page_has_a_name_and_an_icon() {
         assert_eq!(PAGES.len(), 10);
+        assert_eq!(PAGES[PAGE_EXTENSIONS].0, "Extensions");
+        assert_eq!(PAGES[PAGE_DATA].0, "Data");
         assert_eq!(PAGES[PAGE_SEARCH].0, "Search");
-        assert_eq!(PAGES[PAGE_INTEGRATIONS].0, "Integrations");
         assert_eq!(PAGES[PAGE_HOTKEYS].0, "Hotkeys");
         assert_eq!(PAGES[PAGE_HYPER].0, "HyperKey");
         assert_eq!(PAGES[PAGE_CLIPBOARD].0, "Clipboard");

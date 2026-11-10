@@ -9,3 +9,10 @@ description = "Orbit shared domain logic: search, ranking, calculator, actions, 
 orbit-hotkeys.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Reading other launchers' exports. Raycast's are gzipped and encrypted with AES and scrypt.
+aes = "0.8"
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+cbc = { version = "0.1", features = ["alloc", "block-padding"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+scrypt = { version = "0.11", default-features = false }
+sha2 = "0.10"

@@ -237,7 +237,7 @@ pub fn title_parts(title: &str) -> Vec<String> {
         .collect()
 }
 
-fn shortcut_target(shortcut: &Path) -> Option<PathBuf> {
+pub fn shortcut_target(shortcut: &Path) -> Option<PathBuf> {
     use windows::Win32::System::Com::{IPersistFile, STGM_READ};
     use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
     use windows::core::PCWSTR;

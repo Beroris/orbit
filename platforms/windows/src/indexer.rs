@@ -129,7 +129,7 @@ const PKEY_LINK_TARGET: PROPERTYKEY = PROPERTYKEY {
 };
 
 /// Reads the icon as 64×64 premultiplied BGRA, top-down.
-unsafe fn read_icon(item: &IShellItem) -> Option<Vec<u8>> {
+pub unsafe fn read_icon(item: &IShellItem) -> Option<Vec<u8>> {
     unsafe {
         let factory: IShellItemImageFactory = item.cast().ok()?;
         let size = SIZE { cx: ICON_SIZE as i32, cy: ICON_SIZE as i32 };

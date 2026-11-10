@@ -91,7 +91,27 @@ impl Tool {
             Tool::EnteAuth => "Copy a one-time code",
         }
     }
+
+    /// The extension it is in Settings, which turns it on and off.
+    pub fn extension(self) -> orbit_core::builtin_ext::BuiltinExt {
+        match self {
+            Tool::OnePassword => orbit_core::builtin_ext::BuiltinExt::OnePassword,
+            Tool::EnteAuth => orbit_core::builtin_ext::BuiltinExt::EnteAuth,
+        }
+    }
+
+    pub fn of_extension(ext: orbit_core::builtin_ext::BuiltinExt) -> Option<Tool> {
+        Tool::ALL.into_iter().find(|tool| tool.extension() == ext)
+    }
+
+    /// What a hotkey for it runs: its search, as an extension's command.
+    pub fn action(self) -> orbit_core::Action {
+        orbit_core::Action::Extension { ext: self.extension().id().to_string(), command: VAULT_COMMAND.to_string() }
+    }
 }
+
+/// The one command 1Password and Ente Auth have, as extensions: searching what they keep.
+pub const VAULT_COMMAND: &str = "search";
 
 /// What can be asked for about one item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

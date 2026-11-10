@@ -15,6 +15,27 @@ pub enum Entry {
     Link(usize),
     Custom(usize),
     Integration(Tool),
+    /// A command of an extension that's turned on, by its place in `extension_commands`.
+    Extension(usize),
+}
+
+/// A command an extension adds, as the catalog lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExtCommand {
+    pub ext: String,
+    pub command: String,
+    pub title: String,
+    pub subtitle: String,
+    pub keywords: String,
+    /// The extension's picture, if it has one.
+    pub icon: Option<String>,
+    /// For a command that opens a list, its own keyword. The one set in Settings wins, and typed
+    /// alone it finds the command, as an alias does.
+    pub keyword: Option<String>,
+}
+
+pub fn extension_key(ext: &str, command: &str) -> String {
+    format!("ext:{ext}/{command}")
 }
 
 pub struct Catalog {
@@ -27,6 +48,8 @@ pub struct Catalog {
     settings_custom: Vec<orbit_core::settings::CustomCommand>,
     /// Items with a hotkey, and its label. Few enough that rows just scan it.
     pub hotkeys: Vec<(u32, String)>,
+    /// The commands of every extension that's turned on.
+    pub extension_commands: Vec<ExtCommand>,
 }
 
 pub fn app_key(id: &str) -> String {
@@ -51,6 +74,7 @@ impl Catalog {
             settings_links: Vec::new(),
             settings_custom: Vec::new(),
             hotkeys: Vec::new(),
+            extension_commands: Vec::new(),
         };
         catalog.rebuild(settings);
         catalog
@@ -88,14 +112,19 @@ impl Catalog {
             entries.push(Entry::App(i));
         }
         for &(command, key, title, subtitle, keywords) in Builtin::ALL {
-            if is_hidden(key) {
+            // A command of an extension that's turned off isn't there, such as File search or Weather.
+            if is_hidden(key) || !orbit_core::builtin_ext::builtin_available(settings, command) {
                 continue;
             }
             index.add(&SearchItem {
                 key: key.to_string(),
                 title: title.to_string(),
                 subtitle: subtitle.to_string(),
-                alias: alias(key),
+                // Everything answers to the alias kept with its settings, unless it has one here.
+                alias: match alias(key) {
+                    own if own.is_empty() && command == Builtin::SearchFiles => settings.extensions.everything.alias.clone(),
+                    own => own,
+                },
                 keywords: keywords.to_string(),
                 pinned: is_pinned(key),
                 usage: self.usage.get(key).copied().unwrap_or(0),
@@ -154,6 +183,25 @@ impl Catalog {
             });
             entries.push(Entry::Integration(tool));
         }
+        for (i, command) in self.extension_commands.iter().enumerate() {
+            let key = extension_key(&command.ext, &command.command);
+            if is_hidden(&key) || !orbit_core::builtin_ext::extension_on(settings, &command.ext) {
+                continue;
+            }
+            index.add(&SearchItem {
+                title: command.title.clone(),
+                subtitle: command.subtitle.clone(),
+                alias: match (alias(&key), &command.keyword) {
+                    (own, Some(keyword)) if own.is_empty() => orbit_core::builtin_ext::command_keyword(settings, &command.ext, &command.command, keyword).to_string(),
+                    (own, _) => own,
+                },
+                keywords: command.keywords.clone(),
+                pinned: is_pinned(&key),
+                usage: self.usage.get(&key).copied().unwrap_or(0),
+                key,
+            });
+            entries.push(Entry::Extension(i));
+        }
         self.index = index;
         self.entries = entries;
         self.find_hotkeys(settings);
@@ -210,7 +258,11 @@ impl Catalog {
             Entry::Builtin(command) => Action::Builtin { command: *command },
             Entry::Link(i) => Action::Url { url: self.settings_links.get(*i)?.url.clone() },
             Entry::Custom(i) => Action::Custom { id: self.settings_custom.get(*i)?.id.clone() },
-            Entry::Integration(_) => return None,
+            Entry::Integration(tool) => tool.action(),
+            Entry::Extension(i) => {
+                let command = self.extension_commands.get(*i)?;
+                Action::Extension { ext: command.ext.clone(), command: command.command.clone() }
+            }
         })
     }
 }
@@ -253,6 +305,7 @@ pub fn glyph_for_builtin(command: Builtin) -> char {
         Builtin::OpenTerminal => '\u{E756}',
         Builtin::ShowHelp => '\u{E897}',
         Builtin::SpeedTest => crate::rows::GLYPH_SPEED,
+        Builtin::Weather => crate::rows::GLYPH_WEATHER,
         Builtin::WindowLeft => crate::rows::GLYPH_WIN_LEFT,
         Builtin::WindowRight => crate::rows::GLYPH_WIN_RIGHT,
         Builtin::WindowTop => crate::rows::GLYPH_WIN_TOP,
@@ -268,6 +321,10 @@ pub fn glyph_for_builtin(command: Builtin) -> char {
         Builtin::Timer => crate::rows::GLYPH_TIMER,
         Builtin::Stopwatch => crate::rows::GLYPH_STOPWATCH,
         Builtin::PickColour => crate::rows::GLYPH_PICKER,
+        Builtin::SearchFiles => crate::rows::GLYPH_FILE,
+        Builtin::ImportData => crate::rows::GLYPH_IMPORT,
+        Builtin::ManageExtensions => crate::rows::GLYPH_EXTENSION,
+        Builtin::CheckForUpdates => crate::rows::GLYPH_UPDATE,
     }
 }
 
@@ -338,6 +395,57 @@ mod tests {
         assert!(titles(&catalog, "2fa").contains(&"Ente Auth".to_string()));
         settings.hidden.push(Tool::EnteAuth.key().to_string());
         assert!(!titles(&Catalog::new(apps(), &settings), "ente").contains(&"Ente Auth".to_string()));
+    }
+
+    #[test]
+    fn extension_commands_show_only_when_turned_on() {
+        let mut settings = Settings::default();
+        let mut catalog = Catalog::new(apps(), &settings);
+        catalog.extension_commands = vec![ExtCommand {
+            ext: "windows-settings".into(),
+            command: "search".into(),
+            title: "Search Windows Settings".into(),
+            subtitle: "Bluetooth, display, sound and the rest".into(),
+            keywords: "control panel preferences".into(),
+            icon: None,
+            keyword: Some("ws".into()),
+        }];
+        catalog.rebuild(&settings);
+        assert!(!titles(&catalog, "windows settings").contains(&"Search Windows Settings".to_string()), "added extensions start switched off");
+        settings.extensions.enabled.push("windows-settings".into());
+        catalog.rebuild(&settings);
+        assert_eq!(catalog.entries.len(), catalog.index.len());
+        assert_eq!(titles(&catalog, "windows settings")[0], "Search Windows Settings");
+        assert!(titles(&catalog, "control panel").contains(&"Search Windows Settings".to_string()), "found by its keywords");
+        let item = (0..catalog.index.len() as u32).find(|&item| catalog.index.title(item) == "Search Windows Settings").unwrap();
+        assert_eq!(catalog.entry_action(item, true), Some(Action::Extension { ext: "windows-settings".into(), command: "search".into() }));
+        assert_eq!(titles(&catalog, "ws")[0], "Search Windows Settings", "its keyword, typed alone, finds it");
+        settings.extensions.keywords.insert("windows-settings/search".into(), "win".into());
+        catalog.rebuild(&settings);
+        assert_eq!(titles(&catalog, "win")[0], "Search Windows Settings", "and so does one set in Settings");
+        settings.hidden.push(extension_key("windows-settings", "search"));
+        catalog.rebuild(&settings);
+        assert!(!titles(&catalog, "windows settings").contains(&"Search Windows Settings".to_string()), "hidden from search");
+    }
+
+    #[test]
+    fn an_extension_that_is_off_takes_its_commands_with_it() {
+        let mut settings = Settings::default();
+        let catalog = Catalog::new(apps(), &settings);
+        assert!(titles(&catalog, "speed test").contains(&"Speed Test".to_string()), "on by default");
+        assert_eq!(titles(&catalog, "weather").first().map(String::as_str), Some("Weather"));
+        assert_eq!(titles(&catalog, "everything").first().map(String::as_str), Some("Everything"), "file search is found by its name");
+        settings.extensions.speed_test = false;
+        settings.fetch_weather = false;
+        let catalog = Catalog::new(apps(), &settings);
+        assert!(!titles(&catalog, "speed test").contains(&"Speed Test".to_string()));
+        assert!(!titles(&catalog, "weather").contains(&"Weather".to_string()));
+        let ente = (0..catalog.index.len() as u32).find(|&item| catalog.index.title(item) == "Ente Auth");
+        assert!(ente.is_none(), "Ente Auth starts off");
+        settings.integrations.ente_auth = true;
+        let catalog = Catalog::new(apps(), &settings);
+        let ente = (0..catalog.index.len() as u32).find(|&item| catalog.index.title(item) == "Ente Auth").unwrap();
+        assert_eq!(catalog.entry_action(ente, true), Some(Action::Extension { ext: "ente-auth".into(), command: "search".into() }), "so it can have a hotkey");
     }
 
     #[test]

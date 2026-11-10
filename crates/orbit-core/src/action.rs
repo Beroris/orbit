@@ -15,6 +15,8 @@ pub enum Action {
     Custom { id: String },
     OpenNote { id: i64 },
     InsertSnippet { id: i64 },
+    /// A command from an extension, by the extension's id and the command's.
+    Extension { ext: String, command: String },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -40,6 +42,7 @@ pub enum Builtin {
     ResumeShortcuts,
     ToggleLowResource,
     RestartOrbit,
+    CheckForUpdates,
     QuitOrbit,
     LockScreen,
     Sleep,
@@ -68,6 +71,10 @@ pub enum Builtin {
     Timer,
     Stopwatch,
     PickColour,
+    SearchFiles,
+    ImportData,
+    ManageExtensions,
+    Weather,
 }
 
 impl Builtin {
@@ -91,6 +98,10 @@ impl Builtin {
                 | Builtin::Timer
                 | Builtin::Stopwatch
                 | Builtin::PickColour
+                | Builtin::SearchFiles
+                | Builtin::ImportData
+                | Builtin::ManageExtensions
+                | Builtin::Weather
         )
     }
 
@@ -133,6 +144,7 @@ impl Builtin {
         (Builtin::DeleteLocalData, "cmd:delete-data", "Delete All Orbit Data", "Notes, snippets, clipboard history and settings, for good. Orbit then quits", "erase wipe remove uninstall"),
         (Builtin::ShowHelp, "cmd:help", "Orbit Help", "Keys and shortcuts", "keyboard shortcuts ?"),
         (Builtin::RestartOrbit, "cmd:restart-orbit", "Restart Orbit", "Quit and start again", "reload"),
+        (Builtin::CheckForUpdates, "cmd:update", "Check for Updates", "Get the newest version of Orbit", "update upgrade new version release latest download install"),
         (Builtin::QuitOrbit, "cmd:quit", "Quit Orbit", "Stop Orbit, keyboard returns to normal", "exit close"),
         (Builtin::LockScreen, "cmd:lock", "Lock Screen", "System", "security away"),
         (Builtin::Sleep, "cmd:sleep", "Sleep", "System, asks first", "suspend"),
@@ -157,6 +169,10 @@ impl Builtin {
         (Builtin::Timer, "cmd:timer", "Timer", "Count down from a time you type", "countdown alarm minutes clock egg"),
         (Builtin::Stopwatch, "cmd:stopwatch", "Stopwatch", "Count up from zero", "timer clock time lap"),
         (Builtin::PickColour, "cmd:pick-colour", "Pick Colour", "Copy the colour of anything on screen", "color colour picker eyedropper hex rgb pixel"),
+        (Builtin::SearchFiles, "cmd:files", "Everything", "Search every file and folder on your PC", "search files find file folder document locate explorer voidtools disk"),
+        (Builtin::ImportData, "cmd:import", "Import from Another Launcher", "Raycast, Flow Launcher, PowerToys Run, Wox or an Orbit export", "import migrate move bring settings quicklinks snippets raycast flow powertoys wox"),
+        (Builtin::ManageExtensions, "cmd:extensions", "Manage Extensions", "Add extensions and turn them on or off", "extensions plugins add-ons addons install store"),
+        (Builtin::Weather, "cmd:weather", "Weather", "The forecast for a place you type", "forecast temperature rain sun wind outside"),
     ];
 
     pub fn from_key(key: &str) -> Option<Builtin> {

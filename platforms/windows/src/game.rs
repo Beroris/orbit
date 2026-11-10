@@ -122,7 +122,7 @@ mod tests {
         for path in [
             "",
             "c:\\program files\\zen browser\\zen.exe",
-            "c:\\users\\me\\appdata\\local\\programs\\t3 code (nightly)\\t3 code (nightly).exe",
+            "c:\\users\\me\\appdata\\local\\programs\\microsoft vs code\\code.exe",
             "c:\\windows\\system32\\notepad.exe",
             "c:\\program files (x86)\\steam\\steam.exe",
             "c:\\code\\shipping.exe",

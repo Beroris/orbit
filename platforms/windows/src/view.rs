@@ -36,6 +36,10 @@ pub enum Scope {
     Stopwatch,
     /// A colour picked from the screen.
     Colour(orbit_core::colour::Colour),
+    /// Every file on the PC, found by Everything as you type.
+    Files,
+    /// A list an extension fills as you type.
+    Extension { ext: String, command: String, title: String, placeholder: String },
 }
 
 impl Scope {
@@ -62,6 +66,8 @@ impl Scope {
             Scope::Timer => GLYPH_TIMER,
             Scope::Stopwatch => GLYPH_STOPWATCH,
             Scope::Colour(_) => GLYPH_PICKER,
+            Scope::Files => GLYPH_FILE,
+            Scope::Extension { ext, .. } => orbit_core::builtin_ext::BuiltinExt::from_id(ext).map_or(GLYPH_EXTENSION, crate::rows::extension_glyph),
         }
     }
 
@@ -87,6 +93,9 @@ impl Scope {
             Scope::Timer => "Type a time, such as 5m or 1h 30m\u{2026}".into(),
             Scope::Stopwatch => "Stopwatch".into(),
             Scope::Colour(_) => "Colour".into(),
+            Scope::Files => "Search files\u{2026}".into(),
+            Scope::Extension { title, placeholder, .. } if placeholder.is_empty() => format!("Search {title}\u{2026}"),
+            Scope::Extension { placeholder, .. } => placeholder.clone(),
         }
     }
 
@@ -114,6 +123,9 @@ impl Scope {
             Scope::Timer => "Timer",
             Scope::Stopwatch => "Stopwatch",
             Scope::Colour(_) => "Colour",
+            // Everything asks to be named where its results are shown.
+            Scope::Files => "Files, found by Everything",
+            Scope::Extension { title, .. } => title,
         }
     }
 
@@ -126,13 +138,15 @@ impl Scope {
             Scope::Emoji => Some("No emoji match"),
             Scope::Clipboard => Some("Nothing here yet. Copy something and it will appear."),
             Scope::Vault(_) => Some("Nothing matches"),
+            Scope::Files => Some("No files match"),
+            Scope::Extension { .. } => Some("Nothing found"),
             _ => None,
         }
     }
 
     /// Scopes where typing narrows the list.
     pub fn can_filter(&self) -> bool {
-        matches!(self, Scope::Root | Scope::Notes | Scope::Snippets | Scope::Links | Scope::Emoji | Scope::Clipboard | Scope::Vault(_) | Scope::Help | Scope::Diagnostics)
+        matches!(self, Scope::Root | Scope::Notes | Scope::Snippets | Scope::Links | Scope::Emoji | Scope::Clipboard | Scope::Vault(_) | Scope::Help | Scope::Diagnostics | Scope::Files | Scope::Extension { .. })
     }
 
     /// Scopes whose rows come from the data thread.
@@ -189,6 +203,8 @@ pub struct View {
     pub last_query: Option<String>,
     /// Set when the list is drawn as tiles. `scroll` then counts the grid's lines, not rows.
     pub grid: Option<Grid>,
+    /// The launcher's DPI, which rows are measured in to know which are on screen.
+    pub dpi: u32,
 }
 
 impl View {
@@ -205,6 +221,7 @@ impl View {
             stack: Vec::new(),
             last_query: None,
             grid: None,
+            dpi: 96,
         }
     }
 
@@ -289,12 +306,13 @@ impl View {
             }
             return;
         }
-        let max = self.rows.len().saturating_sub(self.visible_rows) as i32;
+        let max = self.last_scroll() as i32;
         self.scroll = (self.scroll as i32 + delta).clamp(0, max) as usize;
         if self.selected < self.scroll {
             self.selected = self.scroll;
-        } else if self.selected >= self.scroll + self.visible_rows {
-            self.selected = self.scroll + self.visible_rows - 1;
+        } else if !self.fits(self.scroll, self.selected) {
+            // The last row that's drawn whole.
+            self.selected = (self.scroll..self.rows.len()).take_while(|&at| self.fits(self.scroll, at)).last().unwrap_or(self.scroll);
         }
         if self.selected < self.rows.len() {
             self.selected = self.selectable_near(self.selected);
@@ -307,16 +325,35 @@ impl View {
             return;
         }
         // A shorter list, after something in it was deleted, moves down to fill the space.
-        self.scroll = self.scroll.min(self.rows.len().saturating_sub(self.visible_rows));
+        self.scroll = self.scroll.min(self.last_scroll());
+        // Rows are measured, not counted: section titles are shorter than rows, so more rows fit
+        // than `visible_rows`, and counting would scroll before the selection reached the bottom.
         if self.selected < self.scroll {
             self.scroll = self.selected;
-        } else if self.selected >= self.scroll + self.visible_rows {
-            self.scroll = self.selected + 1 - self.visible_rows;
+        } else {
+            while self.scroll < self.selected && !self.fits(self.scroll, self.selected) {
+                self.scroll += 1;
+            }
         }
         // Keep a section's title in view with its first row.
         if self.scroll == self.selected && self.scroll > 0 && self.rows[self.scroll - 1].is_header() {
             self.scroll -= 1;
         }
+    }
+
+    /// Whether row `index` is drawn whole with the list scrolled to `scroll`.
+    fn fits(&self, scroll: usize, index: usize) -> bool {
+        crate::ui::row_fits(&self.rows, scroll, index, self.dpi, self.visible_rows)
+    }
+
+    /// The furthest down the list scrolls: just far enough to show its last row whole.
+    fn last_scroll(&self) -> usize {
+        let Some(last) = self.rows.len().checked_sub(1) else { return 0 };
+        let mut scroll = last;
+        while scroll > 0 && self.fits(scroll - 1, last) {
+            scroll -= 1;
+        }
+        scroll
     }
 
     pub fn reset_position(&mut self) {
@@ -484,6 +521,35 @@ mod tests {
         assert_eq!(v.selected, 7);
         v.scroll_by(1000);
         assert_eq!(v.scroll, 12);
+    }
+
+    /// The home page: a short first title, five favourites, a title, then suggestions. The titles
+    /// take less room than rows, so more than `visible_rows` rows are on screen.
+    fn home(visible: usize) -> View {
+        let mut v = View::new(visible);
+        v.rows.push(Row::header("Favourites"));
+        v.rows.extend(rows(5));
+        v.rows.push(Row::header("Suggestions"));
+        v.rows.extend(rows(6));
+        v
+    }
+
+    #[test]
+    fn a_row_on_screen_below_the_titles_doesnt_scroll() {
+        let mut v = home(7);
+        // 8 + 5 rows + 30 + 1 row is 6 rows and 38 DIP, inside 7 rows.
+        v.select(7);
+        assert_eq!(v.scroll, 0, "the first suggestion is on screen");
+        // The next one doesn't fit, so going to it scrolls just enough: past the short title and
+        // the first favourite.
+        v.select(8);
+        assert_eq!(v.scroll, 2);
+        v.select(0);
+        assert_eq!((v.selected, v.scroll), (1, 0), "back at the top, its title shows again");
+        v.scroll_by(100);
+        assert!(crate::ui::row_fits(&v.rows, v.scroll, v.rows.len() - 1, 96, 7), "the last row shows at the furthest scroll");
+        assert!(!crate::ui::row_fits(&v.rows, v.scroll - 1, v.rows.len() - 1, 96, 7), "and it goes no further than that");
+        assert!(crate::ui::row_fits(&v.rows, v.scroll, v.selected, 96, 7), "with the selection on screen");
     }
 
     #[test]

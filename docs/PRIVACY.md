@@ -18,18 +18,34 @@ Related: [SHORTCUT_SEMANTICS.md](SHORTCUT_SEMANTICS.md), [DATA_PORTABILITY.md](D
 | 1Password, Ente Auth | Off | No | Item names, and the one value you choose | Nothing written. Names in memory for up to 10 minutes |
 | Notes, snippets | n/a (user-created) | No | n/a | Stored locally, plain text |
 | Usage counts | Always on | No | Which launcher item you ran | Item key, count, last-used time |
+| Updates | On | No | GitHub's answer about Orbit's latest release, once a day, and the new version's file when there is one (see below) | A downloaded new version, until it's installed |
 | Quicklink website icons | On | No | Each quicklink's own website, asked once for its icon (see below) | The icon, or a note that there was none, in `link-icons\` |
 | Currency conversion | On | No | The European Central Bank's public file of daily rates, when you convert (see below) | The bank's file, in `exchange-rates.xml` |
 | Weather | On | No | The place you look up, sent to Open-Meteo, and that place's forecast (see below) | The last place found, in `settings.json`. The forecast in memory for 15 minutes |
 | Speed test | Runs only when opened, after Ookla's terms are accepted | No | What Ookla's Speedtest CLI prints about the test (see below) | That the terms were accepted, in `settings.json`. The last result in memory only |
+| GitHub | Off | No | Your open issues and pull requests, notifications and starred repositories, through GitHub's `gh` tool (see below) | Nothing written. Each list in memory for a minute |
+| AI Usage | Off | No | Claude Code's and Codex's sign-ins on this PC, sent only to Anthropic and OpenAI to ask how much of your limits is used (see below) | Nothing written. The answer in memory for a minute |
 | Pick Colour | Runs only when chosen | No | One still picture of every display, while you pick (see below) | Nothing written. The picked colour in memory while it's shown |
 | Toggles, window layouts, End task | Run only when chosen | No | The window in front (layouts), the app you chose (End task) | Nothing. They change the Windows setting, window or app you chose |
+| File search | On, if Everything is installed and running | No | What you type in Everything's search, and in the launcher from three characters on, sent to Everything on this PC (see below) | Nothing written. Opening a file adds one to Everything's own count for it |
+| Import | Runs only when chosen | No | Other launchers' settings, and the export you choose, read and never changed (see below) | What you choose to bring over, as your own links, snippets and notes. Never the passphrase |
+| Extensions | Each is off until you turn it on | No | What you type in its commands goes to its program (see below) | What the extension keeps is up to it. Orbit gives it `extension-data\<id>` for that |
 
 The defaults are checked by the test `defaults_are_conservative` in `crates/orbit-core/src/settings.rs`: HyperKey, clipboard capture and expansion are all off until the user turns them on.
 
 ## Network and telemetry
 
-Orbit has no telemetry, no update checker and no account, and sends nothing about you or what you do. Its network code does three things, all described next: it fetches quicklink icons, the European Central Bank's exchange rates for currency conversion, and the weather when you ask for it. The speed test is run by Ookla's own program, also described below. Quick links and URL actions are handed to Windows (`ShellExecuteExW`) to open in your default browser. Clipboard history never fetches or previews URLs.
+Orbit has no telemetry and no account, and sends nothing about you or what you do. Its network code does five things, all described next: it looks for new versions of Orbit, fetches quicklink icons, the European Central Bank's exchange rates for currency conversion, the weather when you ask for it, and, with AI Usage on, Claude's and Codex's usage when you open it. The speed test is run by Ookla's own program, and GitHub's lists by GitHub's own `gh`, both also described below. Weather, Speed Test, GitHub and AI Usage are extensions: Settings → Extensions turns each off, and one that's off has no commands in the launcher and runs nothing. Quick links and URL actions are handed to Windows (`ShellExecuteExW`) to open in your default browser. Clipboard history never fetches or previews URLs.
+
+### Updates
+
+"Check for updates" on the General page is on by default, and turning it off stops the daily look. "Check now" beside it, the tray menu and "Check for Updates" in the launcher still look when you ask. The code is `platforms/windows/src/update.rs`, using WinHTTP; reading GitHub's answer and checking the download is in `crates/orbit-core/src/update.rs`.
+
+- **When.** About 10 seconds after Orbit starts, then once a day, by the clock, so a day asleep counts. A look that fails, because there's no connection or GitHub is busy, says nothing and is tried again an hour later.
+- **Who.** Only GitHub: `https://api.github.com/repos/Beroris/orbit/releases/latest`, and, when there's a newer version, its file from `github.com`, which GitHub serves from its own file servers. A file listed anywhere else is refused.
+- **What it sends.** A plain `GET` with the user agent `Orbit/<version>`, no cookies and no Windows sign-in. Windows' proxy settings apply. GitHub sees your IP address and that a copy of Orbit asked about its latest release. Nothing about you or how you use Orbit is in it.
+- **What it downloads.** Only a newer version, and only the file this copy installs from: `Orbit-<version>-Setup.exe` for the installed copy, `Orbit-<version>-Portable.exe` for the portable one. A copy built from source downloads nothing and points to the release page instead. The file must match the size and SHA-256 GitHub lists for it, or it's thrown away (`a_download_must_be_the_file_the_release_lists`).
+- **What it keeps.** The installed copy's download in `%TEMP%\Orbit update`, and the portable copy's beside its exe, as `<name>.exe.new`. Nothing is installed until you say so: from the notification, the tray menu, Orbit's menu in the launcher, or Settings. Then the installed copy runs the new Setup with no window, which closes Orbit, puts the new version in place and starts it; the portable copy swaps its exe for the new one and starts it. The new version's first look deletes what the update left, including the old portable exe.
 
 ### Quicklink website icons
 
@@ -42,7 +58,7 @@ Orbit has no telemetry, no update checker and no account, and sends nothing abou
 
 Other programs Orbit starts do use the network, and only because of something you did:
 
-- **Install or Remove on the Integrations page.** For 1Password, this starts Windows Package Manager, which contacts Microsoft's package source and 1Password's servers. For Ente, it starts PowerShell, which reads the release list from GitHub's API and downloads a release from GitHub, identifying itself only as `Orbit`.
+- **Install or Remove on the Extensions page.** For 1Password, this starts Windows Package Manager, which contacts Microsoft's package source and 1Password's servers. For Ente, it starts PowerShell, which reads the release list from GitHub's API and downloads a release from GitHub, identifying itself only as `Orbit`.
 - **1Password and Ente's own tools.** They talk to their own services as they normally do. Ente's list syncs after showing what's saved on this PC, and reading a code doesn't sync.
 
 ### Exchange rates
@@ -56,7 +72,7 @@ Other programs Orbit starts do use the network, and only because of something yo
 
 ### Weather
 
-"Weather" on the General page is on by default, and turning it off stops all of the below and forgets the kept place. The code is `platforms/windows/src/weather.rs`, with the same WinHTTP request as the icons; reading the answers is in `crates/orbit-core/src/weather.rs`. Forecasts are by [Open-Meteo.com](https://open-meteo.com/), under CC BY 4.0, as the weather view's footer says.
+Weather is on by default. Turning it off on the Extensions page takes it out of the launcher, stops all of the below and forgets the kept place. The code is `platforms/windows/src/weather.rs`, with the same WinHTTP request as the icons; reading the answers is in `crates/orbit-core/src/weather.rs`. Forecasts are by [Open-Meteo.com](https://open-meteo.com/), under CC BY 4.0, as the weather view's footer says.
 
 - **When.** Only when you open the weather from the launcher or look up a place in it, on a thread of its own. A forecast for the same place from the last 15 minutes is shown without asking again. Nothing is fetched at start or on a timer.
 - **Who and what it sends.** A new place's name, as you typed it, goes to `geocoding-api.open-meteo.com` to find where it is. Then its latitude and longitude, rounded to two decimal places (about a kilometre), go to `api.open-meteo.com` for the forecast. Nothing else you type goes anywhere, and Orbit never asks Windows where you are. The requests are the same plain `GET` as for icons: user agent `Orbit`, no cookies, no Windows sign-in, Windows' proxy settings, a 5-second timeout, and redirects only within the same site. Open-Meteo sees your IP address and the place.
@@ -64,13 +80,31 @@ Other programs Orbit starts do use the network, and only because of something yo
 
 ### Speed test
 
-Orbit doesn't measure your connection itself. The Speed Test command runs Speedtest CLI by Ookla, a separate program that isn't part of Orbit, against Speedtest.net's servers. The code is `platforms/windows/src/speedtest.rs`; reading what the program prints is in `crates/orbit-core/src/speedtest.rs`.
+Orbit doesn't measure your connection itself. Speed Test, which the Extensions page can turn off, runs Speedtest CLI by Ookla, a separate program that isn't part of Orbit, against Speedtest.net's servers. The code is `platforms/windows/src/speedtest.rs`; reading what the program prints is in `crates/orbit-core/src/speedtest.rs`.
 
 - **Ookla's terms first.** The first time, the launcher says what the test does and that Ookla allows it for personal, non-commercial use under its End User License Agreement, Terms of Use and Privacy Policy, with links to each in Ctrl+K. Nothing is installed or run until you press Enter to accept. Orbit then records that you accepted, in `settings.json`, and passes `--accept-license --accept-gdpr` to the program each time, so it doesn't stop to ask.
 - **Installing it.** If the program isn't there, Orbit installs it with Windows Package Manager (`winget install --id Ookla.Speedtest.CLI`), which downloads it from Ookla. Orbit looks for it in Windows Package Manager's folder for that package, or on the PATH. A program on the PATH is run with `--version` first, and used only if it says it's Ookla's, since other programs are also called `speedtest`.
 - **When.** Only when you open Speed Test or press Enter in it. Leaving it, or quitting Orbit, stops a test that's running. A test that runs for two minutes is stopped.
 - **What's sent.** Ookla's program finds a nearby server, then downloads and uploads test data for about 20 seconds. Ookla and the test server see your IP address. Ookla keeps each result on Speedtest.net, which is where the result link comes from. Its own settings folder, `%APPDATA%\Ookla`, is the program's, not Orbit's.
 - **What Orbit keeps.** The speeds, ping, jitter, packet loss, the server's name and place, your provider's name and the result link, in memory only, until the next test or until Orbit closes. The program also prints your local and public IP addresses and your network adapter's hardware address. Orbit never reads them (`addresses_are_never_kept`).
+
+### GitHub and AI Usage
+
+Both are off until you turn them on in Settings → Extensions. Both fetch only when you open one of their lists, or choose Refresh in it, and keep the answer in memory for a minute so going back and forth doesn't ask again. Nothing is fetched at start or on a timer, and nothing they show is written to disk. The code is `platforms/windows/src/providers.rs`; reading the answers is in `crates/orbit-core/src/github.rs` and `crates/orbit-core/src/ai_usage.rs`.
+
+**GitHub** runs GitHub's own command-line tool, `gh`, with no window, so it's `gh` that signs in and talks to GitHub, and Orbit never reads or sees a token.
+
+- **What it asks.** `gh api` for your open issues and pull requests (`search/issues` with `involves:@me`), your notifications, and your starred repositories. Marking a notification as read sends `PATCH notifications/threads/<id>`, and only when you choose it.
+- **Who you are.** Settings shows who `gh` is signed in as, read from the `user:` line of `gh`'s own `hosts.yml`. Nothing else in that file is read.
+- **An old token in the environment.** `gh` prefers a `GITHUB_TOKEN` or `GH_TOKEN` environment variable to its own sign-in, and an old one makes every request fail. When `gh` has a sign-in of its own, Orbit runs it with those two variables removed. Your environment isn't changed.
+- **Installing and signing in.** GitHub's card in Settings can install `gh` with Windows Package Manager (`winget install --id GitHub.cli`), and opens `gh auth login --web` in a console window of its own, asking for the `notifications` scope. You sign in in your browser, on GitHub.
+
+**AI Usage** reads the sign-ins that Claude Code and Codex already keep on this PC, and asks each one's own service how much of your plan's limits you've used.
+
+- **What it reads.** Claude Code's `.credentials.json` in `%USERPROFILE%\.claude` (or `CLAUDE_CONFIG_DIR`), and Codex's `auth.json` in `%USERPROFILE%\.codex` (or `CODEX_HOME`). From each it takes the access token, and Claude's plan name and expiry time. A service with no sign-in on this PC is left out.
+- **Who it sends them to.** Claude's token goes only to `https://api.anthropic.com/api/oauth/usage`, and Codex's token and account id only to `https://chatgpt.com/backend-api/wham/usage`: each service's own server, which already has it. The request is a `GET` with the user agent `Orbit`, no cookies, no Windows sign-in, no redirects at all (so a token can't be passed on elsewhere), and a 5-second timeout.
+- **What it never does.** It never renews a sign-in, which could sign Claude Code or Codex out, never writes either file, and never shows, logs or keeps a token. An expired Claude sign-in is reported as expired.
+- **Codex's log.** If OpenAI's server doesn't answer, Orbit reads the end (up to 4 MB) of Codex's newest session log in `sessions\` and uses the last rate-limit line in it, saying how old it is. Those logs also hold your Codex conversations. Orbit only looks for the rate-limit lines and keeps nothing else from them.
 
 ## Keyboard hook: HyperKey and snippet expansion
 
@@ -90,7 +124,7 @@ Controls: turn the feature off in Settings; "Suspend Orbit Shortcuts" (tray menu
 
 ## 1Password and Ente Auth
 
-Both are off until you turn them on, in Settings, Integrations. Orbit never sees your master password, your Ente password or your vault as a whole.
+Both are off until you turn them on, on the Extensions page of Settings or of the welcome, which can also install the command-line tool each one needs. Orbit never sees your master password, your Ente password or your vault as a whole.
 
 - **Signing in** belongs to each app. 1Password asks through its desktop app, using whatever unlocks it on this PC. Ente's sign-in runs in its own terminal window, and its login stays in its own data folder.
 - **The list.** `op item list` and `ente auth code list` give names, usernames and web addresses, not passwords or codes. Orbit keeps them in memory for up to 10 minutes, and drops them on lock and under memory pressure. They are never written to disk.
@@ -156,6 +190,18 @@ Pick Colour takes one still picture of all your displays when you start it, show
 
 Toggle Dark Mode writes the two values Settings → Personalisation → Colours writes (`AppsUseLightTheme` and `SystemUsesLightTheme` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`). Toggle Mute mutes the default speakers, Toggle Bluetooth and Toggle Wi-Fi switch the radio, through the same Windows interfaces the quick settings use. Window layouts move the one window that was in front. End task ends every process of the app you chose it for, as Task Manager does, and never File Explorer or Orbit. None of these run unless you choose them, and none are logged.
 
+## File search asks Everything
+
+The Everything extension asks [Everything](https://www.voidtools.com/) by voidtools, if it's running, with a message to its window on this PC. Nothing leaves the PC. Everything sees each search: what you type in its search, and, while "Show files under other results" is on, what you type in the launcher once it's three characters long. Opening a file from Orbit tells Everything to count it, which is what sorting by "most opened" uses. Whether Everything keeps a history of searches or runs is set in Everything's own options. Orbit writes nothing about files, and keeps the last answer in memory only. If Everything isn't installed, Orbit can install it with Windows Package Manager when you ask, and Everything's installer asks Windows for permission.
+
+## Import reads other launchers' files
+
+The Import page, after installing or from Settings → Data, reads the settings of the launchers it finds: the files listed in [DATA_PORTABILITY.md](DATA_PORTABILITY.md#import), and Wox 2's database, opened read-only. It never changes them. It doesn't read Raycast's own data, which Raycast keeps encrypted, only an export you choose. A Raycast export's passphrase is used to open that file and then forgotten; it isn't written anywhere. What comes over is added to your settings and database like anything you made yourself.
+
+## Extensions run programs you add
+
+An extension is a program, run with your permissions, like any program you start. It's off when added, and Settings shows the command it runs before you turn it on. While its command is open, what you type goes to that program, which may do anything a program can, including use the network. Orbit doesn't watch what it does. It starts the program only when one of its commands is used, stops it a few minutes after the launcher was last used, and ends it when Orbit quits. An extension's links can't use schemes that run code, such as `javascript:` or `file:`. Removing an extension in Settings deletes its folder and its `extension-data` folder.
+
 ## Other data Orbit keeps
 
 | Data | Where | Notes |
@@ -210,6 +256,8 @@ The brief asks for encryption at rest or a documented tradeoff and an option for
 |---|---|
 | `%LOCALAPPDATA%\Orbit\` (or the folder given with `--data-dir`) | Everything listed in the table in [ARCHITECTURE.md](ARCHITECTURE.md#data-layout): `settings.json`, `orbit.db`, `clipboard.db`, `clipboard-images\`, `apps.json`, `icons\`, `link-icons\`, `exchange-rates.xml`, `crash.log`, and their journal files |
 | `Documents\Orbit Export <date> <time>\` | Folders created by Export |
+| `extensions\` and `extension-data\` in the data folder | Extensions you added, and what each keeps for itself |
+| `%LOCALAPPDATA%\Programs\Orbit\` | The installed program and its licence files. With it go its entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall` and its Start menu and desktop shortcuts. Not there for a portable copy |
 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `Orbit` | Only if "launch at login" is on |
 | Your `--bench-log` path | Only if you used that option |
 
@@ -230,7 +278,7 @@ Settings → Data shows the exact data folder and has an "Open folder" button.
 
 Because deletion is an ordinary file delete, apply disk-level tools if you need the contents to be unrecoverable.
 
-Quitting Orbit stops the hook and the clipboard listener, releases any virtual modifier keys, and removes the tray icon. Uninstalling from Settings → Apps quits Orbit, removes the program and its sign-in entry, and asks whether to delete the data folder, keeping it unless you say yes. That was tested on 2026-11-08, silently, so the question wasn't shown. A portable copy keeps everything in the `Orbit settings` folder beside it, so deleting both removes it. For a copy built from source, `scripts/uninstall-windows.ps1` stops Orbit and removes the sign-in entry, and with `-DeleteData` also removes the data folder. That script has not been run against a real install.
+Quitting Orbit stops the hook and the clipboard listener, releases any virtual modifier keys, and removes the tray icon. Uninstalling from Settings → Apps quits Orbit, removes the program, its shortcuts, its Settings → Apps entry and its sign-in entry, and asks whether to delete the data folder, keeping it unless you say yes. The silent uninstall is tested by `scripts/test-install-windows.ps1`, in a sandbox in the temp folder; the window that asks about the data hasn't been clicked through yet. A portable copy keeps everything in the `Orbit settings` folder beside it, so deleting both removes it. For a copy built from source, `scripts/uninstall-windows.ps1` stops Orbit and removes the sign-in entry, and with `-DeleteData` also removes the data folder. That script has not been run against a real install.
 
 ## Known gaps against the brief
 

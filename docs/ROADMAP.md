@@ -8,7 +8,8 @@ What's built, and what's next by impact. "Tested" below means the automated suit
 |---|---|---|
 | Launcher, search, app launching | tested | tested |
 | Ctrl/Cmd+K action menu | written as a small menu over the list, seen in off-screen frames; its automated checks are written and **not run yet** | tested, as the older full list |
-| Orbit menu from the footer logo | seen in off-screen frames; automated check written and **not run yet**. Its Updates row only says there's no update channel | not built |
+| Orbit menu from the footer logo | seen in off-screen frames; automated check written and **not run yet** | not built |
+| Updates from GitHub releases: the daily look, the download, the notification, the tray item and Settings' Updates row | unit tested; the look and download tested against the real release on GitHub; the Settings row seen in off-screen frames. **Installing an update hasn't been run end to end yet** | not built |
 | Emoji list | unit tested, seen in off-screen frames; pasting check written and **not run yet** | not built |
 | Quicklink and command forms, and making them from the launcher | unit tested, forms seen in off-screen frames; **not used on screen yet** | not built |
 | Launcher shortcut left to games and listed apps | check with a listed app written and **not run yet**; no real game tried | not built |
@@ -16,6 +17,7 @@ What's built, and what's next by impact. "Tested" below means the automated suit
 | Settings saving as you change them, with no Save or Cancel | checked by driving the hidden window with messages; end-to-end check written and **not run yet** | not built |
 | Settings overhaul: key recorder for the launcher shortcut, hotkeys added and changed on the Hotkeys page, lists sized to fit, dependent settings dimmed, drop-downs for numbers, confirm in place, window fits small screens | checked by driving the hidden window with messages and seen in off-screen frames; real keys, focus, a real second monitor and a screen smaller than the window **not tested** | not built |
 | Ctrl+Backspace in Settings and forms | unit tested for where a word starts; not pressed in the real windows yet | not built |
+| Searching Settings from the box at the top left, with Ctrl+F or / to get there | unit tested, checked by driving the hidden window with messages, and seen in off-screen frames. **Real typing, clicks and focus not tried on screen yet** | not built |
 | Less glass, rounder corners, soft shadow (layered window over a blur plate) | off-screen frames only. **The blur plate and the corners haven't been seen on a real screen** | not built |
 | Set a hotkey from the action menu | tested | not built |
 | Keycap badges and redesigned look | checked by screenshots, before the rounder design above | not built |
@@ -40,7 +42,13 @@ What's built, and what's next by impact. "Tested" below means the automated suit
 | 1Password and Ente Auth | automated checks use stand-ins for their tools; the owner confirmed listing and copying with their real ones. Clearing a copied password after 30 s failed its check and was fixed afterwards: **the fix has not been run yet** | not built |
 | Installing the Ente tool from Settings | the app's install code ran for real into a scratch folder, and the PATH step on a scratch registry key. The button itself: not tested | not built |
 | Installing the 1Password tool from Settings | **not tested**, so a real install doesn't change the owner's PC unasked | not built |
-| Signed installer and updates | not built: unsigned zip | not built: unsigned local build |
+| Orbit Setup: install, update and uninstall, then the welcome in the installed Orbit | unit tested; every page seen in off-screen frames; a silent install, an update over 1.0.0, uninstall and reinstall tested in a sandbox by `scripts/test-install-windows.ps1`. **Clicking through the Setup window, and the handover from Setup to the installed Orbit, have not been tried yet** | not built |
+| Import from Raycast, Flow Launcher, Wox, PowerToys Run, Command Palette and Keypirinha | parsers unit tested; real Raycast exports read; the Import page seen in off-screen frames. **Not run on this PC's launchers in a running Orbit yet** | not built |
+| Extensions | manifests, messages and the catalog unit tested; the example extension runs in PowerShell through Orbit's own runner in a test. **Adding one from Settings and using it in the launcher not tried on screen yet** | not built |
+| Built-in extensions with a switch each (Files, 1Password, Ente Auth, Weather, Speed Test, GitHub, AI Usage), and aliases, keywords and hotkeys for every command | unit tested, including that one turned off takes its commands with it; the Extensions and Search pages seen in off-screen frames. **Not clicked through on screen yet** | not built |
+| GitHub and AI Usage | parsers unit tested; the lists, meters and action menu seen in off-screen frames with made-up answers; the real fetches run once from a test: `gh` lists from GitHub, and usage from Anthropic and OpenAI. **Installing `gh` and its sign-in from Settings, and Mark as Read, not tried yet** | not built |
+| File search with Everything | the messages to and from Everything unit tested, against voidtools' layouts. **Not tried with a running Everything**, which isn't installed on this PC | not built |
+| Signed builds and update checks | not built: unsigned. Updating means running a newer Setup | not built: unsigned local build |
 | Hook and shortcut recovery after real sleep and unlock | not tested | not tested |
 | UAC, elevated windows, RDP | not tested | not applicable, secure input not tested |
 
@@ -48,9 +56,9 @@ What's built, and what's next by impact. "Tested" below means the automated suit
 
 ### For people using it every day
 
-1. **Signed installer and updates.** The largest step from a working copy to something people can install safely. The Orbit menu has an Updates row waiting for this.
+1. **Signed builds and update checks.** Orbit Setup installs and updates, but SmartScreen warns about an unsigned exe, and nothing tells you a newer version is out. The Orbit menu has an Updates row waiting for this.
 2. **macOS parity:** Set hotkey in Cmd+K, game detection (`LSApplicationCategoryType` games plus fullscreen), press-again to hide, the new look with real Liquid Glass or `NSVisualEffectView`, favourites and favourites-only opening, Cmd+, for Settings, clipboard thumbnails, the clipboard preview beside its list, quicklink boxes for `{name}` and website icons, and 1Password and Ente Auth (their tools work the same on a Mac, with Touch ID for 1Password).
-3. **Onboarding.** A short first run that explains the launcher shortcut and offers HyperKey.
+3. **More in the welcome.** It brings things over from other launchers, picks the shortcut, and turns on Everything, 1Password and Ente Auth; it could offer HyperKey and snippet expansion too.
 4. **Hotkeys list:** real note titles instead of "Note 12".
 5. **Media controls**, clipboard as a root result, a chosen browser per link, quicklink icons for sites that keep theirs elsewhere or only as SVG, a live Ente code that counts down in the list before you copy it, and emoji skin tones and country flags.
 6. **Note editing:** note kill loses up to 400 ms of typing, so shorten or remove that window.
@@ -71,4 +79,4 @@ What's built, and what's next by impact. "Tested" below means the automated suit
 15. Encryption at rest, and clipboard export as an opt-in.
 16. Density setting, and handling DPI changes in the secondary windows.
 17. Windows on Arm: untested.
-18. CI: `.github/workflows/ci.yml` exists and has never run. `scripts/uninstall-windows.ps1` also hasn't been run.
+18. CI: `.github/workflows/ci.yml` is written but not in the repo yet, because pushing a workflow needs a GitHub sign-in with the `workflow` scope, and it has never run. `scripts/uninstall-windows.ps1`, for a copy built from source, also hasn't been run.

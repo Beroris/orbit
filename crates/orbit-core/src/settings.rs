@@ -43,8 +43,77 @@ pub struct Settings {
     /// Ookla's terms for Speedtest CLI were accepted in the launcher, so a speed test can run.
     pub speedtest_accepted: bool,
     pub launch_at_login: bool,
+    /// Look for a new version on GitHub, once a day.
+    pub check_updates: bool,
     /// True once first-run consent has been shown.
     pub onboarded: bool,
+    /// File search through Everything, which is built in, and extensions added from folders.
+    pub extensions: ExtensionSettings,
+}
+
+/// Extensions. Everything's file search comes with Orbit; others are folders in the data folder's
+/// `extensions` folder, each off until the user turns it on.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ExtensionSettings {
+    pub everything: EverythingSettings,
+    /// Speed Test, which comes with Orbit. On unless turned off.
+    pub speed_test: bool,
+    /// GitHub, through GitHub's `gh` command-line tool. Off until turned on.
+    pub github: bool,
+    /// AI Usage, which reads Claude Code's and Codex's sign-ins to ask for their usage. Off until
+    /// turned on.
+    pub ai_usage: bool,
+    /// Extensions from folders that the user turned on, by id.
+    pub enabled: Vec<String>,
+    /// A command's keyword where the user changed it from the extension's own, keyed `id/command`.
+    /// An empty one means no keyword.
+    pub keywords: BTreeMap<String, String>,
+}
+
+impl Default for ExtensionSettings {
+    fn default() -> Self {
+        ExtensionSettings {
+            everything: EverythingSettings::default(),
+            speed_test: true,
+            github: false,
+            ai_usage: false,
+            enabled: Vec::new(),
+            keywords: BTreeMap::new(),
+        }
+    }
+}
+
+/// File search with voidtools' Everything, which keeps its own index of every file name.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct EverythingSettings {
+    pub enabled: bool,
+    /// What the Everything command answers to when typed, as any alias does. Followed by a space
+    /// and more, it searches files straight away. None until one is set: the command is found by
+    /// its name, as everything else is.
+    pub alias: String,
+    /// A few matching files under the other results when searching in the launcher.
+    pub in_search: bool,
+    pub sort: FileSort,
+}
+
+impl Default for EverythingSettings {
+    fn default() -> Self {
+        EverythingSettings { enabled: true, alias: String::new(), in_search: true, sort: FileSort::Recent }
+    }
+}
+
+/// Which files come first.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FileSort {
+    /// Most recently changed first.
+    #[default]
+    Recent,
+    /// Most often opened first, by Everything's own count.
+    MostOpened,
+    Name,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -296,7 +365,9 @@ impl Default for Settings {
             weather_place: None,
             speedtest_accepted: false,
             launch_at_login: false,
+            check_updates: true,
             onboarded: false,
+            extensions: ExtensionSettings::default(),
         }
     }
 }

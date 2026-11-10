@@ -15,6 +15,11 @@ A small, keyboard-first launcher for Windows and macOS. Press a shortcut, type, 
 - **Orbit menu (Windows).** The Orbit logo in the footer opens Settings, Help and the rest of Orbit's own commands.
 - **Emoji list (Windows).** Search "emoji" for a grid of 1,609 colour emoji with keyword search, pins and recently used. Enter pastes one where you were typing. There are no skin tone variants or country flags yet.
 - **Quicklinks.** Open a site or a search by name or alias. On Windows, make one from the launcher with Create Quicklink, or type an address and choose Save as Quicklink.
+- **File search (Windows).** Type "everything" and press Enter to search every file on your PC, through [Everything](https://www.voidtools.com) by voidtools. Give it an alias, and the alias and a space search straight away. Orbit can install Everything for you. Files can also show under other results.
+- **Extensions (Windows).** Files, 1Password, Ente Auth, Weather, Speed Test, GitHub and AI Usage come with Orbit, each with a switch: one you don't use is gone from the launcher and never runs. Every command can have its own alias, keyword and hotkey. Other programs can add commands too, with a folder holding a small manifest and a program that answers in JSON. See [docs/EXTENSIONS.md](docs/EXTENSIONS.md).
+- **GitHub (opt-in, Windows).** Your issues, pull requests, notifications and stars in the launcher: `ghi`, `ghp`, `ghn` and `ghs`. It goes through GitHub's own `gh` tool. Orbit can install it, then opens its sign-in for you.
+- **AI Usage (opt-in, Windows).** How much of your Claude and Codex limits you've used and when they reset, as meters that turn amber and then red. It uses the sign-ins Claude Code and Codex already have on your PC, and asks only Anthropic and OpenAI.
+- **Import (Windows).** Bring quicklinks, web searches, snippets and notes over from Raycast, Flow Launcher, Wox, Command Palette and Keypirinha, or from an Orbit export. Raycast's exports open with their passphrase.
 - **Hotkeys.** On Windows, choose **Set hotkey** in the action menu and press the keys. Pressing an app's hotkey again minimizes it.
 - **Vim keys (opt-in, Windows).** Navigate results with Alt+H J K L, or use full Vim, where the launcher opens ready to navigate and `i` starts typing.
 - **HyperKey (opt-in).** Turn Caps Lock or another key into a modifier, so Hyper+C can open your editor. On Windows it steps aside in fullscreen games.
@@ -38,7 +43,9 @@ Builds aren't signed, so SmartScreen or Gatekeeper may warn on first run.
 
 ## Install on Windows
 
-Download **`Orbit-<version>-Setup.exe`** from the [latest release](https://github.com/Beroris/orbit/releases/latest) and run it. It installs for your account only, so it doesn't ask for admin rights, and it can start Orbit when you sign in. Press Alt+Space to open the launcher. Orbit lives in the tray, and your data is in `%LOCALAPPDATA%\Orbit`. Remove it from Settings → Apps; it asks before deleting your data, and keeps it unless you say otherwise.
+Download **`Orbit-<version>-Setup.exe`** from the [latest release](https://github.com/Beroris/orbit/releases/latest) and run it. Orbit Setup installs Orbit for your account only, so it doesn't ask for admin rights, and can start it when you sign in. Then Orbit carries on in the same window: it brings over what you had in your old launcher, lets you pick your shortcut, and turns on extensions such as file search, 1Password and Ente Auth. Press Alt+Space to open the launcher. Orbit lives in the tray, and your data is in `%LOCALAPPDATA%\Orbit`.
+
+Orbit keeps itself up to date: once a day it looks for a new release, downloads it in the background, and installs it when you click the notification, or choose it from the tray menu or Settings. Settings → General → "Check for updates" turns the daily look off. Running a newer Setup by hand works too, and keeps your settings and data. Remove Orbit from Settings → Apps; it asks before deleting your data, and keeps it unless you say otherwise. For scripts, `/VERYSILENT` (or `--silent`) installs or updates without a window, and `orbit.exe --uninstall --silent` removes Orbit and keeps your data.
 
 Or take **`Orbit-<version>-Portable.exe`**: the same app without installing. It keeps its settings in an `Orbit settings` folder beside itself, so it can live on a USB stick.
 
@@ -51,7 +58,7 @@ You need Rust 1.85 or newer. Windows builds were tested with 1.96.
 ```sh
 # Windows
 cargo build --release -p orbit-windows      # target/release/orbit.exe
-pwsh scripts/package-windows.ps1            # dist/Orbit-<version>-Setup.exe and -Portable.exe (needs Inno Setup 6)
+pwsh scripts/package-windows.ps1            # dist/Orbit-<version>-Setup.exe and -Portable.exe
 
 # macOS: also needs the Command Line Tools
 scripts/macos/build_app.sh                  # platforms/macos/build/Orbit.app
@@ -68,6 +75,7 @@ See [platforms/macos/README.md](platforms/macos/README.md) for the macOS details
 | Ctrl+Enter | Second action on the result, shown in the footer. On a Windows app, that's Run as administrator. |
 | Ctrl+K / Cmd+K | Action menu |
 | Ctrl+, | Orbit Settings, from the launcher (Windows). Settings save as you change them. |
+| Ctrl+F or / | Search Settings, from the Settings window (Windows). Enter goes to the setting. |
 | Esc | Clear what's typed, then back, then close |
 
 On Windows, Ctrl+Backspace deletes a word in Orbit's search box and in every text box in Settings and its forms.
@@ -84,6 +92,7 @@ Quit or Suspend Orbit Shortcuts, from the tray or menu bar, gives the keyboard b
 
 ```sh
 cargo test --workspace                                   # unit tests
+pwsh scripts/test-install-windows.ps1                    # Setup: silent install, update, uninstall (Windows)
 
 # Takes focus and injects keys for several minutes on a private data folder (Windows):
 cargo build --release -p orbit-windows -p orbit-bench
@@ -103,6 +112,7 @@ Close your own copy of Orbit first, because the feature suite tests Alt+Space an
 - [Shortcut semantics](docs/SHORTCUT_SEMANTICS.md)
 - [Privacy](docs/PRIVACY.md)
 - [Data portability](docs/DATA_PORTABILITY.md)
+- [Extensions](docs/EXTENSIONS.md)
 - [Decisions](docs/DECISIONS.md)
 - [Roadmap](docs/ROADMAP.md)
 

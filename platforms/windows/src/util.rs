@@ -171,13 +171,17 @@ pub fn when_label(unix: i64, now: i64) -> String {
     }
 }
 
-/// Running on battery right now. An unknown answer counts as no.
 /// The user's Documents folder, wherever it really is. OneDrive often moves it.
 pub fn documents_folder() -> Option<PathBuf> {
+    known_folder(&windows::Win32::UI::Shell::FOLDERID_Documents)
+}
+
+/// One of the user's folders, such as Documents or Desktop, wherever it really is.
+pub fn known_folder(id: &windows::core::GUID) -> Option<PathBuf> {
     use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::Win32::UI::Shell::{FOLDERID_Documents, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+    use windows::Win32::UI::Shell::{KF_FLAG_DEFAULT, SHGetKnownFolderPath};
     unsafe {
-        let path = SHGetKnownFolderPath(&FOLDERID_Documents, KF_FLAG_DEFAULT, None).ok()?;
+        let path = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
         let text = path.to_string().ok();
         CoTaskMemFree(Some(path.as_ptr() as *const _));
         text.map(PathBuf::from)
