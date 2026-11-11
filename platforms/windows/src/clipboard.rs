@@ -9,6 +9,7 @@ use crate::util::{exe_name, process_image_path, wide};
 use orbit_core::Settings;
 use orbit_data::{Formats, NewClip};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardOwner, GetClipboardSequenceNumber,
@@ -27,6 +28,15 @@ use windows::core::PCWSTR;
 /// Sequence number of Orbit's most recent clipboard write. Its own writes are not history.
 static OWN_WRITE_SEQ: AtomicU32 = AtomicU32::new(0);
 
+/// Sequence number of the content the last capture read, so a burst of change notices reads it once.
+static LAST_CAPTURE_SEQ: AtomicU32 = AtomicU32::new(0);
+
+/// Held for as long as Orbit has the clipboard open. Windows keeps other processes out, but not
+/// Orbit's own threads: while one has it open, another's `OpenClipboard(NULL)` succeeds too, and two
+/// threads reading at once corrupt the heap. Each clipboard change starts a capture on its own
+/// thread, so two changes close together did exactly that and crashed Orbit (0xc0000374).
+static OPEN: Mutex<()> = Mutex::new(());
+
 fn registered_format(name: &str) -> u32 {
     let text = wide(name);
     unsafe { RegisterClipboardFormatW(PCWSTR(text.as_ptr())) }
@@ -34,17 +44,29 @@ fn registered_format(name: &str) -> u32 {
 
 struct ClipboardGuard {
     wrote: std::cell::Cell<bool>,
+    // Dropped after `drop` has closed the clipboard, so the next thread opens it only then.
+    _open: MutexGuard<'static, ()>,
 }
 
 impl ClipboardGuard {
     fn open() -> Option<ClipboardGuard> {
         // Another process may hold the clipboard for a moment, and a clipboard tool can hold it for
         // longer. Retries beat a lost write or a missed entry, and this only runs on a real change,
-        // off the launcher thread, or for a single user action.
+        // off the launcher thread, or for a single user action. Orbit's own threads are waited for
+        // the same way, with the same few tries, so a stuck one can't hang the launcher.
         for attempt in 0..7 {
-            if unsafe { OpenClipboard(None) }.is_ok() {
-                return Some(ClipboardGuard { wrote: std::cell::Cell::new(false) });
+            let open = match OPEN.try_lock() {
+                Ok(open) => Some(open),
+                // Nothing it guards can be left half done: the clipboard closes as a panic unwinds.
+                Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+                Err(TryLockError::WouldBlock) => None,
+            };
+            if let Some(open) = open
+                && unsafe { OpenClipboard(None) }.is_ok()
+            {
+                return Some(ClipboardGuard { wrote: std::cell::Cell::new(false), _open: open });
             }
+            // A lock that came without the clipboard is let go here, before the wait.
             std::thread::sleep(std::time::Duration::from_millis(2 << attempt));
         }
         None
@@ -169,6 +191,12 @@ pub fn capture(limits: &CaptureLimits<'_>) -> Option<Capture> {
     // and the read, so a copy can't be saved under another app's name.
     let _guard = ClipboardGuard::open()?;
     if is_own_write() {
+        return None;
+    }
+    // An app can change the clipboard several times for one copy, and each change starts a capture.
+    // The ones that open it after the first find the same content, already read.
+    let sequence = unsafe { GetClipboardSequenceNumber() };
+    if sequence != 0 && LAST_CAPTURE_SEQ.swap(sequence, Ordering::Relaxed) == sequence {
         return None;
     }
     let source = source_process();
@@ -735,4 +763,62 @@ pub fn insert(request: InsertRequest) -> InsertOutcome {
         }
     }
     InsertOutcome::Inserted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::System::StationsAndDesktops::{
+        CreateDesktopW, CreateWindowStationW, DESKTOP_CONTROL_FLAGS, HDESK, SetProcessWindowStation, SetThreadDesktop,
+    };
+
+    /// Windows lets a thread open the clipboard while another thread of the same process still has it
+    /// open, and two threads reading its text at once corrupt the heap. Orbit crashed that way
+    /// (0xc0000374, with two `orbit-clip` threads inside GetClipboardData), because each clipboard
+    /// change starts a capture on a thread of its own. This reads from four threads for a few seconds,
+    /// which crashed every run without the lock. It runs in a private window station, which has a
+    /// clipboard of its own, so the real clipboard is never read or written. Moving there changes the
+    /// whole test process, so it's ignored and run alone:
+    /// `cargo test -p orbit-windows reads_from_many_threads -- --ignored`
+    #[test]
+    #[ignore]
+    fn reads_from_many_threads_at_once_dont_corrupt_the_heap() {
+        const TEXT: &str = "Some text someone copied at work, long enough to look like a sentence.";
+        const WINSTA_ALL_ACCESS: u32 = 0x37F;
+        const GENERIC_ALL: u32 = 0x1000_0000;
+        let desktop = unsafe {
+            let station = CreateWindowStationW(PCWSTR::null(), 0, WINSTA_ALL_ACCESS, None).expect("a private window station");
+            SetProcessWindowStation(station).expect("the process moved to it");
+            let name = wide("orbit-clipboard-test");
+            CreateDesktopW(PCWSTR(name.as_ptr()), PCWSTR::null(), None, DESKTOP_CONTROL_FLAGS(0), GENERIC_ALL, None)
+                .expect("a desktop on it")
+        };
+        // A thread joins the test desktop before it touches anything of the window station's.
+        let address = desktop.0 as usize;
+        let join_desktop = move || unsafe { SetThreadDesktop(HDESK(address as *mut _)).expect("thread on the test desktop") };
+        std::thread::spawn(move || {
+            join_desktop();
+            assert!(write_text(TEXT));
+        })
+        .join()
+        .unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    join_desktop();
+                    let mut reads = 0u32;
+                    while std::time::Instant::now() < until {
+                        if let Some(text) = read_text() {
+                            assert_eq!(text, TEXT);
+                            reads += 1;
+                        }
+                    }
+                    reads
+                })
+            })
+            .collect();
+        let reads: u32 = readers.into_iter().map(|reader| reader.join().unwrap()).sum();
+        assert!(reads > 1000, "only {reads} reads in 4 s");
+    }
 }
