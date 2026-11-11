@@ -358,6 +358,12 @@ A click on the alias opens a box over it: Enter keeps it, Esc puts it back, and 
 
 **Why.** The owner expected "123 pound to kilo" to work, since unit conversion needs nothing from outside.
 
+## Percentages work as on a phone's calculator
+
+**Decision.** "90% of 429" is 386.1, and "20% off 50" is 40. Adding or taking away a percentage works on what's before it: "429 + 10%" is 471.9, as Google and phone calculators have it, where it used to be 429.1. A percentage anywhere else is a hundredth ("2 * 10%" is 0.2), and % between two numbers is still the remainder ("10 % 3" is 1). "of" and "off" mean something only straight after a percentage, in any case.
+
+**Why.** The owner typed "90% of 429" and got only a web search.
+
 ## Speed Test runs Ookla's Speedtest CLI
 
 **Decision.** "Speed Test" in the launcher tests the connection against Speedtest.net, as the owner asked, and draws it where the list would be: download and upload as large numbers with a trace of each as it was measured, then ping, jitter and packet loss, and the server it used. Speedtest.net has no public interface for other programs, and Ookla's free Speedtest CLI is its own way to test outside a browser, so Orbit runs it with no window and reads the progress it prints, about four lines a second, while the test runs. The first time, the launcher shows Ookla's terms and asks for Enter before anything is installed or run. If the program is missing, Orbit installs it with Windows Package Manager. Opening the command starts a test, Enter runs another, and leaving the view stops one. Ctrl+K copies the results, opens the result on Speedtest.net, or opens Ookla's terms.

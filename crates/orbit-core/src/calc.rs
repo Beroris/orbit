@@ -137,30 +137,45 @@ impl Parser<'_> {
         self.s.get(self.i).copied()
     }
 
+    /// Whether the next word is word, in any case, and not the start of a longer one.
+    fn word_ahead(&mut self, word: &str) -> bool {
+        self.ws();
+        let end = self.i + word.len();
+        self.s.get(self.i..end).is_some_and(|ahead| ahead.eq_ignore_ascii_case(word.as_bytes()))
+            && !self.s.get(end).is_some_and(u8::is_ascii_alphanumeric)
+    }
+
+    /// Adding or taking away a percentage works on what's before it, as on a phone's calculator:
+    /// "200 + 10%" is 220, not 200.1.
     fn expr(&mut self) -> Result<f64, String> {
-        let mut value = self.term()?;
+        let (mut value, _) = self.term()?;
         loop {
             match self.peek() {
                 Some(b'+') => {
                     self.i += 1;
-                    value += self.term()?;
+                    let (term, percent) = self.term()?;
+                    value += if percent { value * term } else { term };
                 }
                 Some(b'-') => {
                     self.i += 1;
-                    value -= self.term()?;
+                    let (term, percent) = self.term()?;
+                    value -= if percent { value * term } else { term };
                 }
                 _ => return Ok(value),
             }
         }
     }
 
-    fn term(&mut self) -> Result<f64, String> {
+    /// A term, and whether it's a bare percentage such as "10%", for [Self::expr].
+    fn term(&mut self) -> Result<(f64, bool), String> {
         let mut value = self.unary()?;
+        let mut percent = false;
         loop {
             match self.peek() {
                 Some(b'*') | Some(b'x') => {
                     self.i += 1;
                     value *= self.unary()?;
+                    percent = false;
                 }
                 Some(b'/') => {
                     self.i += 1;
@@ -169,24 +184,36 @@ impl Parser<'_> {
                         return Err("Division by zero".into());
                     }
                     value /= divisor;
+                    percent = false;
                 }
                 Some(b'%') => {
                     self.i += 1;
                     // A trailing % means percent, between operands it means modulo.
-                    match self.peek() {
-                        None | Some(b')') | Some(b'+') | Some(b'-') | Some(b'*') | Some(b'/') => {
-                            value /= 100.0
+                    let ends = matches!(self.peek(), None | Some(b')' | b'+' | b'-' | b'*' | b'/' | b'x'));
+                    if ends || self.word_ahead("of") || self.word_ahead("off") {
+                        value /= 100.0;
+                        percent = true;
+                    } else {
+                        let divisor = self.unary()?;
+                        if divisor == 0.0 {
+                            return Err("Division by zero".into());
                         }
-                        _ => {
-                            let divisor = self.unary()?;
-                            if divisor == 0.0 {
-                                return Err("Division by zero".into());
-                            }
-                            value %= divisor;
-                        }
+                        value %= divisor;
+                        percent = false;
                     }
                 }
-                _ => return Ok(value),
+                // "20% of 50" is 10, and "20% off 50" is what's left after taking 20% off: 40.
+                Some(_) if percent && self.word_ahead("of") => {
+                    self.i += 2;
+                    value *= self.unary()?;
+                    percent = false;
+                }
+                Some(_) if percent && self.word_ahead("off") => {
+                    self.i += 3;
+                    value = (1.0 - value) * self.unary()?;
+                    percent = false;
+                }
+                _ => return Ok((value, percent)),
             }
         }
     }
@@ -534,11 +561,19 @@ pub fn unit_symbol(unit: &str) -> &str {
     }
 }
 
-/// A sum as it's written on paper: "16*3.5/2" is "16 × 3.5 ÷ 2".
+/// A sum as it's written on paper: "16*3.5/2" is "16 × 3.5 ÷ 2". Spaces go, except either side of a
+/// word, so "90% of 429" stays as it is.
 pub fn pretty_sum(sum: &str) -> String {
     let mut out = String::with_capacity(sum.len() + 8);
-    for c in sum.trim().chars() {
+    let chars: Vec<char> = sum.trim().chars().collect();
+    for (at, &c) in chars.iter().enumerate() {
+        let beside_word = || {
+            let before = chars[..at].iter().rev().find(|c| !c.is_whitespace());
+            let after = chars[at + 1..].iter().find(|c| !c.is_whitespace());
+            before.is_some_and(|c| c.is_alphabetic()) || after.is_some_and(|c| c.is_alphabetic())
+        };
         match c {
+            ' ' if beside_word() => out.push(' '),
             '*' => out.push_str(" \u{00D7} "),
             '/' => out.push_str(" \u{00F7} "),
             '+' => out.push_str(" + "),
@@ -604,6 +639,26 @@ mod tests {
         assert_eq!(value("50%"), "0.5");
         assert_eq!(value("1,000+1"), "1001");
         assert_eq!(value("1e3+1"), "1001");
+    }
+
+    #[test]
+    fn percentages() {
+        assert_eq!(value("90% of 429"), "386.1");
+        assert_eq!(value("90%of 429"), "386.1");
+        assert_eq!(value("90% OF 429"), "386.1");
+        assert_eq!(value("20% off 50"), "40");
+        assert_eq!(value("429 + 10%"), "471.9");
+        assert_eq!(value("429 - 10%"), "386.1");
+        assert_eq!(value("(100 + 10%) * 2"), "220");
+        assert_eq!(value("200 + 10% of 50"), "205");
+        assert_eq!(value("10% of 50 + 5"), "10");
+        assert_eq!(value("2 * 10%"), "0.2");
+        assert_eq!(value("50%"), "0.5");
+        assert_eq!(value("10 % 3"), "1");
+        // "of" means something only after a percentage, and "offset" isn't "off".
+        assert_eq!(evaluate("5% offset"), CalcOutcome::NotMath);
+        assert_eq!(pretty_sum("90% of 429"), "90% of 429");
+        assert_eq!(pretty_sum("20 %  off 50"), "20% off 50");
     }
 
     #[test]

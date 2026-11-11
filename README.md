@@ -6,7 +6,7 @@ A small, keyboard-first launcher for Windows and macOS. Press a shortcut, type, 
 
 ## What it does
 
-- **Launcher.** Fast ranked search over apps and commands, with a calculator, unit and currency conversion ("123 euro in pounds", "123 pound to kilo"), the weather ("weather London"), a speed test by Speedtest.net, and quick links. On Windows it forgives typing mistakes, keeps favourites at the top, and can open on favourites alone.
+- **Launcher.** Fast ranked search over apps and commands, with a calculator that knows percentages ("90% of 429", "429 + 10%"), unit and currency conversion ("123 euro in pounds", "123 pound to kilo"), the weather ("weather London"), a speed test by Speedtest.net, and quick links. On Windows it forgives typing mistakes, keeps favourites at the top, and can open on favourites alone.
 - **Action menu.** Ctrl+K (Cmd+K on macOS) shows what you can do with the selected item. On Windows it's a small menu above the footer, and the list stays where it was behind it. A running app's menu has End task.
 - **Window layouts (Windows).** Left, right, top and bottom half, maximise, almost maximise, centre, and move to the next display, for the window you opened Orbit over. Give any of them a hotkey to use it straight from the keyboard.
 - **System toggles (Windows).** Dark mode, mute, Bluetooth and Wi-Fi.
