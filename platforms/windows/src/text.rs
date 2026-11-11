@@ -276,14 +276,52 @@ pub struct EditLook {
     pub caret_width: i32,
 }
 
-/// Text someone is typing over several lines, wrapped like `draw_wrapped`, with its selection and
-/// caret. `selection` is in UTF-16 units, as an edit control counts them, with a line break as
-/// `\r\n`. When the text is taller than `rect`, it scrolls to keep the caret in view.
-pub fn draw_editable(buffer: &mut Backbuffer, text: &str, face: &Face, ink: Rgb, rect: RECT, selection: (usize, usize), look: EditLook) {
-    let Some(engine) = engine() else { return };
+/// Which gap between the letters of one line of `text` is nearest `x`, measured from where the text
+/// starts, in UTF-16 units as an edit control counts them. For a click in a box Orbit draws.
+pub fn index_at(text: &str, face: &Face, x: i32) -> usize {
+    if text.is_empty() || x <= 0 {
+        return 0;
+    }
+    let Some(engine) = engine() else { return 0 };
+    let units = one_line(text);
+    let Some(line) = layout(engine, &units, face, 100_000.0, 100.0) else { return 0 };
+    hit_gap(&line, &units, x as f32, 50.0)
+}
+
+/// The same for text drawn by `draw_editable` in `rect`, scrolled up by `scroll`, at a point.
+pub fn editable_index_at(text: &str, face: &Face, rect: RECT, scroll: i32, x: i32, y: i32) -> usize {
+    let Some(engine) = engine() else { return 0 };
+    let Some((block, units)) = editable_layout(engine, text, face, rect) else { return 0 };
+    if units.is_empty() {
+        return 0;
+    }
+    hit_gap(&block, &units, (x - rect.left) as f32, (y - rect.top + scroll) as f32)
+}
+
+/// The gap a point in a laid-out text is nearest: before the letter it's on, or after it if it's on
+/// that letter's far half. Never between the two halves of a line break, nor after one at a line's end.
+fn hit_gap(block: &IDWriteTextLayout, units: &[u16], x: f32, y: f32) -> usize {
+    let (mut trailing, mut inside) = (BOOL(0), BOOL(0));
+    let mut metrics = DWRITE_HIT_TEST_METRICS::default();
+    if unsafe { block.HitTestPoint(x, y, &mut trailing, &mut inside, &mut metrics) }.is_err() {
+        return 0;
+    }
+    let position = (metrics.textPosition as usize).min(units.len());
+    let mut at = if trailing.as_bool() { position + metrics.length as usize } else { position };
+    if trailing.as_bool() && matches!(units.get(position), Some(0x0A | 0x0D)) {
+        at = position;
+    }
+    if at > 0 && units.get(at) == Some(&0x0A) && units[at - 1] == 0x0D {
+        at -= 1;
+    }
+    at.min(units.len())
+}
+
+/// Text someone is typing over several lines, laid out as `draw_editable` draws it.
+fn editable_layout(engine: &Engine, text: &str, face: &Face, rect: RECT) -> Option<(IDWriteTextLayout, Vec<u16>)> {
     let units: Vec<u16> = text.encode_utf16().map(|unit| if unit < 0x20 && !matches!(unit, 0x09 | 0x0A | 0x0D) { 0x20 } else { unit }).collect();
     let (box_width, box_height) = ((rect.right - rect.left).max(1) as f32, (rect.bottom - rect.top).max(1) as f32);
-    let Some(block) = layout(engine, &units, face, box_width, box_height) else { return };
+    let block = layout(engine, &units, face, box_width, box_height)?;
     unsafe {
         if block.SetWordWrapping(DWRITE_WORD_WRAPPING_EMERGENCY_BREAK).is_err() {
             let _ = block.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
@@ -291,6 +329,18 @@ pub fn draw_editable(buffer: &mut Backbuffer, text: &str, face: &Face, ink: Rgb,
         let _ = block.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
         let _ = block.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
     }
+    Some((block, units))
+}
+
+/// Text someone is typing over several lines, wrapped like `draw_wrapped`, with its selection and
+/// caret. `selection` is in UTF-16 units, as an edit control counts them, with a line break as
+/// `\r\n`. When the text is taller than `rect`, it scrolls to keep the caret in view, staying as
+/// it was, `prior`, while the caret is in view already. Gives back how far it's scrolled.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_editable(buffer: &mut Backbuffer, text: &str, face: &Face, ink: Rgb, rect: RECT, selection: (usize, usize), look: EditLook, prior: i32) -> i32 {
+    let Some(engine) = engine() else { return 0 };
+    let Some((block, units)) = editable_layout(engine, text, face, rect) else { return 0 };
+    let box_height = (rect.bottom - rect.top).max(1) as f32;
     let (start, end) = (selection.0.min(selection.1).min(units.len()), selection.0.max(selection.1).min(units.len()));
     let caret_at = selection.1.min(units.len());
     // Where the caret is with nothing scrolled, which decides how far to scroll.
@@ -298,7 +348,15 @@ pub fn draw_editable(buffer: &mut Backbuffer, text: &str, face: &Face, ink: Rgb,
     let mut caret = DWRITE_HIT_TEST_METRICS::default();
     let found = unsafe { block.HitTestTextPosition(caret_at as u32, false, &mut caret_x, &mut caret_y, &mut caret) }.is_ok();
     let line_height = if found && caret.height > 0.0 { caret.height } else { box_height.min(20.0) };
-    let scroll = if found { (caret_y + line_height - box_height).max(0.0) } else { 0.0 };
+    let scroll = if found {
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        let tallest = if unsafe { block.GetMetrics(&mut metrics) }.is_ok() { (metrics.height - box_height).max(0.0) } else { f32::MAX };
+        let least = (caret_y + line_height - box_height).max(0.0);
+        let most = caret_y.min(tallest).max(least);
+        (prior as f32).clamp(least, most).round()
+    } else {
+        0.0
+    };
     let (left, top) = (rect.left as f32, rect.top as f32 - scroll);
     if start < end {
         let mut spans = vec![DWRITE_HIT_TEST_METRICS::default(); 64];
@@ -325,6 +383,7 @@ pub fn draw_editable(buffer: &mut Backbuffer, text: &str, face: &Face, ink: Rgb,
             buffer.fill_rect_alpha(x.min(rect.right - look.caret_width), y0, look.caret_width, y1 - y0, color, 255);
         }
     }
+    scroll as i32
 }
 
 /// Text starting at `x`, which may be left of `clip`, showing only what's inside `clip`.
@@ -584,6 +643,39 @@ mod tests {
         let (bits, width, height) = buffer.raw();
         let pixels = unsafe { std::slice::from_raw_parts(bits, (width * height) as usize) };
         pixels.iter().filter(|pixel| **pixel != 0).count()
+    }
+
+    #[test]
+    fn a_click_lands_in_the_gap_nearest_it() {
+        let face = face();
+        let text = "hello world";
+        assert_eq!(index_at(text, &face, -5), 0, "left of the text is its start");
+        assert_eq!(index_at(text, &face, 0), 0);
+        assert_eq!(index_at(text, &face, width(text, &face) + 40), 11, "past the end is its end");
+        // Just inside "w" is before it, and just short of its far side is after it.
+        let (before_w, after_w) = (width("hello ", &face), width("hello w", &face));
+        assert_eq!(index_at(text, &face, before_w + 1), 6);
+        assert_eq!(index_at(text, &face, after_w - 1), 7);
+        assert_eq!(index_at("", &face, 30), 0);
+        // An emoji is two units, and a click never lands between them.
+        let pair = "a\u{1F600}b";
+        let middle = (width("a", &face) + width("a\u{1F600}", &face)) / 2;
+        assert!(matches!(index_at(pair, &face, middle), 1 | 3));
+    }
+
+    #[test]
+    fn a_click_in_several_lines_finds_its_line() {
+        let face = face();
+        let rect = RECT { left: 100, top: 50, right: 400, bottom: 300 };
+        let text = "first line\r\nsecond";
+        let line = 18;
+        // Past the end of the first line is before its break, not between the break's halves.
+        assert_eq!(editable_index_at(text, &face, rect, 0, 390, 55), 10);
+        assert_eq!(editable_index_at(text, &face, rect, 0, 100, 55 + line), 12, "the second line starts after \\r\\n");
+        assert_eq!(editable_index_at(text, &face, rect, 0, 390, 55 + line), 18);
+        // Scrolled up a line, the first line is where the second was.
+        assert_eq!(editable_index_at(text, &face, rect, line, 100, 55), 12);
+        assert_eq!(editable_index_at("", &face, rect, 0, 200, 60), 0);
     }
 
     #[test]

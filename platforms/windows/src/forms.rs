@@ -178,6 +178,43 @@ pub fn wheel_pixels(delta: i32, lines_per_notch: i32, line_height: i32) -> i32 {
     delta * lines_per_notch.max(1) * line_height / 120
 }
 
+/// The word a double click picks, as a start and an end: the run of word characters, of spaces or
+/// of punctuation that `at` is before, or at the end of a line the one it's after. Never takes in a
+/// line break. Counted in UTF-16 units, as an edit control does.
+pub fn word_around(units: &[u16], at: usize) -> (usize, usize) {
+    const CR: u16 = 13;
+    const LF: u16 = 10;
+    // 0 is a line break, which is never picked.
+    let kind = |unit: u16| -> u8 {
+        if unit == CR || unit == LF {
+            0
+        } else if char::from_u32(unit as u32).is_some_and(char::is_whitespace) {
+            1
+        } else if char::from_u32(unit as u32).is_none_or(|c| c.is_alphanumeric() || c == '_') {
+            // Half of a surrogate pair can't be looked up. Treating it as a letter keeps pairs whole.
+            2
+        } else {
+            3
+        }
+    };
+    let at = at.min(units.len());
+    let on = match units.get(at) {
+        Some(&unit) if kind(unit) != 0 => at,
+        _ if at > 0 && kind(units[at - 1]) != 0 => at - 1,
+        _ => return (at, at),
+    };
+    let wanted = kind(units[on]);
+    let mut start = on;
+    while start > 0 && kind(units[start - 1]) == wanted {
+        start -= 1;
+    }
+    let mut end = on + 1;
+    while end < units.len() && kind(units[end]) == wanted {
+        end += 1;
+    }
+    (start, end)
+}
+
 /// Where Ctrl+Backspace deletes back to: one line break, or else any spaces and then one run of
 /// word characters or of punctuation. Counted in UTF-16 units, as an edit control does.
 pub fn word_start(units: &[u16], caret: usize) -> usize {
@@ -2218,6 +2255,35 @@ mod tests {
         assert_eq!(deleted_from(pair, units(pair).len()), 2, "both halves of the emoji go together");
         assert_eq!(deleted_from("caf\u{E9} x", 6), 5);
         assert_eq!(deleted_from("caf\u{E9}", 4), 0, "accented letters are letters");
+    }
+
+    fn picked(text: &str, at: usize) -> String {
+        let all = units(text);
+        let (start, end) = word_around(&all, at);
+        String::from_utf16_lossy(&all[start..end])
+    }
+
+    #[test]
+    fn a_double_click_picks_the_word_its_in() {
+        assert_eq!(picked("hello world", 2), "hello");
+        assert_eq!(picked("hello world", 0), "hello");
+        assert_eq!(picked("hello world", 8), "world");
+        assert_eq!(picked("hello world", 11), "world", "at the end, the word before");
+        assert_eq!(picked("hello   world", 6), "   ", "spaces are picked as a run");
+        assert_eq!(picked("https://github.com", 10), "github");
+        assert_eq!(picked("https://github.com", 6), "://");
+        assert_eq!(picked("snake_case2 x", 3), "snake_case2");
+    }
+
+    #[test]
+    fn a_double_click_stays_on_its_line_and_keeps_pairs_whole() {
+        assert_eq!(picked("one\r\ntwo", 3), "one", "at a line's end, the word before");
+        assert_eq!(picked("one\r\ntwo", 5), "two");
+        assert_eq!(picked("one\r\n\r\ntwo", 5), "", "an empty line has nothing to pick");
+        assert_eq!(picked("", 0), "");
+        assert_eq!(picked("abc", 99), "abc");
+        let pair = "a \u{1F600}\u{1F600} b";
+        assert_eq!(picked(pair, 2), "\u{1F600}\u{1F600}");
     }
 
     #[test]

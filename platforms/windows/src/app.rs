@@ -69,7 +69,7 @@ use windows::Win32::UI::Controls::{EM_GETSEL, EM_REPLACESEL, EM_SETCUEBANNER, EM
 use orbit_core::vim::{self, Command as VimCommand, Delete as VimDelete, InsertAt, KeyboardMode, VimKeys, VimMode};
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetDpiForSystem};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DELETE, VK_MENU, VK_OEM_COMMA,
+    ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DELETE, VK_MENU, VK_OEM_COMMA,
     GetKeyState, RegisterHotKey, SetFocus, UnregisterHotKey, GetFocus, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT,
     MOD_WIN, VK_BACK, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F4, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
 };
@@ -88,6 +88,9 @@ pub const WM_ORBIT_LAUNCH_FAILED: u32 = WM_APP + 8;
 /// Something done on a thread of its own has finished. The message comes as text.
 pub const WM_ORBIT_REPORT: u32 = WM_APP + 44;
 pub const WM_ORBIT_INSERT_DONE: u32 = WM_APP + 9;
+/// A password or code was typed, or put on the clipboard instead: wparam says which, lparam is the
+/// clipboard's sequence number then.
+const WM_ORBIT_SECRET_TYPED: u32 = WM_APP + 54;
 pub const WM_ORBIT_SETTINGS_APPLY: u32 = WM_APP + 10;
 pub const WM_ORBIT_RUN_BUILTIN: u32 = WM_APP + 11;
 
@@ -377,6 +380,8 @@ pub struct App {
     tool_request: u64,
     /// A value was asked for, and pressing Esc cancels it.
     waiting_value: Option<u64>,
+    /// The value asked for is to be typed where the launcher was opened, rather than copied.
+    paste_value: bool,
     /// Stays open through an approval prompt, which takes focus. Set while a tool is being asked.
     hold_open: Option<Instant>,
     lost_focus_while_held: bool,
@@ -395,11 +400,19 @@ pub struct App {
     pub extensions: Vec<crate::extensions::Installed>,
     pub broken_extensions: Vec<crate::extensions::Broken>,
     runners: crate::extensions::Runners,
-    /// GitHub and AI Usage, which answer from Orbit's own code.
+    /// GitHub, which answers from Orbit's own code.
     providers: crate::providers::Providers,
     /// The extension and request whose answer is wanted. Anything else it answers is old.
     ext_waiting: Option<(String, u64)>,
     ext_requests: u64,
+    /// The filter chosen for each extension list, keyed `ext/command`, kept while Orbit runs.
+    ext_filter: HashMap<String, String>,
+    /// The filters the list showing now can be narrowed by, as its last answer offered them.
+    pub ext_filters: Vec<orbit_core::extension::FilterOption>,
+    /// Where each editable box was last drawn, so a click can put the caret where it lands.
+    pub text_spots: Vec<ui::TextSpot>,
+    /// A selection being made by dragging across a box: where it started, and in which box.
+    text_drag: Option<(usize, ui::SpotOf)>,
 }
 
 /// What a password manager or authenticator last said. Item names and no secrets.
@@ -435,10 +448,11 @@ fn is_deferrable(message: u32) -> bool {
 pub unsafe extern "system" fn main_wndproc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match message {
-            WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_RBUTTONUP if in_input_band(hwnd, lparam) => {
-                // The search box isn't on screen, so what it would have been sent comes here.
+            WM_RBUTTONUP if in_input_band(hwnd, lparam) => {
+                // The search box isn't on screen, so its menu of Cut, Copy and Paste opens from here.
+                // Left clicks are the app's, which knows where the text was drawn.
                 if let Ok(edit) = GetWindow(hwnd, GW_CHILD) {
-                    forward_to_edit(hwnd, edit, message, wparam, lparam);
+                    edit_menu_at(hwnd, edit, lparam);
                     drain_deferred();
                     return LRESULT(0);
                 }
@@ -615,20 +629,13 @@ fn create_plate() -> Option<HWND> {
     }
 }
 
-fn forward_to_edit(hwnd: HWND, edit: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) {
+/// Opens the search box's own menu where a right click in the launcher was.
+fn edit_menu_at(hwnd: HWND, edit: HWND, lparam: LPARAM) {
     let mut point = POINT { x: (lparam.0 & 0xFFFF) as i16 as i32, y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32 };
     unsafe {
-        if message == WM_RBUTTONUP {
-            let _ = ClientToScreen(hwnd, &mut point);
-            let packed = (point.x as u16 as isize) | ((point.y as u16 as isize) << 16);
-            SendMessageW(edit, WM_CONTEXTMENU, Some(WPARAM(edit.0 as usize)), Some(LPARAM(packed)));
-            return;
-        }
-        let mut points = [point];
-        MapWindowPoints(Some(hwnd), Some(edit), &mut points);
-        // Inside the box's height, wherever in the band the click was.
-        let packed = (points[0].x as u16 as isize) | (1isize << 16);
-        SendMessageW(edit, message, Some(wparam), Some(LPARAM(packed)));
+        let _ = ClientToScreen(hwnd, &mut point);
+        let packed = (point.x as u16 as isize) | ((point.y as u16 as isize) << 16);
+        SendMessageW(edit, WM_CONTEXTMENU, Some(WPARAM(edit.0 as usize)), Some(LPARAM(packed)));
     }
 }
 
@@ -975,6 +982,7 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             vaults: HashMap::new(),
             tool_request: 0,
             waiting_value: None,
+            paste_value: false,
             hold_open: None,
             lost_focus_while_held: false,
             secret_on_clipboard: None,
@@ -990,6 +998,10 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             providers: Default::default(),
             ext_waiting: None,
             ext_requests: 0,
+            ext_filter: HashMap::new(),
+            ext_filters: Vec::new(),
+            text_spots: Vec::new(),
+            text_drag: None,
         };
         app.discover_extensions();
         app.layout_for_dpi(dpi);
@@ -1085,7 +1097,19 @@ impl App {
             }
             WM_MOUSEMOVE => {
                 let (x, y) = self.panel_point(lparam);
+                if self.text_drag.is_some() {
+                    // The button can be let go where this window doesn't hear it.
+                    if wparam.0 & 1 != 0 {
+                        self.drag_text(x, y);
+                        return Some(LRESULT(0));
+                    }
+                    self.end_text_drag();
+                }
                 self.on_mouse_move(x, y);
+                Some(LRESULT(0))
+            }
+            WM_CAPTURECHANGED => {
+                self.text_drag = None;
                 Some(LRESULT(0))
             }
             WM_MOUSELEAVE => {
@@ -1135,11 +1159,19 @@ impl App {
                 if self.pressed_button.is_some() {
                     self.hovered_button = self.pressed_button;
                     self.redraw();
+                } else {
+                    let shift = unsafe { GetKeyState(0x10) } < 0;
+                    self.press_text(x, y, message == WM_LBUTTONDBLCLK, shift);
                 }
                 Some(LRESULT(0))
             }
             WM_LBUTTONUP => {
                 let (x, y) = self.panel_point(lparam);
+                // A press in a box was handled when it went down.
+                if self.text_drag.is_some() {
+                    self.end_text_drag();
+                    return Some(LRESULT(0));
+                }
                 match self.pressed_button.take() {
                     Some(pressed) => {
                         if self.footer_button_at(x, y) == Some(pressed) {
@@ -1274,6 +1306,10 @@ impl App {
                 };
                 self.metrics.record_action("launch-failed", 0, 0);
                 self.report(&message);
+                Some(LRESULT(0))
+            }
+            WM_ORBIT_SECRET_TYPED => {
+                self.on_secret_typed(wparam.0, lparam.0 as u32);
                 Some(LRESULT(0))
             }
             WM_ORBIT_INSERT_DONE => {
@@ -1608,7 +1644,11 @@ impl App {
         }
     }
 
+    /// Whether the pointer is over text that can be typed in, where it's an I-beam.
     fn pointer_in_input(&self) -> bool {
+        if !self.visible || self.hovered_button.is_some() {
+            return false;
+        }
         let mut point = POINT::default();
         unsafe {
             let _ = GetCursorPos(&mut point);
@@ -1616,12 +1656,74 @@ impl App {
         }
         let margin = ui::frame_margin(self.dpi);
         let (x, y) = (point.x - margin, point.y - margin);
-        self.visible
-            && self.menu.is_none()
-            && y >= 0
-            && y < ui::scale(ui::INPUT_HEIGHT, self.dpi)
-            && x >= ui::input_left(&self.view.scope, self.dpi)
-            && x < ui::scale(ui::BASE_WIDTH, self.dpi)
+        self.text_spots.iter().any(|spot| spot.contains(x, y))
+    }
+
+    /// A press on text that can be typed in puts the caret where it landed, and a drag from there
+    /// selects, as in any text box. A double press selects the word, and Shift stretches what's
+    /// selected to it. Gives back whether it was on such text.
+    fn press_text(&mut self, x: i32, y: i32, double: bool, shift: bool) -> bool {
+        let Some(spot) = self.text_spots.iter().find(|spot| spot.contains(x, y)).cloned() else { return false };
+        let Some(at) = self.fonts.as_ref().map(|fonts| spot.index_at(fonts, x, y)) else { return false };
+        // Typing moves to the box pressed, keeping what was typed in the one it leaves.
+        match spot.of {
+            ui::SpotOf::LinkArg(index) if self.link_args.as_ref().is_some_and(|args| args.at != index) => self.focus_link_arg(index),
+            ui::SpotOf::Field(index) if self.form.as_ref().is_some_and(|form| form.at != index) => self.focus_form_field(index),
+            _ => {}
+        }
+        if VIM_NORMAL.load(Ordering::Relaxed) {
+            // Clicking in the box means you want to type there.
+            self.set_vim_mode(VimMode::Insert);
+        }
+        let target = if self.area_focused() { self.area } else { self.edit };
+        let (mut start, mut end) = (0u32, 0u32);
+        unsafe {
+            SendMessageW(target, EM_GETSEL, Some(WPARAM(&mut start as *mut u32 as usize)), Some(LPARAM(&mut end as *mut u32 as isize)));
+        }
+        let (start, end) = (start as usize, end as usize);
+        let (anchor, caret) = if double {
+            let units: Vec<u16> = spot.text.encode_utf16().collect();
+            crate::forms::word_around(&units, at)
+        } else if shift {
+            // From whichever end of the selection is further from the press.
+            (if at.abs_diff(start) > at.abs_diff(end) { start } else { end }, at)
+        } else {
+            (at, at)
+        };
+        unsafe {
+            let _ = SetFocus(Some(target));
+            SendMessageW(target, EM_SETSEL, Some(WPARAM(anchor)), Some(LPARAM(caret as isize)));
+            SetCapture(self.main);
+        }
+        self.text_drag = Some((anchor, spot.of));
+        self.drawn_field = (anchor.min(caret), anchor.max(caret));
+        self.restart_caret();
+        self.redraw();
+        true
+    }
+
+    /// Dragging after a press in a box selects from where the press was to the pointer.
+    fn drag_text(&mut self, x: i32, y: i32) {
+        let Some((anchor, of)) = self.text_drag else { return };
+        let Some(spot) = self.text_spots.iter().find(|spot| spot.of == of) else { return };
+        let Some(at) = self.fonts.as_ref().map(|fonts| spot.index_at(fonts, x, y)) else { return };
+        let target = if self.area_focused() { self.area } else { self.edit };
+        unsafe {
+            SendMessageW(target, EM_SETSEL, Some(WPARAM(anchor)), Some(LPARAM(at as isize)));
+        }
+        let now = (anchor.min(at), anchor.max(at));
+        if now != self.drawn_field {
+            self.drawn_field = now;
+            self.restart_caret();
+            self.redraw();
+        }
+    }
+
+    fn end_text_drag(&mut self) {
+        self.text_drag = None;
+        unsafe {
+            let _ = ReleaseCapture();
+        }
     }
 
     /// A mouse message's position, measured from the launcher's corner rather than its shadow's.
@@ -2077,9 +2179,14 @@ impl App {
                     Some("colour") => self.enter_scope(Scope::Colour(orbit_core::colour::Colour { r: 56, g: 189, b: 248 }), qpc()),
                     // An extension's list, as "ext:github/issues". One that comes with Orbit reads
                     // saved answers from the data folder instead of asking online.
+                    // "?filter=review" after it chooses a filter first.
                     Some(list) if list.starts_with("ext:") => {
+                        let (list, options) = list.split_once('?').unwrap_or((list, ""));
                         if let Some((ext, command)) = list["ext:".len()..].split_once('/') {
                             let (ext, command) = (ext.to_string(), command.to_string());
+                            if let Some(id) = options.split('&').find_map(|option| option.strip_prefix("filter=")) {
+                                self.ext_filter.insert(format!("{ext}/{command}"), id.to_string());
+                            }
                             self.open_extension_command(&ext, &command);
                         }
                     }
@@ -2096,7 +2203,11 @@ impl App {
                 if self.menu.is_none() && (preview.scope.is_some() || preview.select > 0) {
                     self.view.select(preview.select);
                     self.after_selection_change();
-                    if preview.actions {
+                    // "&menu" after an extension's list opens its filter drop-down.
+                    let filters = preview.scope.as_deref().is_some_and(|scope| scope.starts_with("ext:") && scope.split(['?', '&']).any(|option| option == "menu"));
+                    if filters {
+                        self.open_filter_menu();
+                    } else if preview.actions {
                         self.open_action_menu();
                     }
                 }
@@ -2522,6 +2633,11 @@ impl App {
         }
         if let Some(handled) = self.on_link_args_key(vk, ctrl) {
             return handled;
+        }
+        // Ctrl+P opens a list's filter drop-down, even when the filter left nothing to choose.
+        if ctrl && vk == 0x50 && self.filter_label().is_some() && unsafe { GetKeyState(0x10) } >= 0 {
+            self.toggle_filter_menu();
+            return true;
         }
         // The keys an action menu shows next to its entries work without opening it.
         if ctrl {
@@ -3209,6 +3325,7 @@ impl App {
             "i" => self.set_vim_mode(VimMode::Insert),
             ui::BUTTON_ORBIT_MENU => self.open_orbit_menu(),
             ui::BUTTON_BACK => self.go_back_or_hide(),
+            ui::BUTTON_FILTER => self.toggle_filter_menu(),
             ui::BUTTON_VIM_MODE => {
                 let next = if self.vim_mode == VimMode::Normal { VimMode::Insert } else { VimMode::Normal };
                 self.set_vim_mode(next);
@@ -3687,6 +3804,8 @@ impl App {
         // Lists that arrive later start empty, not showing the last list's rows.
         if matches!(scope, Scope::Files | Scope::Extension { .. }) && scope != self.view.scope {
             self.view.rows.clear();
+            // Another list's filters aren't this one's. Its own come with its first answer.
+            self.ext_filters.clear();
         }
         self.view.scope = scope;
         self.view.reset_position();
@@ -4401,7 +4520,7 @@ impl App {
                     }
                 }
                 RowIcon::File(hash, _) => self.request_file_icon(hash, size),
-                RowIcon::Glyph(_) | RowIcon::Emoji(_) => {}
+                RowIcon::Glyph(_) | RowIcon::Tinted(..) | RowIcon::Emoji(_) => {}
             }
         }
     }
@@ -4526,6 +4645,10 @@ impl App {
             };
             menu.extend(own.into_iter().flatten());
         }
+        // A list that can be narrowed says so in every row's menu.
+        if matches!(row.source, RowSource::Extension { .. }) && self.filter_label().is_some() {
+            menu.push(Row::op("Filter\u{2026}", "", crate::rows::GLYPH_FILTER, Op::OpenFilterMenu).with_keys("Ctrl+P"));
+        }
         Some((row, menu))
     }
 
@@ -4547,18 +4670,16 @@ impl App {
             command("Suspend Shortcuts", GLYPH_KEYBOARD, Builtin::SuspendShortcuts)
         };
         let version = concat!("Orbit ", env!("CARGO_PKG_VERSION"));
+        // Only what's about Orbit itself. Making a quicklink or a snippet, the emoji and the
+        // diagnostics are all found by typing their names.
         let rows = vec![
             command("Orbit Settings", GLYPH_SETTINGS, Builtin::Settings).with_keys("Ctrl+,"),
-            command("Create Quicklink", GLYPH_LINK, Builtin::NewQuicklink),
-            command("Create Snippet", GLYPH_SNIPPET, Builtin::NewSnippet),
-            command("Search Emoji & Symbols", GLYPH_EMOJI, Builtin::EmojiPicker),
-            command("Orbit Help", GLYPH_HELP, Builtin::ShowHelp),
-            command("Diagnostics", GLYPH_DIAGNOSTICS, Builtin::Diagnostics),
-            suspended,
             {
                 let (title, subtitle) = crate::update::menu_row();
                 Row::op(&title, &subtitle, crate::rows::GLYPH_UPDATE, Op::RunBuiltin(Builtin::CheckForUpdates))
             },
+            command("Orbit Help", GLYPH_HELP, Builtin::ShowHelp),
+            suspended,
             command("Restart Orbit", GLYPH_REFRESH, Builtin::RestartOrbit),
             command("Quit Orbit", GLYPH_POWER, Builtin::QuitOrbit),
         ];
@@ -4569,7 +4690,14 @@ impl App {
     fn open_menu(&mut self, side: MenuSide, of: String, rows: Vec<Row>) {
         // The menu fits the launcher as it is, rather than the launcher growing for the menu.
         let height = ui::launcher_height(self.dpi, &self.view.scope, &self.view.rows, self.view.grid.is_some(), self.settings.launcher.fit_results, self.full_rows() as i32);
-        let shown = rows.len().clamp(1, ui::popover_rows_for(height, self.dpi));
+        // Orbit's own menu, on the left, is short and always the same, so it shows whole. A
+        // drop-down hangs from the top and has all the room down to the footer.
+        let most = match side {
+            MenuSide::Left => ui::popover_rows_most(height, self.dpi),
+            MenuSide::Right => ui::popover_rows_for(height, self.dpi),
+            MenuSide::Drop => ui::drop_rows_for(height, self.dpi),
+        };
+        let shown = rows.len().clamp(1, most);
         self.push_view();
         let behind = Behind {
             scope: self.view.scope.clone(),
@@ -4699,7 +4827,7 @@ impl App {
 
     fn execute(&mut self, op: Op) {
         match op {
-            op @ (Op::OpenFile(_) | Op::RevealFile(_) | Op::CopyPath(_) | Op::CopyFile(_) | Op::OpenFileWith(_) | Op::FileAsAdmin(_) | Op::TerminalHere(_) | Op::EverythingInstall | Op::EverythingStart | Op::EverythingRetry | Op::ExtAction { .. } | Op::OpenExtensionsSettings) => {
+            op @ (Op::OpenFile(_) | Op::RevealFile(_) | Op::CopyPath(_) | Op::CopyFile(_) | Op::OpenFileWith(_) | Op::FileAsAdmin(_) | Op::TerminalHere(_) | Op::EverythingInstall | Op::EverythingStart | Op::EverythingRetry | Op::ExtAction { .. } | Op::OpenExtensionsSettings | Op::OpenFilterMenu | Op::ExtFilter(_)) => {
                 self.execute_ext(op);
             }
             Op::Weather(name) => {
@@ -4799,7 +4927,8 @@ impl App {
                     self.refresh_results();
                 }
             }
-            Op::CopySecret { tool, id, field } => self.ask_tool_for_value(tool, id, field),
+            Op::CopySecret { tool, id, field } => self.ask_tool_for_value(tool, id, field, false),
+            Op::PasteSecret { tool, id, field } => self.ask_tool_for_value(tool, id, field, true),
             Op::RunItem { item, key } => {
                 let Some(action) = self.catalog.entry_action(item, self.settings.launcher.focus_running_app) else { return };
                 self.worker.send(Req::RecordUsage(key));
@@ -5229,9 +5358,10 @@ impl App {
         integrations::request_items(tool, self.tool_request, self.send, WM_ORBIT_CLI);
     }
 
-    fn ask_tool_for_value(&mut self, tool: Tool, id: String, field: integrations::Field) {
+    fn ask_tool_for_value(&mut self, tool: Tool, id: String, field: integrations::Field, paste: bool) {
         self.tool_request += 1;
         self.waiting_value = Some(self.tool_request);
+        self.paste_value = paste;
         self.hold_open = Some(Instant::now());
         self.lost_focus_while_held = false;
         self.status = Some(format!("Asking {}…", tool.name()));
@@ -5291,6 +5421,7 @@ impl App {
                 }
                 self.waiting_value = None;
                 match result {
+                    Ok(secret) if self.paste_value => self.paste_secret(secret),
                     Ok(secret) => self.copy_secret(field, &secret),
                     Err(failure) => {
                         self.end_hold();
@@ -5326,6 +5457,48 @@ impl App {
         }
         if let Some(left) = secret.seconds_left.filter(|&left| left < 8) {
             self.notify("Orbit", &format!("Code copied. It expires in {left} seconds, so the next one may be safer."));
+        }
+    }
+
+    /// Types a code into the window the launcher was opened over, on a thread of its own, so the
+    /// clipboard isn't used unless it can't be typed there.
+    fn paste_secret(&mut self, secret: integrations::Secret) {
+        // An approval prompt took focus, so going back to the app needs more than asking nicely.
+        let prompted = self.lost_focus_while_held;
+        let target = self.prev_foreground;
+        self.hide(true);
+        if prompted && !target.is_invalid() {
+            launch::force_foreground(target);
+        }
+        let target = SendHwnd::new(if target.is_invalid() { unsafe { GetForegroundWindow() } } else { target });
+        if let Some(left) = secret.seconds_left.filter(|&left| left < 8) {
+            self.notify("Orbit", &format!("Code pasted. It expires in {left} seconds, so if it's refused, try the next one."));
+        }
+        let main = self.send;
+        let _ = std::thread::Builder::new().name("orbit-type-secret".into()).stack_size(256 * 1024).spawn(move || {
+            let (code, sequence) = match clipboard::type_secret(target.get(), &secret.text) {
+                clipboard::SecretTyped::Typed => (0, 0),
+                clipboard::SecretTyped::OnClipboard(sequence) => (1, sequence),
+                clipboard::SecretTyped::Failed => (2, 0),
+            };
+            // The code is wiped from memory here, as it goes.
+            drop(secret);
+            main.post(WM_ORBIT_SECRET_TYPED, code, sequence as isize);
+        });
+    }
+
+    /// A code that couldn't be typed went on the clipboard instead, so it clears as a copied one does.
+    fn on_secret_typed(&mut self, outcome: usize, sequence: u32) {
+        match outcome {
+            1 => {
+                self.secret_on_clipboard = Some(sequence);
+                unsafe {
+                    let _ = SetTimer(Some(self.main), TIMER_CLEAR_SECRET, SECRET_CLEAR_MS, None);
+                }
+                self.report("Orbit couldn't type into that window, so the code is on your clipboard for 30 seconds. Press Ctrl+V to paste it.");
+            }
+            2 => self.report("Couldn't paste the code, or put it on the clipboard"),
+            _ => {}
         }
     }
 
@@ -5365,7 +5538,12 @@ impl App {
             .items
             .iter()
             .map(|item| {
-                let field = if tool == Tool::OnePassword { integrations::Field::Password } else { integrations::Field::OneTimeCode };
+                // A password is copied, for whichever box it's wanted in; an Ente code is typed
+                // where the launcher was opened, with Ctrl+Enter to copy it instead.
+                let primary = match tool {
+                    Tool::OnePassword => Op::CopySecret { tool, id: item.id.clone(), field: integrations::Field::Password },
+                    Tool::EnteAuth => Op::PasteSecret { tool, id: item.id.clone(), field: integrations::Field::OneTimeCode },
+                };
                 Row {
                     title: item.title.clone(),
                     subtitle: item.subtitle.clone(),
@@ -5374,7 +5552,7 @@ impl App {
                     accent: false,
                     keys: None,
                     accessory: None,
-                    primary: Some(Op::CopySecret { tool, id: item.id.clone(), field }),
+                    primary: Some(primary),
                     source: RowSource::Secret { tool, id: item.id.clone(), url: item.url.clone() },
                 }
             })
@@ -6679,7 +6857,8 @@ mod tests {
     /// app or opens the menu just as the key would.
     #[test]
     fn every_key_in_the_footer_can_be_clicked() {
-        let source = include_str!("view.rs");
+        // A Windows checkout may have CRLF line ends.
+        let source = include_str!("view.rs").replace("\r\n", "\n");
         let body = &source[source.find("pub fn footer_hints").unwrap()..];
         let body = &body[..body.find("
     }

@@ -23,8 +23,7 @@ Related: [SHORTCUT_SEMANTICS.md](SHORTCUT_SEMANTICS.md), [DATA_PORTABILITY.md](D
 | Currency conversion | On | No | The European Central Bank's public file of daily rates, when you convert (see below) | The bank's file, in `exchange-rates.xml` |
 | Weather | On | No | The place you look up, sent to Open-Meteo, and that place's forecast (see below) | The last place found, in `settings.json`. The forecast in memory for 15 minutes |
 | Speed test | Runs only when opened, after Ookla's terms are accepted | No | What Ookla's Speedtest CLI prints about the test (see below) | That the terms were accepted, in `settings.json`. The last result in memory only |
-| GitHub | Off | No | Your open issues and pull requests, notifications and starred repositories, through GitHub's `gh` tool (see below) | Nothing written. Each list in memory for a minute |
-| AI Usage | Off | No | Claude Code's and Codex's sign-ins on this PC, sent only to Anthropic and OpenAI to ask how much of your limits is used (see below) | Nothing written. The answer in memory for a minute |
+| GitHub | Off | No | Your open issues and pull requests and those closed in the last two weeks, notifications and starred repositories, through GitHub's `gh` tool (see below) | Nothing written. Each list in memory for a minute, and the filter chosen for it until Orbit quits |
 | Pick Colour | Runs only when chosen | No | One still picture of every display, while you pick (see below) | Nothing written. The picked colour in memory while it's shown |
 | Toggles, window layouts, End task | Run only when chosen | No | The window in front (layouts), the app you chose (End task) | Nothing. They change the Windows setting, window or app you chose |
 | File search | On, if Everything is installed and running | No | What you type in Everything's search, and in the launcher from three characters on, sent to Everything on this PC (see below) | Nothing written. Opening a file adds one to Everything's own count for it |
@@ -35,7 +34,7 @@ The defaults are checked by the test `defaults_are_conservative` in `crates/orbi
 
 ## Network and telemetry
 
-Orbit has no telemetry and no account, and sends nothing about you or what you do. Its network code does five things, all described next: it looks for new versions of Orbit, fetches quicklink icons, the European Central Bank's exchange rates for currency conversion, the weather when you ask for it, and, with AI Usage on, Claude's and Codex's usage when you open it. The speed test is run by Ookla's own program, and GitHub's lists by GitHub's own `gh`, both also described below. Weather, Speed Test, GitHub and AI Usage are extensions: Settings → Extensions turns each off, and one that's off has no commands in the launcher and runs nothing. Quick links and URL actions are handed to Windows (`ShellExecuteExW`) to open in your default browser. Clipboard history never fetches or previews URLs.
+Orbit has no telemetry and no account, and sends nothing about you or what you do. Its network code does four things, all described next: it looks for new versions of Orbit, and fetches quicklink icons, the European Central Bank's exchange rates for currency conversion, and the weather when you ask for it. The speed test is run by Ookla's own program, and GitHub's lists by GitHub's own `gh`, both also described below. Weather, Speed Test and GitHub are extensions: Settings → Extensions turns each off, and one that's off has no commands in the launcher and runs nothing. Quick links and URL actions are handed to Windows (`ShellExecuteExW`) to open in your default browser. Clipboard history never fetches or previews URLs.
 
 ### Updates
 
@@ -89,23 +88,17 @@ Orbit doesn't measure your connection itself. Speed Test, which the Extensions p
 - **What's sent.** Ookla's program finds a nearby server, then downloads and uploads test data for about 20 seconds. Ookla and the test server see your IP address. Ookla keeps each result on Speedtest.net, which is where the result link comes from. Its own settings folder, `%APPDATA%\Ookla`, is the program's, not Orbit's.
 - **What Orbit keeps.** The speeds, ping, jitter, packet loss, the server's name and place, your provider's name and the result link, in memory only, until the next test or until Orbit closes. The program also prints your local and public IP addresses and your network adapter's hardware address. Orbit never reads them (`addresses_are_never_kept`).
 
-### GitHub and AI Usage
+### GitHub
 
-Both are off until you turn them on in Settings → Extensions. Both fetch only when you open one of their lists, or choose Refresh in it, and keep the answer in memory for a minute so going back and forth doesn't ask again. Nothing is fetched at start or on a timer, and nothing they show is written to disk. The code is `platforms/windows/src/providers.rs`; reading the answers is in `crates/orbit-core/src/github.rs` and `crates/orbit-core/src/ai_usage.rs`.
+It's off until you turn it on in Settings → Extensions. It fetches only when you open one of its lists, or choose Refresh in it, and keeps the answer in memory for a minute so going back and forth doesn't ask again. Nothing is fetched at start or on a timer, and nothing it shows is written to disk. Filtering a list happens in Orbit, on what was fetched, and asks GitHub nothing more. The code is `platforms/windows/src/providers.rs`; reading the answers is in `crates/orbit-core/src/github.rs`.
 
-**GitHub** runs GitHub's own command-line tool, `gh`, with no window, so it's `gh` that signs in and talks to GitHub, and Orbit never reads or sees a token.
+It runs GitHub's own command-line tool, `gh`, with no window, so it's `gh` that signs in and talks to GitHub, and Orbit never reads or sees a token.
 
-- **What it asks.** `gh api` for your open issues and pull requests (`search/issues` with `involves:@me`), your notifications, and your starred repositories. Marking a notification as read sends `PATCH notifications/threads/<id>`, and only when you choose it.
+- **What it asks.** For issues and pull requests, `gh api graphql` with two searches that involve you (`involves:@me`, leaving out archived repositories): the open ones, and those closed in the last 14 days. For each it asks the title, number, repository, author, state and dates, and for a pull request also its branch, whether it's a draft, whether it merges cleanly, the review decision, its latest checks and whose review is requested; for an issue, why it was closed and who it's assigned to. It also asks who you are on GitHub, to tell your own from others'. Notifications and starred repositories come from `gh api` too. Marking a notification as read sends `PATCH notifications/threads/<id>`, and only when you choose it.
 - **Who you are.** Settings shows who `gh` is signed in as, read from the `user:` line of `gh`'s own `hosts.yml`. Nothing else in that file is read.
 - **An old token in the environment.** `gh` prefers a `GITHUB_TOKEN` or `GH_TOKEN` environment variable to its own sign-in, and an old one makes every request fail. When `gh` has a sign-in of its own, Orbit runs it with those two variables removed. Your environment isn't changed.
 - **Installing and signing in.** GitHub's card in Settings can install `gh` with Windows Package Manager (`winget install --id GitHub.cli`), and opens `gh auth login --web` in a console window of its own, asking for the `notifications` scope. You sign in in your browser, on GitHub.
 
-**AI Usage** reads the sign-ins that Claude Code and Codex already keep on this PC, and asks each one's own service how much of your plan's limits you've used.
-
-- **What it reads.** Claude Code's `.credentials.json` in `%USERPROFILE%\.claude` (or `CLAUDE_CONFIG_DIR`), and Codex's `auth.json` in `%USERPROFILE%\.codex` (or `CODEX_HOME`). From each it takes the access token, and Claude's plan name and expiry time. A service with no sign-in on this PC is left out.
-- **Who it sends them to.** Claude's token goes only to `https://api.anthropic.com/api/oauth/usage`, and Codex's token and account id only to `https://chatgpt.com/backend-api/wham/usage`: each service's own server, which already has it. The request is a `GET` with the user agent `Orbit`, no cookies, no Windows sign-in, no redirects at all (so a token can't be passed on elsewhere), and a 5-second timeout.
-- **What it never does.** It never renews a sign-in, which could sign Claude Code or Codex out, never writes either file, and never shows, logs or keeps a token. An expired Claude sign-in is reported as expired.
-- **Codex's log.** If OpenAI's server doesn't answer, Orbit reads the end (up to 4 MB) of Codex's newest session log in `sessions\` and uses the last rate-limit line in it, saying how old it is. Those logs also hold your Codex conversations. Orbit only looks for the rate-limit lines and keeps nothing else from them.
 
 ## Keyboard hook: HyperKey and snippet expansion
 
@@ -130,6 +123,7 @@ Both are off until you turn them on, on the Extensions page of Settings or of th
 - **Signing in** belongs to each app. 1Password asks through its desktop app, using whatever unlocks it on this PC. Ente's sign-in runs in its own terminal window, and its login stays in its own data folder.
 - **The list.** `op item list` and `ente auth code list` give names, usernames and web addresses, not passwords or codes. Orbit keeps them in memory for up to 10 minutes, and drops them on lock and under memory pressure. They are never written to disk.
 - **A value** is fetched only when you choose it. Orbit reads it from the tool's output, puts it on the clipboard, and wipes its own copy of the text. It isn't logged. Windows and the standard library may hold copies of pipe buffers that Orbit can't reach, for a short time.
+- **Typing a code.** Enter on an Ente code types it into the window the launcher was opened over, as key presses, so it never goes on the clipboard. Where it can't be typed, such as into an app running as administrator, it goes on the clipboard instead, marked and cleared as below. Ctrl+Enter copies it.
 - **The clipboard.** Passwords and codes are marked to stay out of Windows clipboard history, the cloud clipboard and clipboard tools that respect those marks, including Orbit's own history. They clear after 30 seconds, on lock and on quit, unless you've copied something since. Usernames carry the same marks and don't clear.
 - **Arguments** contain an item's id and never a secret. Tools run directly, with no shell in between.
 

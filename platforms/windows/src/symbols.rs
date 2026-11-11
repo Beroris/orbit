@@ -34,10 +34,6 @@ fn open(points: &[P]) -> Shape {
     Path(points.to_vec(), false)
 }
 
-fn closed(points: &[P]) -> Shape {
-    Path(points.to_vec(), true)
-}
-
 /// A curve from `a` to `b` pulled towards `pull`, as points.
 fn curve(a: P, pull: P, b: P, into: &mut Vec<P>) {
     for step in 1..=10 {
@@ -45,6 +41,50 @@ fn curve(a: P, pull: P, b: P, into: &mut Vec<P>) {
         let u = 1.0 - t;
         into.push((u * u * a.0 + 2.0 * u * t * pull.0 + t * t * b.0, u * u * a.1 + 2.0 * u * t * pull.1 + t * t * b.1));
     }
+}
+
+/// `points` with each corner cut back by up to `radius` units and bent round, so lines meet in a
+/// curve rather than a point, as the rest of Orbit's shapes do. A short side takes less, so two
+/// corners never overlap. An open line keeps its two ends.
+fn soften(points: &[P], radius: f32, closed: bool) -> Vec<P> {
+    let count = points.len();
+    if count < 3 {
+        return points.to_vec();
+    }
+    let distance = |a: P, b: P| (b.0 - a.0).hypot(b.1 - a.1);
+    let mut out = Vec::with_capacity(count * 7);
+    for at in 0..count {
+        let corner = points[at];
+        if !closed && (at == 0 || at == count - 1) {
+            out.push(corner);
+            continue;
+        }
+        let (before, after) = (points[(at + count - 1) % count], points[(at + 1) % count]);
+        let (into, out_of) = (distance(before, corner), distance(corner, after));
+        let cut = radius.min(into / 2.0).min(out_of / 2.0);
+        if cut < 0.05 {
+            out.push(corner);
+            continue;
+        }
+        let a = (corner.0 + (before.0 - corner.0) / into * cut, corner.1 + (before.1 - corner.1) / into * cut);
+        let b = (corner.0 + (after.0 - corner.0) / out_of * cut, corner.1 + (after.1 - corner.1) / out_of * cut);
+        out.push(a);
+        // Six steps is round enough for a corner this small.
+        for step in 1..=6 {
+            let t = step as f32 / 6.0;
+            let u = 1.0 - t;
+            out.push((u * u * a.0 + 2.0 * u * t * corner.0 + t * t * b.0, u * u * a.1 + 2.0 * u * t * corner.1 + t * t * b.1));
+        }
+    }
+    out
+}
+
+fn round_open(points: &[P], radius: f32) -> Shape {
+    Path(soften(points, radius, false), false)
+}
+
+fn round_closed(points: &[P], radius: f32) -> Shape {
+    Path(soften(points, radius, true), true)
 }
 
 fn at(center: P, radius: f32, degrees: f32) -> P {
@@ -58,20 +98,7 @@ fn head(tip: P, degrees: f32, length: f32) -> Shape {
 }
 
 fn star() -> Vec<P> {
-    (0..10).map(|k| at((12.0, 12.6), if k % 2 == 0 { 9.5 } else { 4.2 }, -90.0 + k as f32 * 36.0)).collect()
-}
-
-/// A four-pointed star with curved sides, as AI is often drawn.
-fn sparkle(center: P, radius: f32) -> Vec<P> {
-    let tips = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)].map(|(x, y)| (center.0 + x * radius, center.1 + y * radius));
-    let mut points = vec![tips[0]];
-    for k in 0..4 {
-        let (a, b) = (tips[k], tips[(k + 1) % 4]);
-        let pull = (center.0 + (a.0 + b.0 - 2.0 * center.0) * 0.14, center.1 + (a.1 + b.1 - 2.0 * center.1) * 0.14);
-        curve(a, pull, b, &mut points);
-    }
-    points.pop();
-    points
+    (0..10).map(|k| at((12.0, 12.6), if k % 2 == 0 { 9.5 } else { 4.6 }, -90.0 + k as f32 * 36.0)).collect()
 }
 
 fn brace(mirror: bool) -> Shape {
@@ -90,40 +117,36 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
     Some(match glyph {
         // Search
         '\u{E721}' => vec![Ring((10.5, 10.5), 6.5), line((15.4, 15.4), (20.0, 20.0))],
+        // Filter: a funnel
+        '\u{E71C}' => vec![round_closed(&[(3.5, 4.5), (20.5, 4.5), (14.0, 12.5), (14.0, 19.0), (10.0, 20.5), (10.0, 12.5)], 1.8)],
         // Note
         '\u{E70B}' => vec![
-            Frame(4.5, 3.0, 15.0, 18.0, 3.2),
+            Frame(4.5, 3.0, 15.0, 18.0, 4.0),
             line((8.5, 8.5), (15.5, 8.5)),
             line((8.5, 12.5), (15.5, 12.5)),
             line((8.5, 16.5), (12.0, 16.5)),
         ],
         // Snippet
         '\u{E943}' => vec![brace(false), brace(true)],
-        // Clipboard: the board stops either side of its clip, so the two don't run together
+        // Clipboard, with lines of what's on it
         '\u{E77F}' => {
-            let mut board = vec![(8.0, 4.5), (7.5, 4.5)];
-            curve((7.5, 4.5), (4.5, 4.5), (4.5, 7.5), &mut board);
-            board.push((4.5, 18.5));
-            curve((4.5, 18.5), (4.5, 21.5), (7.5, 21.5), &mut board);
-            board.push((16.5, 21.5));
-            curve((16.5, 21.5), (19.5, 21.5), (19.5, 18.5), &mut board);
-            board.push((19.5, 7.5));
-            curve((19.5, 7.5), (19.5, 4.5), (16.5, 4.5), &mut board);
-            board.push((16.0, 4.5));
-            vec![Path(board, false), Frame(8.5, 2.5, 7.0, 4.0, 1.4), line((8.5, 11.5), (15.5, 11.5)), line((8.5, 15.5), (13.0, 15.5))]
+            let mut out = clipboard();
+            out.extend([line((8.5, 11.5), (15.5, 11.5)), line((8.5, 15.5), (13.0, 15.5))]);
+            out
         }
         // Calculator
         '\u{E8EF}' => {
-            let mut out = vec![Frame(5.0, 2.5, 14.0, 19.0, 3.2), Frame(8.25, 5.75, 7.5, 3.5, 1.0)];
-            for y in [13.0, 17.25] {
-                for x in [8.9, 12.0, 15.1] {
-                    out.push(Dot((x, y), 1.25));
+            let mut out = vec![Frame(5.0, 2.5, 14.0, 19.0, 3.8), Frame(8.25, 5.75, 7.5, 3.5, 1.75)];
+            // Four keys, not six, which run together when small.
+            for y in [13.25, 17.25] {
+                for x in [9.5, 14.5] {
+                    out.push(Dot((x, y), 1.3));
                 }
             }
             out
         }
         // Money
-        '\u{E825}' => vec![Frame(2.5, 6.0, 19.0, 12.0, 2.8), Ring((12.0, 12.0), 2.6), Dot((6.4, 12.0), 1.15), Dot((17.6, 12.0), 1.15)],
+        '\u{E825}' => vec![Frame(2.5, 6.0, 19.0, 12.0, 3.5), Ring((12.0, 12.0), 2.6), Dot((6.4, 12.0), 1.15), Dot((17.6, 12.0), 1.15)],
         // Sun
         '\u{E706}' => {
             let mut out = vec![Ring((12.0, 12.0), 4.0)];
@@ -143,13 +166,13 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
         ],
         // Link
         '\u{E71B}' => vec![
-            Arc((7.5, 12.0), 4.5, 90.0, 270.0),
-            line((7.5, 7.5), (10.0, 7.5)),
-            line((7.5, 16.5), (10.0, 16.5)),
-            Arc((16.5, 12.0), 4.5, 270.0, 450.0),
-            line((14.0, 7.5), (16.5, 7.5)),
-            line((14.0, 16.5), (16.5, 16.5)),
-            line((8.75, 12.0), (15.25, 12.0)),
+            Arc((7.0, 12.0), 4.5, 90.0, 270.0),
+            line((7.0, 7.5), (9.5, 7.5)),
+            line((7.0, 16.5), (9.5, 16.5)),
+            Arc((17.0, 12.0), 4.5, 270.0, 450.0),
+            line((14.5, 7.5), (17.0, 7.5)),
+            line((14.5, 16.5), (17.0, 16.5)),
+            line((8.5, 12.0), (15.5, 12.0)),
         ],
         // Globe
         '\u{E774}' => {
@@ -158,14 +181,8 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
         }
         // Copy: the copy in front, and the corners of the one behind rounded like it
         '\u{E8C8}' => {
-            let mut behind = vec![(15.5, 8.5), (15.5, 5.6)];
-            curve((15.5, 5.6), (15.5, 3.0), (12.9, 3.0), &mut behind);
-            behind.push((5.6, 3.0));
-            curve((5.6, 3.0), (3.0, 3.0), (3.0, 5.6), &mut behind);
-            behind.push((3.0, 12.9));
-            curve((3.0, 12.9), (3.0, 15.5), (5.6, 15.5), &mut behind);
-            behind.push((8.5, 15.5));
-            vec![Frame(8.5, 8.5, 12.5, 12.5, 2.6), Path(behind, false)]
+            let behind = round_open(&[(15.5, 8.5), (15.5, 3.0), (3.0, 3.0), (3.0, 15.5), (8.5, 15.5)], 3.2);
+            vec![Frame(8.5, 8.5, 12.5, 12.5, 3.2), behind]
         }
         // Pin: a push pin, with a rounded cap, a waist that flares out to its base, and the needle
         '\u{E718}' => {
@@ -179,18 +196,18 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
         }
         // Delete
         '\u{E74D}' => vec![
-            line((3.5, 6.0), (20.5, 6.0)),
-            open(&[(9.0, 6.0), (9.0, 3.5), (15.0, 3.5), (15.0, 6.0)]),
-            open(&[(5.75, 6.0), (6.6, 19.0), (8.2, 20.75), (15.8, 20.75), (17.4, 19.0), (18.25, 6.0)]),
-            line((10.0, 10.25), (10.0, 16.5)),
-            line((14.0, 10.25), (14.0, 16.5)),
+            line((4.5, 6.0), (19.5, 6.0)),
+            round_open(&[(9.0, 6.0), (9.0, 3.5), (15.0, 3.5), (15.0, 6.0)], 1.5),
+            round_open(&[(5.75, 6.0), (6.75, 20.75), (17.25, 20.75), (18.25, 6.0)], 3.2),
+            line((10.0, 10.5), (10.0, 16.5)),
+            line((14.0, 10.5), (14.0, 16.5)),
         ],
         // Edit
-        '\u{E70F}' => vec![closed(&[(16.5, 3.5), (20.5, 7.5), (8.5, 19.5), (3.5, 20.5), (4.5, 15.5)]), line((14.0, 6.0), (18.0, 10.0))],
+        '\u{E70F}' => vec![round_closed(&[(16.5, 3.5), (20.5, 7.5), (8.5, 19.5), (3.5, 20.5), (4.5, 15.5)], 1.6), line((14.0, 6.0), (18.0, 10.0))],
         // Folder
-        '\u{E8B7}' => vec![closed(&[(3.0, 5.0), (9.5, 5.0), (11.5, 7.5), (21.0, 7.5), (21.0, 19.0), (3.0, 19.0)])],
+        '\u{E8B7}' => vec![round_closed(&[(3.5, 5.0), (9.0, 5.0), (11.5, 7.5), (20.5, 7.5), (20.5, 19.0), (3.5, 19.0)], 3.5)],
         // File
-        '\u{E8A5}' => vec![closed(&[(5.5, 2.5), (14.0, 2.5), (18.5, 7.0), (18.5, 21.5), (5.5, 21.5)]), open(&[(14.0, 2.5), (14.0, 7.0), (18.5, 7.0)])],
+        '\u{E8A5}' => vec![round_closed(&[(5.5, 3.0), (12.0, 3.0), (18.5, 9.5), (18.5, 21.0), (5.5, 21.0)], 3.0), round_open(&[(12.0, 3.5), (12.0, 9.5), (18.0, 9.5)], 1.2)],
         // Hide
         '\u{ED1A}' => {
             let mut eye = vec![(2.5, 12.0)];
@@ -209,20 +226,20 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             curve((19.5, 11.0), (19.5, 18.5), (12.0, 21.5), &mut outline);
             curve((12.0, 21.5), (4.5, 18.5), (4.5, 11.0), &mut outline);
             outline.push((4.5, 5.5));
-            vec![Path(outline, true), open(&[(8.6, 12.0), (11.0, 14.4), (15.4, 9.6)])]
+            vec![Path(soften(&outline, 2.4, true), true), open(&[(8.6, 12.0), (11.0, 14.4), (15.4, 9.6)])]
         }
         // Tag
-        '\u{E8EC}' => vec![closed(&[(3.5, 3.5), (11.5, 3.5), (20.5, 12.5), (12.5, 20.5), (3.5, 11.5)]), Dot((8.0, 8.0), 1.6)],
+        '\u{E8EC}' => vec![round_closed(&[(3.5, 3.5), (11.5, 3.5), (20.5, 12.5), (12.5, 20.5), (3.5, 11.5)], 2.2), Dot((8.0, 8.0), 1.5)],
         // Play
-        '\u{E768}' => vec![closed(&[(7.0, 4.5), (19.0, 12.0), (7.0, 19.5)])],
+        '\u{E768}' => vec![round_closed(&[(7.5, 4.5), (19.5, 12.0), (7.5, 19.5)], 2.6)],
         // Add
         '\u{E710}' => vec![line((12.0, 5.0), (12.0, 19.0)), line((5.0, 12.0), (19.0, 12.0))],
-        // Close
-        '\u{E711}' => vec![line((6.0, 6.0), (18.0, 18.0)), line((18.0, 6.0), (6.0, 18.0))],
+        // End task, Stop and Cancel: a cross in a circle
+        '\u{E711}' => vec![Ring((12.0, 12.0), 8.5), line((9.2, 9.2), (14.8, 14.8)), line((14.8, 9.2), (9.2, 14.8))],
         // Info
         '\u{E946}' => vec![Ring((12.0, 12.0), 9.0), line((12.0, 11.0), (12.0, 16.5)), Dot((12.0, 7.75), 1.3)],
         // Warning
-        '\u{E7BA}' => vec![closed(&[(12.0, 3.5), (21.5, 20.0), (2.5, 20.0)]), line((12.0, 9.5), (12.0, 14.0)), Dot((12.0, 17.0), 1.3)],
+        '\u{E7BA}' => vec![round_closed(&[(12.0, 3.5), (21.5, 20.0), (2.5, 20.0)], 3.5), line((12.0, 9.5), (12.0, 13.5)), Dot((12.0, 16.75), 1.3)],
         // Back and forward
         '\u{E72B}' => vec![line((19.0, 12.0), (5.0, 12.0)), open(&[(11.0, 6.0), (5.0, 12.0), (11.0, 18.0)])],
         '\u{E72A}' => vec![line((5.0, 12.0), (19.0, 12.0)), open(&[(13.0, 6.0), (19.0, 12.0), (13.0, 18.0)])],
@@ -230,25 +247,24 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
         '\u{E73E}' => vec![open(&[(4.5, 12.5), (9.5, 17.5), (19.5, 7.0)])],
         // Picture
         '\u{EB9F}' => vec![
-            Frame(3.0, 4.0, 18.0, 16.0, 2.8),
+            Frame(3.0, 4.0, 18.0, 16.0, 3.8),
             Ring((8.5, 9.5), 1.8),
-            open(&[(3.5, 17.5), (9.0, 12.0), (14.0, 17.0), (16.5, 14.5), (20.5, 18.5)]),
+            round_open(&[(3.5, 17.5), (9.0, 12.0), (14.0, 17.0), (16.5, 14.5), (19.75, 17.75)], 1.6),
         ],
         // Terminal
-        '\u{E756}' => vec![Frame(2.5, 4.0, 19.0, 16.0, 2.8), open(&[(7.0, 9.0), (10.0, 12.0), (7.0, 15.0)]), line((12.5, 15.0), (17.0, 15.0))],
-        // Keyboard
-        '\u{E765}' => {
-            let mut out = vec![Frame(2.0, 5.5, 20.0, 13.0, 2.8), line((8.0, 15.0), (16.0, 15.0))];
-            for y in [9.25, 12.0] {
-                for x in [6.0, 10.0, 14.0, 18.0] {
-                    out.push(Dot((x, y), 1.1));
-                }
-            }
-            out
-        }
+        '\u{E756}' => vec![Frame(2.5, 4.0, 19.0, 16.0, 3.8), open(&[(7.0, 9.0), (10.0, 12.0), (7.0, 15.0)]), line((12.5, 15.0), (17.0, 15.0))],
+        // Keyboard: a row of four keys and the space bar. Three keys read as a face.
+        '\u{E765}' => vec![
+            Frame(2.5, 5.5, 19.0, 13.0, 3.5),
+            Dot((6.75, 9.75), 1.1),
+            Dot((10.25, 9.75), 1.1),
+            Dot((13.75, 9.75), 1.1),
+            Dot((17.25, 9.75), 1.1),
+            line((8.0, 14.5), (16.0, 14.5)),
+        ],
         // Star, and filled
-        '\u{E734}' => vec![Path(star(), true)],
-        '\u{E735}' => vec![Path(star(), true), Fill(star())],
+        '\u{E734}' => vec![Path(soften(&star(), 2.0, true), true)],
+        '\u{E735}' => vec![Path(soften(&star(), 2.0, true), true), Fill(soften(&star(), 2.0, true))],
         // Chevrons
         '\u{E70E}' => vec![open(&[(5.5, 15.0), (12.0, 8.5), (18.5, 15.0)])],
         '\u{E70D}' => vec![open(&[(5.5, 9.0), (12.0, 15.5), (18.5, 9.0)])],
@@ -256,7 +272,7 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
         '\u{E74A}' => vec![line((12.0, 19.5), (12.0, 5.0)), open(&[(6.0, 11.0), (12.0, 5.0), (18.0, 11.0)])],
         '\u{E74B}' => vec![line((12.0, 4.5), (12.0, 19.0)), open(&[(6.0, 13.0), (12.0, 19.0), (18.0, 13.0)])],
         // Enter
-        '\u{E751}' => vec![open(&[(19.0, 5.0), (19.0, 13.5), (5.0, 13.5)]), open(&[(9.5, 9.0), (5.0, 13.5), (9.5, 18.0)])],
+        '\u{E751}' => vec![round_open(&[(19.0, 5.0), (19.0, 13.5), (5.0, 13.5)], 3.0), open(&[(9.5, 9.0), (5.0, 13.5), (9.5, 18.0)])],
         // Key
         '\u{E8D7}' => vec![
             Ring((7.5, 16.5), 4.5),
@@ -264,30 +280,26 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             line((17.0, 7.0), (19.75, 9.75)),
             line((14.25, 9.75), (16.5, 12.0)),
         ],
-        // Refresh: round clockwise, then straight on into a corner that points the way
-        '\u{E72C}' => {
-            let end = at((12.0, 12.0), 8.5, 315.0);
-            let tip = (end.0 + 2.6, end.1 + 2.6);
-            vec![Arc((12.0, 12.0), 8.5, 0.0, 315.0), line(end, tip), open(&[(tip.0, tip.1 - 5.0), tip, (tip.0 - 5.0, tip.1)])]
-        }
+        // Refresh: round clockwise, ending at the top in an arrowhead that points along the circle
+        '\u{E72C}' => vec![Arc((12.0, 12.5), 7.5, 330.0, 630.0), round_open(&[(9.03, 7.68), (12.0, 5.0), (9.03, 2.32)], 0.8)],
         // Emoji
         '\u{E76E}' => vec![Ring((12.0, 12.0), 9.0), Dot((9.0, 9.75), 1.3), Dot((15.0, 9.75), 1.3), Arc((12.0, 12.0), 5.0, 30.0, 150.0)],
-        // Settings
+        // Settings: a gear with six soft teeth
         '\u{E713}' => {
             let mut gear = Vec::new();
-            for k in 0..8 {
-                let middle = k as f32 * 45.0;
-                gear.push(at((12.0, 12.0), 7.0, middle - 17.0));
-                gear.push(at((12.0, 12.0), 9.6, middle - 9.0));
-                gear.push(at((12.0, 12.0), 9.6, middle + 9.0));
-                gear.push(at((12.0, 12.0), 7.0, middle + 17.0));
+            for k in 0..6 {
+                let middle = k as f32 * 60.0;
+                gear.push(at((12.0, 12.0), 7.2, middle - 22.0));
+                gear.push(at((12.0, 12.0), 9.3, middle - 10.0));
+                gear.push(at((12.0, 12.0), 9.3, middle + 10.0));
+                gear.push(at((12.0, 12.0), 7.2, middle + 22.0));
             }
-            vec![Path(gear, true), Ring((12.0, 12.0), 3.0)]
+            vec![Path(soften(&gear, 1.2, true), true), Ring((12.0, 12.0), 3.0)]
         }
         // Power
         '\u{E7E8}' => vec![Arc((12.0, 13.0), 8.0, 300.0, 600.0), line((12.0, 3.0), (12.0, 11.5))],
         // Pulse, for diagnostics
-        '\u{E9D9}' => vec![open(&[(2.5, 12.0), (6.5, 12.0), (9.5, 5.5), (14.5, 18.5), (17.5, 12.0), (21.5, 12.0)])],
+        '\u{E9D9}' => vec![round_open(&[(2.5, 12.0), (6.5, 12.0), (9.5, 5.5), (14.5, 18.5), (17.5, 12.0), (21.5, 12.0)], 1.4)],
         // Help
         '\u{E897}' => {
             let end = at((12.0, 9.75), 2.75, 45.0);
@@ -304,12 +316,9 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
         // Moon, for sleep
         '\u{E708}' => vec![Moon((11.5, 12.5), 8.5, (17.0, 7.0), 7.0)],
         // Laptop
-        '\u{E7F8}' => vec![Frame(4.5, 5.0, 15.0, 10.5, 2.0), line((2.5, 19.0), (21.5, 19.0))],
+        '\u{E7F8}' => vec![Frame(4.5, 5.0, 15.0, 10.5, 3.0), line((2.5, 19.0), (21.5, 19.0))],
         // Bolt
-        '\u{E945}' => {
-            let bolt = [(13.5, 2.5), (5.0, 13.5), (11.0, 13.5), (10.0, 21.5), (19.0, 10.0), (13.0, 10.0)];
-            vec![Path(bolt.to_vec(), true), Fill(bolt.to_vec())]
-        }
+        '\u{E945}' => vec![round_closed(&[(13.5, 2.5), (5.0, 13.5), (11.0, 13.5), (10.0, 21.5), (19.0, 10.0), (13.0, 10.0)], 1.6)],
         // A window and where it goes on the screen
         '\u{F101}' => window_in(&[(5.5, 7.5), (11.0, 7.5), (11.0, 16.5), (5.5, 16.5)]),
         '\u{F102}' => window_in(&[(13.0, 7.5), (18.5, 7.5), (18.5, 16.5), (13.0, 16.5)]),
@@ -320,7 +329,7 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
         '\u{F107}' => window_in(&[(9.0, 10.0), (15.0, 10.0), (15.0, 14.0), (9.0, 14.0)]),
         // To the next display: a screen on its stand, with an arrow across it
         '\u{F108}' => vec![
-            Frame(2.5, 3.5, 19.0, 13.0, 2.6),
+            Frame(2.5, 3.5, 19.0, 13.0, 3.5),
             line((12.0, 16.5), (12.0, 20.5)),
             line((8.0, 20.5), (16.0, 20.5)),
             line((7.0, 10.0), (16.5, 10.0)),
@@ -332,7 +341,7 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             vec![Ring((12.0, 12.0), 8.5), Fill(half)]
         }
         // Bluetooth
-        '\u{F10A}' => vec![open(&[(6.5, 7.5), (17.0, 16.0), (12.0, 20.5), (12.0, 3.5), (17.0, 8.0), (6.5, 16.5)])],
+        '\u{F10A}' => vec![round_open(&[(6.5, 7.5), (17.0, 16.0), (12.0, 20.5), (12.0, 3.5), (17.0, 8.0), (6.5, 16.5)], 1.2)],
         // Wi-Fi
         '\u{F10B}' => vec![
             Arc((12.0, 19.0), 13.0, 228.0, 312.0),
@@ -342,25 +351,19 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
         ],
         // Sound
         '\u{F10C}' => vec![
-            closed(&[(3.5, 9.5), (7.5, 9.5), (12.5, 5.0), (12.5, 19.0), (7.5, 14.5), (3.5, 14.5)]),
+            round_closed(&[(3.5, 9.5), (7.5, 9.5), (12.5, 5.0), (12.5, 19.0), (7.5, 14.5), (3.5, 14.5)], 1.3),
             Arc((13.0, 12.0), 3.75, 305.0, 415.0),
             Arc((13.0, 12.0), 7.75, 305.0, 415.0),
         ],
-        // Timer: an hourglass, with sand run into the bottom, so it isn't taken for the stopwatch
-        '\u{F10D}' => {
-            let mut left = vec![(7.5, 3.5), (7.5, 6.0)];
-            curve((7.5, 6.0), (7.5, 9.6), (11.2, 12.0), &mut left);
-            curve((11.2, 12.0), (7.5, 14.4), (7.5, 18.0), &mut left);
-            left.push((7.5, 20.5));
-            let right: Vec<P> = left.iter().map(|&(x, y)| (24.0 - x, y)).collect();
-            vec![
-                line((5.0, 3.5), (19.0, 3.5)),
-                line((5.0, 20.5), (19.0, 20.5)),
-                Path(left, false),
-                Path(right, false),
-                Fill(vec![(9.0, 20.0), (15.0, 20.0), (12.0, 16.6)]),
-            ]
-        }
+        // Timer: an hourglass, its glass and ends one soft outline, with sand run into the bottom, so
+        // it isn't taken for the stopwatch
+        '\u{F10D}' => vec![
+            round_closed(
+                &[(6.0, 3.5), (18.0, 3.5), (18.0, 6.0), (12.8, 12.0), (18.0, 18.0), (18.0, 20.5), (6.0, 20.5), (6.0, 18.0), (11.2, 12.0), (6.0, 6.0)],
+                2.0,
+            ),
+            Fill(soften(&[(9.5, 19.5), (14.5, 19.5), (12.0, 16.8)], 0.8, true)),
+        ],
         // Stopwatch
         '\u{F10E}' => vec![
             Ring((12.0, 13.5), 8.0),
@@ -375,7 +378,7 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             let mut bulb: Vec<P> = (0..=12).map(|k| at(top, radius, 45.0 - k as f32 * 15.0)).collect();
             bulb.extend((0..=12).map(|k| at(base, radius, 225.0 - k as f32 * 15.0)));
             vec![
-                open(&[(12.0, 9.0), (3.5, 17.5), (3.5, 20.5), (6.5, 20.5), (15.0, 12.0)]),
+                round_open(&[(12.0, 9.0), (3.5, 17.5), (3.5, 20.5), (6.5, 20.5), (15.0, 12.0)], 1.3),
                 line((10.5, 7.5), (16.5, 13.5)),
                 Path(bulb, true),
             ]
@@ -383,10 +386,10 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
         // Extension: blocks, with one more being added, turned as it goes in. A puzzle piece read as
         // a mug when small.
         '\u{EA86}' => vec![
-            Frame(3.0, 3.0, 7.5, 7.5, 1.8),
-            Frame(3.0, 13.0, 7.5, 7.5, 1.8),
-            Frame(13.0, 13.0, 7.5, 7.5, 1.8),
-            closed(&[(16.75, 2.85), (20.65, 6.75), (16.75, 10.65), (12.85, 6.75)]),
+            Frame(3.0, 3.0, 6.5, 6.5, 2.2),
+            Frame(3.0, 14.0, 6.5, 6.5, 2.2),
+            Frame(14.0, 14.0, 6.5, 6.5, 2.2),
+            round_closed(&[(17.25, 3.25), (20.75, 6.75), (17.25, 10.25), (13.75, 6.75)], 1.8),
         ],
         // Import: an arrow going into a box from the left
         '\u{E8B5}' => {
@@ -412,15 +415,83 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             curve((17.0, 9.0), (17.0, 14.0), (7.0, 15.0), &mut joint);
             vec![Ring((7.0, 5.5), 2.5), Ring((7.0, 18.5), 2.5), Ring((17.0, 6.5), 2.5), line((7.0, 8.0), (7.0, 16.0)), Path(joint, false)]
         }
-        // Sparkle, for AI Usage
-        '\u{F111}' => vec![Path(sparkle((10.5, 13.0), 8.5), true), Fill(sparkle((18.5, 5.5), 3.5))],
+        // Open, as a link does: an arrow out of the top corner of a box
+        '\u{E8A7}' => vec![
+            round_open(&[(11.0, 6.0), (4.0, 6.0), (4.0, 20.0), (18.0, 20.0), (18.0, 13.0)], 3.5),
+            line((11.5, 12.5), (20.0, 4.0)),
+            round_open(&[(14.5, 4.0), (20.0, 4.0), (20.0, 9.5)], 1.0),
+        ],
+        // Hash, for a reference such as #482
+        '\u{F111}' => vec![
+            line((4.5, 9.0), (20.0, 9.0)),
+            line((4.0, 15.0), (19.5, 15.0)),
+            line((10.5, 3.5), (8.5, 20.5)),
+            line((15.5, 3.5), (13.5, 20.5)),
+        ],
+        // Paste: the clipboard, with an arrow going into it
+        '\u{F112}' => {
+            let mut out = clipboard();
+            out.extend([line((12.0, 10.0), (12.0, 17.5)), head((12.0, 17.5), 90.0, 3.6)]);
+            out
+        }
+        // Person, for a username
+        '\u{E77B}' => {
+            let mut shoulders = vec![(5.0, 20.5)];
+            curve((5.0, 20.5), (5.0, 14.0), (12.0, 14.0), &mut shoulders);
+            curve((12.0, 14.0), (19.0, 14.0), (19.0, 20.5), &mut shoulders);
+            vec![Ring((12.0, 7.5), 4.0), Path(shoulders, false)]
+        }
+        // Clock, for a code that changes with time
+        '\u{E823}' => vec![Ring((12.0, 12.0), 9.0), open(&[(12.0, 7.0), (12.0, 12.0), (15.5, 14.0)])],
+        // Swap: one arrow each way
+        '\u{E8AB}' => vec![
+            line((4.5, 8.0), (19.5, 8.0)),
+            head((19.5, 8.0), 0.0, 4.0),
+            line((19.5, 16.0), (4.5, 16.0)),
+            head((4.5, 16.0), 180.0, 4.0),
+        ],
+        // Reset: Refresh turned the other way
+        '\u{E7A7}' => vec![Arc((12.0, 12.5), 7.5, 270.0, 570.0), round_open(&[(14.97, 2.32), (12.0, 5.0), (14.97, 7.68)], 0.8)],
+        // New window: a window with a plus in it
+        '\u{E78B}' => vec![
+            Frame(2.5, 4.0, 19.0, 16.0, 3.5),
+            Dot((6.75, 8.25), 1.05),
+            Dot((10.0, 8.25), 1.05),
+            line((12.0, 11.0), (12.0, 17.0)),
+            line((9.0, 14.0), (15.0, 14.0)),
+        ],
+        // Open with: a choice of apps
+        '\u{E7AC}' => vec![
+            Frame(3.5, 3.5, 7.0, 7.0, 2.4),
+            Frame(13.5, 3.5, 7.0, 7.0, 2.4),
+            Frame(3.5, 13.5, 7.0, 7.0, 2.4),
+            Frame(13.5, 13.5, 7.0, 7.0, 2.4),
+        ],
+        // Text, plain: a T, as plain as the text it pastes
+        '\u{E8D2}' => vec![line((5.5, 5.0), (18.5, 5.0)), line((12.0, 5.0), (12.0, 19.5))],
+        // Pause
+        '\u{E769}' => vec![line((8.5, 5.0), (8.5, 19.0)), line((15.5, 5.0), (15.5, 19.0))],
         _ => return None,
     })
 }
 
+/// A clipboard: the board stops either side of its clip, so the two don't run together.
+fn clipboard() -> Vec<Shape> {
+    let mut board = vec![(8.0, 4.5), (7.5, 4.5)];
+    curve((7.5, 4.5), (4.5, 4.5), (4.5, 7.5), &mut board);
+    board.push((4.5, 18.5));
+    curve((4.5, 18.5), (4.5, 21.5), (7.5, 21.5), &mut board);
+    board.push((16.5, 21.5));
+    curve((16.5, 21.5), (19.5, 21.5), (19.5, 18.5), &mut board);
+    board.push((19.5, 7.5));
+    curve((19.5, 7.5), (19.5, 4.5), (16.5, 4.5), &mut board);
+    board.push((16.0, 4.5));
+    vec![Path(board, false), Frame(8.5, 2.5, 7.0, 4.0, 1.4)]
+}
+
 /// A window, with the part of the screen it goes to filled in.
 fn window_in(part: &[P]) -> Vec<Shape> {
-    vec![Frame(2.5, 4.5, 19.0, 15.0, 2.6), Fill(part.to_vec())]
+    vec![Frame(2.5, 4.5, 19.0, 15.0, 3.5), Fill(soften(part, 1.6, true))]
 }
 
 /// The line through `points`, less the parts within `gap` of the segment from `a` to `b`, as
@@ -607,6 +678,28 @@ mod tests {
         for glyph in ['\u{E72E}', '\u{E708}', '\u{E751}', '\u{E74A}', '\u{E74B}', '\u{E72A}', '\u{E8A5}'] {
             assert!(has(glyph), "{:X}", glyph as u32);
         }
+    }
+
+    /// Draws the symbols named in ORBIT_SYMBOLS (as hex code points, comma separated) to the raw
+    /// file named in ORBIT_SYMBOL_SHEET: each large, with the size the menus use under it.
+    #[test]
+    #[ignore = "writes a picture for looking at"]
+    fn symbol_sheet() {
+        let (Ok(out), Ok(list)) = (std::env::var("ORBIT_SYMBOL_SHEET"), std::env::var("ORBIT_SYMBOLS")) else { return };
+        let glyphs: Vec<char> = list.split(',').filter_map(|hex| char::from_u32(u32::from_str_radix(hex.trim(), 16).ok()?)).collect();
+        let (columns, cell_w, cell_h) = (10, 76, 100);
+        let lines = glyphs.len().div_ceil(columns) as i32;
+        let mut sheet = crate::gfx::Backbuffer::new(columns as i32 * cell_w, lines * cell_h).unwrap();
+        sheet.fill(crate::gfx::Rgb(36, 36, 40));
+        let ink = crate::gfx::Rgb(205, 205, 212);
+        for (at, glyph) in glyphs.iter().enumerate() {
+            let (x, y) = ((at % columns) as i32 * cell_w, (at / columns) as i32 * cell_h);
+            let big = RECT { left: x, top: y + 8, right: x + cell_w, bottom: y + 64 };
+            assert!(draw(&sheet, *glyph, 48.0, false, ink, big, crate::text::Align::Center), "{:X}", *glyph as u32);
+            let small = RECT { left: x, top: y + 70, right: x + cell_w, bottom: y + 94 };
+            draw(&sheet, *glyph, 15.0, false, ink, small, crate::text::Align::Center);
+        }
+        sheet.write_raw(std::path::Path::new(&out)).unwrap();
     }
 
     #[test]

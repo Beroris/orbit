@@ -88,7 +88,7 @@ impl Tool {
     pub fn subtitle(self) -> &'static str {
         match self {
             Tool::OnePassword => "Copy a password or one-time code",
-            Tool::EnteAuth => "Copy a one-time code",
+            Tool::EnteAuth => "Paste a one-time code",
         }
     }
 

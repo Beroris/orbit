@@ -64,9 +64,6 @@ pub struct ExtensionSettings {
     pub speed_test: bool,
     /// GitHub, through GitHub's `gh` command-line tool. Off until turned on.
     pub github: bool,
-    /// AI Usage, which reads Claude Code's and Codex's sign-ins to ask for their usage. Off until
-    /// turned on.
-    pub ai_usage: bool,
     /// Extensions from folders that the user turned on, by id.
     pub enabled: Vec<String>,
     /// A command's keyword where the user changed it from the extension's own, keyed `id/command`.
@@ -80,7 +77,6 @@ impl Default for ExtensionSettings {
             everything: EverythingSettings::default(),
             speed_test: true,
             github: false,
-            ai_usage: false,
             enabled: Vec::new(),
             keywords: BTreeMap::new(),
         }
@@ -554,6 +550,14 @@ mod tests {
         assert!(s.hyper.enabled);
         assert_eq!(s.hyper.trigger, "CapsLock");
         assert_eq!(s.clipboard.max_items, 500);
+    }
+
+    #[test]
+    fn settings_from_when_ai_usage_was_an_extension_still_load() {
+        let (s, outcome) = Settings::parse(r#"{"schema_version":1,"extensions":{"github":true,"ai_usage":true,"keywords":{"ai-usage/usage":"quota","github/pulls":"prs"}}}"#);
+        assert!(matches!(outcome, LoadOutcome::Loaded));
+        assert!(s.extensions.github, "the rest of the section is kept");
+        assert_eq!(s.extensions.keywords.get("github/pulls").map(String::as_str), Some("prs"));
     }
 
     #[test]

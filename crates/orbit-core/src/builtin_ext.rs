@@ -3,8 +3,8 @@
 //!
 //! Some are features with views of their own (Files, Weather, Speed Test), whose commands are
 //! [`Builtin`]s. Others answer the way an extension from a folder does, with a list of items
-//! (GitHub, AI Usage), but from Orbit's own code instead of a program. Folder extensions can't use
-//! these ids.
+//! (GitHub), but from Orbit's own code instead of a program. Folder extensions can't use these
+//! ids.
 
 use crate::action::Builtin;
 use crate::extension::{CommandSpec, Mode};
@@ -18,7 +18,6 @@ pub enum BuiltinExt {
     Weather,
     SpeedTest,
     GitHub,
-    AiUsage,
 }
 
 /// A command of an extension that answers with a list, as its manifest would say it.
@@ -81,25 +80,15 @@ const GITHUB: &[ListCommand] = &[
     },
 ];
 
-const AI_USAGE: &[ListCommand] = &[ListCommand {
-    id: "usage",
-    title: "AI Usage",
-    subtitle: "How much of Claude's and Codex's limits you've used",
-    keyword: "quota",
-    keywords: "ai limits quota rate claude code codex chatgpt anthropic openai tokens",
-    placeholder: "AI usage",
-}];
-
 impl BuiltinExt {
     /// In the order Settings lists them.
-    pub const ALL: [BuiltinExt; 7] = [
+    pub const ALL: [BuiltinExt; 6] = [
         BuiltinExt::Files,
         BuiltinExt::OnePassword,
         BuiltinExt::EnteAuth,
         BuiltinExt::Weather,
         BuiltinExt::SpeedTest,
         BuiltinExt::GitHub,
-        BuiltinExt::AiUsage,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -110,7 +99,6 @@ impl BuiltinExt {
             BuiltinExt::Weather => "weather",
             BuiltinExt::SpeedTest => "speed-test",
             BuiltinExt::GitHub => "github",
-            BuiltinExt::AiUsage => "ai-usage",
         }
     }
 
@@ -126,7 +114,6 @@ impl BuiltinExt {
             BuiltinExt::Weather => "Weather",
             BuiltinExt::SpeedTest => "Speed Test",
             BuiltinExt::GitHub => "GitHub",
-            BuiltinExt::AiUsage => "AI Usage",
         }
     }
 
@@ -139,7 +126,6 @@ impl BuiltinExt {
             BuiltinExt::Weather => "The forecast for any place",
             BuiltinExt::SpeedTest => "Your internet speed, by Ookla",
             BuiltinExt::GitHub => "Your issues, pull requests and stars",
-            BuiltinExt::AiUsage => "Your Claude and Codex limits",
         }
     }
 
@@ -151,7 +137,6 @@ impl BuiltinExt {
             BuiltinExt::Weather => settings.fetch_weather,
             BuiltinExt::SpeedTest => settings.extensions.speed_test,
             BuiltinExt::GitHub => settings.extensions.github,
-            BuiltinExt::AiUsage => settings.extensions.ai_usage,
         }
     }
 
@@ -168,7 +153,6 @@ impl BuiltinExt {
             }
             BuiltinExt::SpeedTest => settings.extensions.speed_test = on,
             BuiltinExt::GitHub => settings.extensions.github = on,
-            BuiltinExt::AiUsage => settings.extensions.ai_usage = on,
         }
     }
 
@@ -186,7 +170,6 @@ impl BuiltinExt {
     pub const fn list_commands(self) -> &'static [ListCommand] {
         match self {
             BuiltinExt::GitHub => GITHUB,
-            BuiltinExt::AiUsage => AI_USAGE,
             _ => &[],
         }
     }
@@ -255,7 +238,6 @@ mod tests {
     fn the_new_ones_start_off() {
         let settings = Settings::default();
         assert!(!BuiltinExt::GitHub.is_on(&settings));
-        assert!(!BuiltinExt::AiUsage.is_on(&settings));
         assert!(BuiltinExt::Files.is_on(&settings));
     }
 

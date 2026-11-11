@@ -8,7 +8,7 @@ use crate::grid::{COLUMNS, Grid, Line};
 use crate::inline_form::InlineForm;
 use crate::rows::*;
 use crate::text::{self, Align, Face};
-use crate::view::{MenuSide, Scope};
+use crate::view::{MenuKind, MenuSide, Scope};
 use crate::worker::{ClipPreview, PreviewBody};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
@@ -541,7 +541,7 @@ pub fn launcher_height(dpi: u32, scope: &Scope, rows: &[Row], grid: bool, fit: b
     // The weather and the speed test are drawn rather than listed, so they always get the room.
     let drawn = matches!(scope, Scope::Form { .. } | Scope::Weather | Scope::SpeedTest | Scope::Timer | Scope::Stopwatch | Scope::Colour(_));
     let height = if grid || !fit || is_split(scope, rows) || drawn { window_size(dpi, visible_rows).1 } else { fitted_height(dpi, rows, visible_rows) };
-    height.max(popover_needs_height(POPOVER_MIN_ROWS, dpi))
+    height.max(popover_needs_height(POPOVER_MIN_ROWS, dpi, MenuSide::Right))
 }
 
 /// The clipboard shows what's selected beside its list, once there's anything in it.
@@ -589,6 +589,15 @@ pub fn popover_rows_for(height: i32, dpi: u32) -> usize {
     let share = (room * POPOVER_SHARE / 10 - fixed + row / 2) / row;
     let whole = (room - scale(POPOVER_GAP, dpi) - fixed) / row;
     share.min(whole).clamp(POPOVER_MIN_ROWS as i32, POPOVER_MAX_ROWS as i32) as usize
+}
+
+/// The same for a short menu that's always the same, such as Orbit's own, which is better whole
+/// than scrolling. It takes all the room up to the search box.
+pub fn popover_rows_most(height: i32, dpi: u32) -> usize {
+    let room = height - scale(INPUT_HEIGHT + FOOTER_HEIGHT, dpi);
+    let fixed = scale(POPOVER_PAD * 2 + POPOVER_TITLE + POPOVER_SEARCH, dpi);
+    let whole = (room - scale(POPOVER_GAP, dpi) - fixed) / scale(POPOVER_ROW, dpi).max(1);
+    whole.clamp(POPOVER_MIN_ROWS as i32, POPOVER_MAX_ROWS as i32) as usize
 }
 
 /// Where the rows from `scroll` on are drawn, as (index, top, height). Section titles are shorter
@@ -773,20 +782,29 @@ fn hairline(dpi: u32) -> i32 {
 
 /// A command's symbol, in the icon style chosen in Settings.
 fn draw_tile(buffer: &mut Backbuffer, paint: &Paint, glyph: char, x: i32, y: i32, size: i32, selected: bool) {
+    draw_tile_in(buffer, paint, glyph, tile_colors(glyph), false, x, y, size, selected);
+}
+
+/// The same in given colours. A symbol whose colour `means` something, such as a pull request's
+/// state, keeps it however plain the icon style is.
+#[allow(clippy::too_many_arguments)]
+fn draw_tile_in(buffer: &mut Backbuffer, paint: &Paint, glyph: char, colours: (Rgb, Rgb), means: bool, x: i32, y: i32, size: i32, selected: bool) {
     use orbit_core::settings::IconStyle;
     let radius = scale(TILE_RADIUS, paint.dpi) as f32;
     let rect = RECT { left: x, top: y, right: x + size, bottom: y + size };
     let theme = paint.theme;
+    let coloured = crate::rows::coloured_symbol(colours, paint.dark);
     let (face, ink) = match crate::rows::icon_style() {
+        IconStyle::Plain if means => (&paint.fonts.icon_row, coloured),
         IconStyle::Plain => (&paint.fonts.icon_row, if selected { theme.text } else { theme.secondary }),
-        IconStyle::Coloured => (&paint.fonts.icon_row, crate::rows::coloured_symbol(tile_colors(glyph), paint.dark)),
+        IconStyle::Coloured => (&paint.fonts.icon_row, coloured),
         IconStyle::GreyTiles => {
             let fill = if selected { paint.tile_on_selection } else { paint.tile };
             buffer.fill_round_rect_alpha(x, y, size, size, radius, fill.0, fill.1);
-            (&paint.fonts.icon_tile, theme.text)
+            (&paint.fonts.icon_tile, if means { coloured } else { theme.text })
         }
         IconStyle::TintedTiles => {
-            let (fill, alpha, ink) = crate::rows::tinted_tile(tile_colors(glyph), paint.dark);
+            let (fill, alpha, ink) = crate::rows::tinted_tile(colours, paint.dark);
             buffer.fill_round_rect_alpha(x, y, size, size, radius, fill, alpha);
             (&paint.fonts.icon_on_tile, ink)
         }
@@ -799,6 +817,83 @@ fn draw_tile(buffer: &mut Backbuffer, paint: &Paint, glyph: char, x: i32, y: i32
 pub struct Field {
     pub text: String,
     pub selection: (usize, usize),
+}
+
+/// Which box a stretch of drawn text is typed in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpotOf {
+    /// The search box.
+    Search,
+    /// The box along the bottom of a menu, which is the search box too, while the menu is open.
+    MenuSearch,
+    /// One of a quicklink's blanks, in the search bar.
+    LinkArg(usize),
+    /// One of a form's fields.
+    Field(usize),
+}
+
+/// Which of the fonts a box's text is in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpotFace {
+    Query,
+    Title,
+    Body,
+    Small,
+}
+
+/// Text someone can type in, as it was last drawn, so a click in it can put the caret where it
+/// landed. The boxes that take the typing are hidden, so they can't tell where that is.
+#[derive(Clone, Debug)]
+pub struct TextSpot {
+    pub of: SpotOf,
+    /// Where a click counts as in it: the whole box.
+    pub hit: RECT,
+    /// Where its text was drawn.
+    pub clip: RECT,
+    pub text: String,
+    pub face: SpotFace,
+    /// Several lines, as a snippet's box has.
+    pub multiline: bool,
+    /// How far one line was slid left, or several lines scrolled up, to keep the caret in view.
+    pub shift: i32,
+}
+
+impl TextSpot {
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.hit.left && x < self.hit.right && y >= self.hit.top && y < self.hit.bottom
+    }
+
+    /// Where in its text a point is, in UTF-16 units, as the box that takes the typing counts.
+    pub fn index_at(&self, fonts: &Fonts, x: i32, y: i32) -> usize {
+        let face = match self.face {
+            SpotFace::Query => &fonts.query,
+            SpotFace::Title => &fonts.title,
+            SpotFace::Body => &fonts.body,
+            SpotFace::Small => &fonts.small,
+        };
+        if self.multiline {
+            text::editable_index_at(&self.text, face, self.clip, self.shift, x, y)
+        } else {
+            text::index_at(&self.text, face, x - (self.clip.left - self.shift))
+        }
+    }
+}
+
+/// The text spots drawn this time, and the last time's, whose slides carry on.
+struct Spots {
+    prior: Vec<TextSpot>,
+    now: Vec<TextSpot>,
+}
+
+impl Spots {
+    fn shift(&self, of: SpotOf) -> i32 {
+        self.prior.iter().find(|spot| spot.of == of).map_or(0, |spot| spot.shift)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add(&mut self, of: SpotOf, hit: RECT, clip: RECT, text: &str, face: SpotFace, multiline: bool, shift: i32) {
+        self.now.push(TextSpot { of, hit, clip, text: text.to_string(), face, multiline, shift });
+    }
 }
 
 /// The first `units` UTF-16 units of `text`.
@@ -825,27 +920,66 @@ pub struct Popover {
     /// Where the first row starts. Rows are `row_height` tall.
     pub list_top: i32,
     pub row_height: i32,
-    /// The top of the box you type in to narrow the menu down.
+    /// The box you type in to narrow the menu down, from its top to its bottom: along the bottom of
+    /// a menu from the footer, and at the top of a drop-down, next to the button it came from.
     pub search_top: i32,
+    pub search_bottom: i32,
+    /// Whether it says what it's about above its rows. A drop-down's button says that already.
+    pub titled: bool,
 }
 
-fn popover_height(shown: usize, dpi: u32) -> i32 {
-    scale(POPOVER_PAD * 2 + POPOVER_TITLE + POPOVER_ROW * shown as i32 + POPOVER_SEARCH, dpi)
+fn popover_height(shown: usize, dpi: u32, side: MenuSide) -> i32 {
+    let title = if side == MenuSide::Drop { 0 } else { POPOVER_TITLE };
+    scale(POPOVER_PAD * 2 + title + POPOVER_ROW * shown as i32 + POPOVER_SEARCH, dpi)
 }
 
 /// How tall the launcher has to be so the menu fits between the search box and the footer.
-pub fn popover_needs_height(shown: usize, dpi: u32) -> i32 {
-    scale(INPUT_HEIGHT + POPOVER_GAP + FOOTER_HEIGHT, dpi) + popover_height(shown, dpi)
+pub fn popover_needs_height(shown: usize, dpi: u32, side: MenuSide) -> i32 {
+    let above = if side == MenuSide::Drop { drop_top(dpi) } else { scale(INPUT_HEIGHT, dpi) };
+    above + scale(POPOVER_GAP + FOOTER_HEIGHT, dpi) + popover_height(shown, dpi, side)
+}
+
+/// The search box's right edge, where its filter drop-down ends.
+const BAND_RIGHT_DIP: i32 = 18;
+/// How tall the filter drop-down is, and how far below it its menu starts.
+const FILTER_BUTTON_DIP: i32 = 30;
+const DROP_GAP_DIP: i32 = 5;
+const DROP_WIDTH: i32 = 290;
+
+/// Where a drop-down's menu starts: just under the button, which sits in the middle of the
+/// search box's height.
+fn drop_top(dpi: u32) -> i32 {
+    (scale(INPUT_HEIGHT, dpi) + scale(FILTER_BUTTON_DIP, dpi)) / 2 + scale(DROP_GAP_DIP, dpi)
+}
+
+/// How many rows a drop-down's menu shows in a launcher this tall: as many as fit above the
+/// footer, since it hangs from the top rather than covering the list from below.
+pub fn drop_rows_for(height: i32, dpi: u32) -> usize {
+    let room = height - drop_top(dpi) - scale(POPOVER_GAP + FOOTER_HEIGHT, dpi);
+    let fixed = popover_height(0, dpi, MenuSide::Drop);
+    let whole = (room - fixed) / scale(POPOVER_ROW, dpi).max(1);
+    whole.clamp(POPOVER_MIN_ROWS as i32, POPOVER_MAX_ROWS as i32) as usize
 }
 
 pub fn popover_layout(width: i32, height: i32, dpi: u32, side: MenuSide, shown: usize) -> Popover {
-    let w = scale(POPOVER_WIDTH, dpi);
-    let h = popover_height(shown, dpi);
+    let h = popover_height(shown, dpi, side);
     let inset = scale(ROW_INSET, dpi);
-    let left = match side {
-        MenuSide::Left => inset,
-        MenuSide::Right => width - inset - w,
-    };
+    if side == MenuSide::Drop {
+        // Hangs from the drop-down at the right of the search box, lined up with its right edge,
+        // with the box to narrow it down at the top, nearest the button.
+        let (w, right, top) = (scale(DROP_WIDTH, dpi), width - scale(BAND_RIGHT_DIP, dpi), drop_top(dpi));
+        let search_bottom = top + scale(POPOVER_SEARCH, dpi);
+        return Popover {
+            rect: RECT { left: right - w, top, right, bottom: top + h },
+            list_top: search_bottom + scale(POPOVER_PAD, dpi),
+            row_height: scale(POPOVER_ROW, dpi),
+            search_top: top,
+            search_bottom,
+            titled: false,
+        };
+    }
+    let w = scale(POPOVER_WIDTH, dpi);
+    let left = if side == MenuSide::Left { inset } else { width - inset - w };
     let bottom = height - scale(FOOTER_HEIGHT, dpi);
     let top = bottom - h;
     Popover {
@@ -853,6 +987,8 @@ pub fn popover_layout(width: i32, height: i32, dpi: u32, side: MenuSide, shown: 
         list_top: top + scale(POPOVER_TITLE + POPOVER_PAD, dpi),
         row_height: scale(POPOVER_ROW, dpi),
         search_top: bottom - scale(POPOVER_SEARCH, dpi),
+        search_bottom: bottom,
+        titled: true,
     }
 }
 
@@ -863,7 +999,7 @@ impl Popover {
 
     /// Which row is under a point, given how far the list has scrolled.
     pub fn row_at(&self, x: i32, y: i32, rows: usize, scroll: usize, shown: usize) -> Option<usize> {
-        if !self.contains(x, y) || y < self.list_top || y >= self.search_top {
+        if !self.contains(x, y) || y < self.list_top || y >= self.list_top + self.row_height * shown as i32 {
             return None;
         }
         let row = ((y - self.list_top) / self.row_height) as usize;
@@ -930,7 +1066,7 @@ pub fn render(app: &mut App) {
     let mut height = launcher_height(dpi, behind_scope, behind_rows, is_grid, app.settings.launcher.fit_results, visible);
     let _ = full_height;
     if let Some(menu) = &app.menu {
-        height = height.max(popover_needs_height(menu.shown, dpi));
+        height = height.max(popover_needs_height(menu.shown, dpi, menu.side));
     }
     if app.backbuffer.as_ref().is_none_or(|b| b.width != width || b.height != height) {
         app.backbuffer = None;
@@ -941,6 +1077,8 @@ pub fn render(app: &mut App) {
     app.place_edit(input_x);
     let field = app.read_field();
     let area_field = app.read_area_field();
+    let filter_label = app.filter_label();
+    let filter_open = app.filter_menu_open();
     let placeholder = match &app.menu {
         Some(menu) => menu.behind.scope.placeholder(),
         None => app.placeholder_text(),
@@ -975,6 +1113,7 @@ pub fn render(app: &mut App) {
             thin: hairline(dpi),
         };
         let thin = paint.thin;
+        let mut spots = Spots { prior: std::mem::take(&mut app.text_spots), now: Vec::new() };
 
         buffer.clear(surface, tint);
         if hc {
@@ -1007,19 +1146,32 @@ pub fn render(app: &mut App) {
             let rect = RECT { left: icon_x, top: 0, right: icon_x + icon_size, bottom: scale(INPUT_HEIGHT, dpi) };
             text::draw(buffer, &shown_scope.input_glyph().to_string(), &fonts.icon_large, theme.secondary, rect, Align::Center);
         }
-        let band = RECT { left: input_x, top: 0, right: width - scale(18, dpi), bottom: scale(INPUT_HEIGHT, dpi) };
+        let mut band = RECT { left: input_x, top: 0, right: width - scale(BAND_RIGHT_DIP, dpi), bottom: scale(INPUT_HEIGHT, dpi) };
+        if let Some((label, narrowed)) = &filter_label {
+            let look = ButtonLook {
+                hovered: app.hovered_button == Some(BUTTON_FILTER),
+                pressed: app.pressed_button == Some(BUTTON_FILTER),
+                open: filter_open,
+            };
+            let area = draw_filter_button(buffer, &paint, label, *narrowed, band, look);
+            app.footer_buttons.push((area, BUTTON_FILTER));
+            band.right = area.left - scale(12, dpi);
+        }
         match (&app.menu, &app.view.scope, &app.link_args) {
             (Some(menu), _, _) => {
                 let parked = Field { text: menu.behind.query.clone(), selection: (0, 0) };
-                draw_field(buffer, &paint, &parked, &placeholder, band, &fonts.query, QUERY_DIP, false, None);
+                draw_field(buffer, &paint, &parked, &placeholder, band, &fonts.query, QUERY_DIP, false, None, 0);
             }
             (None, Scope::LinkArgs { of, .. }, Some(args)) => {
-                draw_link_args(buffer, &paint, of, args, &field, band, caret_on, vim, &mut app.link_arg_boxes);
+                draw_link_args(buffer, &paint, of, args, &field, band, caret_on, vim, &mut app.link_arg_boxes, &mut spots);
             }
             (None, Scope::Form { title, .. }, _) => {
                 text::draw(buffer, title, &fonts.query, theme.text, band, Align::Left);
             }
-            _ => draw_field(buffer, &paint, &field, &placeholder, band, &fonts.query, QUERY_DIP, caret_on, vim),
+            _ => {
+                let shift = draw_field(buffer, &paint, &field, &placeholder, band, &fonts.query, QUERY_DIP, caret_on, vim, spots.shift(SpotOf::Search));
+                spots.add(SpotOf::Search, band, band, &field.text, SpotFace::Query, false, shift);
+            }
         }
 
         // The list: the view's own rows, or what the menu opened over.
@@ -1056,7 +1208,7 @@ pub fn render(app: &mut App) {
         } else if let Scope::Colour(colour) = list.scope {
             draw_colour(buffer, &paint, *colour, width, height);
         } else if let Some(form) = form {
-            let boxes = draw_form(buffer, &paint, form, &field, &area_field, width, height, caret_on, &app.icons);
+            let boxes = draw_form(buffer, &paint, form, &field, &area_field, width, height, caret_on, &app.icons, &mut spots);
             app.form_boxes = boxes.0;
             app.form_chips = boxes.1;
         } else {
@@ -1083,7 +1235,10 @@ pub fn render(app: &mut App) {
         }
 
         // Footer: a pill for Orbit on the left, and one for what the keys do on the right.
-        let hints = app.view.footer_hints(vim, app.menu.is_some());
+        // Ctrl+K's actions come up on the right; the app picker does too, but isn't them.
+        let picking_app = matches!(&app.view.scope, Scope::Actions { of } if of == APP_PICKER_TITLE);
+        let menu_kind = app.menu.as_ref().map(|menu| if menu.side == MenuSide::Right && !picking_app { MenuKind::Actions } else { MenuKind::Other });
+        let hints = app.view.footer_hints(vim, menu_kind);
         let status: std::borrow::Cow<str> = match (&app.status, list.grid.is_some()) {
             (Some(status), _) => status.as_str().into(),
             // The name of what's selected, since tiles have nowhere else to show it.
@@ -1106,6 +1261,7 @@ pub fn render(app: &mut App) {
                 hovered: app.hovered_button,
                 pressed: app.pressed_button,
                 orbit_open,
+                actions_open: menu_kind == Some(MenuKind::Actions),
             },
             width,
             height,
@@ -1118,8 +1274,9 @@ pub fn render(app: &mut App) {
                 _ => "",
             };
             let geometry = popover_layout(width, height, dpi, menu.side, menu.shown);
-            draw_popover(buffer, &paint, geometry, menu.shown, of, &field, caret_on, &app.view, &app.icons);
+            draw_popover(buffer, &paint, geometry, menu.shown, of, &field, caret_on, &app.view, &app.icons, &mut spots);
         }
+        app.text_spots = spots.now;
     }
 
     // Round it off and put the shadow around it. The window only ever shows this finished frame.
@@ -1143,15 +1300,65 @@ pub fn render(app: &mut App) {
     compose_panel(frame, panel, radius, shadow);
 }
 
+/// How a button is being pointed at.
+#[derive(Clone, Copy, Default)]
+struct ButtonLook {
+    hovered: bool,
+    pressed: bool,
+    /// What it opens is open.
+    open: bool,
+}
+
+/// The longest a filter's name gets in its drop-down before it's cut short.
+const FILTER_LABEL_MOST_DIP: i32 = 190;
+
+/// The drop-down at the right of the search box that says which of an extension's filters is in
+/// force, such as "Waiting for your review", and opens the rest. One that narrows the list is in
+/// the accent colour. Gives back where it was drawn.
+fn draw_filter_button(buffer: &mut Backbuffer, paint: &Paint, label: &str, narrowed: bool, band: RECT, look: ButtonLook) -> RECT {
+    let (theme, fonts, dpi, hc) = (paint.theme, paint.fonts, paint.dpi, paint.hc);
+    let height = scale(FILTER_BUTTON_DIP, dpi);
+    let pad = scale(12, dpi);
+    let chevron = scale(14, dpi);
+    let text_width = (text::width(label, &fonts.small) + scale(1, dpi)).min(scale(FILTER_LABEL_MOST_DIP, dpi));
+    let width = pad + text_width + scale(6, dpi) + chevron + scale(9, dpi);
+    let (right, top) = (band.right, band.top + (band.bottom - band.top - height) / 2);
+    let left = right - width;
+    let radius = height as f32 / 2.0;
+    let fill = if look.pressed { paint.pressed } else if look.hovered || look.open { paint.selection } else { paint.tile };
+    buffer.fill_round_rect_alpha(left, top, width, height, radius, fill.0, fill.1);
+    let (rim, alpha, thickness) = if look.open || narrowed {
+        (theme.accent, if hc { 255 } else { 200 }, scale(2, dpi).max(1) as f32 * 0.75)
+    } else if hc {
+        (theme.edge, 255, paint.thin as f32)
+    } else {
+        (theme.overlay, ALPHA_PILL_RIM, paint.thin as f32)
+    };
+    buffer.stroke_round_rect_alpha(left, top, width, height, radius, thickness, rim, alpha);
+    let ink = if narrowed && !hc { theme.accent } else { theme.text };
+    text::draw(buffer, label, &fonts.small, ink, RECT { left: left + pad, top, right: left + pad + text_width, bottom: top + height }, Align::Left);
+    let mark = RECT { left: right - scale(9, dpi) - chevron, top, right: right - scale(9, dpi), bottom: top + height };
+    text::draw(buffer, &GLYPH_DOWN.to_string(), &fonts.icon_keycap, theme.secondary, mark, Align::Center);
+    RECT { left, top, right, bottom: top + height }
+}
+
 /// A line of text someone can type in: what's there, the selection and the caret. Standard controls
 /// can't paint over a see-through window, so the real box stays hidden and handles the typing.
+/// A line too long for its box slides left to keep the caret in view, and otherwise stays where it
+/// was, `prior`, so that a click in it doesn't jolt it. Gives back how far it's slid.
 #[allow(clippy::too_many_arguments)]
-fn draw_field(buffer: &mut Backbuffer, paint: &Paint, field: &Field, placeholder: &str, clip: RECT, face: &Face, line_dip: i32, caret_on: bool, vim: Option<VimMode>) {
+fn draw_field(buffer: &mut Backbuffer, paint: &Paint, field: &Field, placeholder: &str, clip: RECT, face: &Face, line_dip: i32, caret_on: bool, vim: Option<VimMode>, prior: i32) -> i32 {
     let (theme, dpi, hc) = (paint.theme, paint.dpi, paint.hc);
     let (start, end) = field.selection;
     let caret_units = text::width(&prefix(&field.text, end), face);
-    // A search too long for the box slides left, keeping the caret in view.
-    let slide = (caret_units + scale(2, dpi) - (clip.right - clip.left)).max(0);
+    let (room, margin) = (clip.right - clip.left, scale(2, dpi));
+    let least = (caret_units + margin - room).max(0);
+    let slide = if prior > least {
+        // No further than shows the caret at the left, or the end of the text at the right.
+        prior.min(caret_units.min(text::width(&field.text, face) + margin - room)).max(least)
+    } else {
+        least
+    };
     let origin = clip.left - slide;
     let line_height = scale(line_dip + 6, dpi);
     let line_top = clip.top + (clip.bottom - clip.top - line_height) / 2;
@@ -1176,14 +1383,13 @@ fn draw_field(buffer: &mut Backbuffer, paint: &Paint, field: &Field, placeholder
             buffer.fill_round_rect(x + paint.thin, line_top, 2.max(scale(2, dpi)), line_height, 1.0, theme.text);
         }
     }
+    slide
 }
 
-/// The rows, across `width`. A `compact` list, beside the clipboard's preview, shows titles only.
-#[allow(clippy::too_many_arguments)]
 /// A quicklink's name, then a rounded box for each of its blanks. The one being typed in has the
 /// accent around it and the caret, and an empty one shows what goes in it.
 #[allow(clippy::too_many_arguments)]
-fn draw_link_args(buffer: &mut Backbuffer, paint: &Paint, name: &str, args: &crate::app::LinkArgs, field: &Field, band: RECT, caret_on: bool, vim: Option<VimMode>, boxes: &mut Vec<RECT>) {
+fn draw_link_args(buffer: &mut Backbuffer, paint: &Paint, name: &str, args: &crate::app::LinkArgs, field: &Field, band: RECT, caret_on: bool, vim: Option<VimMode>, boxes: &mut Vec<RECT>, spots: &mut Spots) {
     let (theme, fonts, dpi) = (paint.theme, paint.fonts, paint.dpi);
     boxes.clear();
     let name_width = (text::width(name, &fonts.query) + scale(2, dpi)).min((band.right - band.left) / 3);
@@ -1215,13 +1421,16 @@ fn draw_link_args(buffer: &mut Backbuffer, paint: &Paint, name: &str, args: &cra
             buffer.stroke_round_rect_alpha(x, top, width, height, radius, paint.thin as f32, rim.0, rim.1);
         }
         let inner = RECT { left: x + pad, top, right: x + width - pad, bottom: top + height };
+        let whole = RECT { left: x, top, right: x + width, bottom: top + height };
         if focused {
-            draw_field(buffer, paint, field, &hint, inner, &fonts.title, 14, caret_on, vim);
+            let shift = draw_field(buffer, paint, field, &hint, inner, &fonts.title, 14, caret_on, vim, spots.shift(SpotOf::LinkArg(index)));
+            spots.add(SpotOf::LinkArg(index), whole, inner, value, SpotFace::Title, false, shift);
         } else {
             let ink = if value.is_empty() { theme.tertiary } else { theme.text };
             text::draw(buffer, shown, &fonts.title, ink, inner, Align::Left);
+            spots.add(SpotOf::LinkArg(index), whole, inner, value, SpotFace::Title, false, 0);
         }
-        boxes.push(RECT { left: x, top, right: x + width, bottom: top + height });
+        boxes.push(whole);
         x += width + scale(8, dpi);
     }
 }
@@ -1231,7 +1440,7 @@ fn draw_link_args(buffer: &mut Backbuffer, paint: &Paint, name: &str, args: &cra
 /// them is what the item will do, or what's wrong. Returns where the boxes and the snippet's
 /// placeholder chips were drawn, for clicks.
 #[allow(clippy::too_many_arguments)]
-fn draw_form(buffer: &mut Backbuffer, paint: &Paint, form: &InlineForm, field: &Field, area: &Field, width: i32, height: i32, caret_on: bool, icons: &crate::icons::IconCache) -> (Vec<RECT>, Vec<RECT>) {
+fn draw_form(buffer: &mut Backbuffer, paint: &Paint, form: &InlineForm, field: &Field, area: &Field, width: i32, height: i32, caret_on: bool, icons: &crate::icons::IconCache, spots: &mut Spots) -> (Vec<RECT>, Vec<RECT>) {
     let (theme, fonts, dpi, hc) = (paint.theme, paint.fonts, paint.dpi, paint.hc);
     let top = scale(INPUT_HEIGHT + 10, dpi);
     let bottom = height - scale(FOOTER_HEIGHT + 8, dpi);
@@ -1273,6 +1482,7 @@ fn draw_form(buffer: &mut Backbuffer, paint: &Paint, form: &InlineForm, field: &
             (theme.overlay, ALPHA_PILL_RIM, paint.thin as f32)
         };
         buffer.stroke_round_rect_alpha(box_left, y, box_right - box_left, h, radius, thickness, rim, alpha);
+        let whole = RECT { left: box_left, top: y, right: box_right, bottom: y + h };
         if item.multiline {
             let inner = RECT { left: box_left + pad, top: y + scale(9, dpi), right: box_right - pad, bottom: y + h - scale(9, dpi) };
             let (text, selection) = if focused { (area.text.as_str(), area.selection) } else { (item.value.as_str(), (0, 0)) };
@@ -1286,9 +1496,14 @@ fn draw_form(buffer: &mut Backbuffer, paint: &Paint, form: &InlineForm, field: &
                     caret: caret_on.then_some(theme.text),
                     caret_width: 2.max(scale(2, dpi)),
                 };
-                text::draw_editable(buffer, text, &fonts.body, theme.text, inner, selection, look);
-            } else if !text.is_empty() {
-                text::draw_wrapped(buffer, text, &fonts.body, theme.text, inner);
+                let scroll = text::draw_editable(buffer, text, &fonts.body, theme.text, inner, selection, look, spots.shift(SpotOf::Field(index)));
+                spots.add(SpotOf::Field(index), whole, inner, text, SpotFace::Body, true, scroll);
+            } else {
+                if !text.is_empty() {
+                    text::draw_wrapped(buffer, text, &fonts.body, theme.text, inner);
+                }
+                // Its box counts a line break as two, as Windows' own boxes do.
+                spots.add(SpotOf::Field(index), whole, inner, &text.replace('\n', "\r\n"), SpotFace::Body, true, 0);
             }
         } else if item.choice {
             // Picked from a list: the app's icon and name, and a chevron saying there's a list.
@@ -1309,13 +1524,15 @@ fn draw_form(buffer: &mut Backbuffer, paint: &Paint, form: &InlineForm, field: &
         } else {
             let inner = RECT { left: box_left + pad, top: y, right: box_right - pad, bottom: y + h };
             if focused {
-                draw_field(buffer, paint, field, item.hint, inner, &fonts.body, 14, caret_on, None);
+                let shift = draw_field(buffer, paint, field, item.hint, inner, &fonts.body, 14, caret_on, None, spots.shift(SpotOf::Field(index)));
+                spots.add(SpotOf::Field(index), whole, inner, &field.text, SpotFace::Body, false, shift);
             } else {
                 let (shown, ink) = if item.value.is_empty() { (item.hint, theme.tertiary) } else { (item.value.as_str(), theme.text) };
                 text::draw(buffer, shown, &fonts.body, ink, inner, Align::Left);
+                spots.add(SpotOf::Field(index), whole, inner, &item.value, SpotFace::Body, false, 0);
             }
         }
-        boxes.push(RECT { left: box_left, top: y, right: box_right, bottom: y + h });
+        boxes.push(whole);
         y += h + gap;
         if item.multiline && snippet {
             // What a snippet can fill in for itself, put in at the caret with a click.
@@ -1341,6 +1558,7 @@ fn draw_form(buffer: &mut Backbuffer, paint: &Paint, form: &InlineForm, field: &
     (boxes, chips)
 }
 
+/// The rows, across `width`. A `compact` list, beside the clipboard's preview, shows titles only.
 /// `reach` is how far down rows are drawn. Past the rows that can be chosen, which end above the
 /// footer, they carry on under it, and the caller fades them out (see [`fade_under_footer`]).
 #[allow(clippy::too_many_arguments)]
@@ -1439,20 +1657,37 @@ fn draw_list(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, width: i3
                     text::draw(buffer, &glyph.to_string(), &fonts.icon_row, color, rect, Align::Center);
                 }
             }
+            RowIcon::Tinted(glyph, tone) => {
+                let colours = crate::rows::tone_colors(tone);
+                if tiles {
+                    draw_tile_in(buffer, paint, glyph, colours, true, glyph_x, icon_y, icon_size, selected);
+                } else {
+                    let rect = RECT { left: glyph_x, top: icon_y, right: glyph_x + icon_size, bottom: icon_y + icon_size };
+                    let color = if !hc { crate::rows::coloured_symbol(colours, paint.dark) } else if selected { theme.text } else { theme.secondary };
+                    text::draw(buffer, &glyph.to_string(), &fonts.icon_row, color, rect, Align::Center);
+                }
+            }
             // Only ever drawn in a grid.
             RowIcon::Emoji(_) => {}
         }
 
         // An extension's meters take the place of the words on the right.
-        let meters = match &row.source {
-            RowSource::Extension { meters, .. } if !compact => meters.as_slice(),
-            _ => &[],
+        let (meters, tags) = match &row.source {
+            RowSource::Extension { meters, tags, .. } if !compact => (meters.as_slice(), tags.as_slice()),
+            _ => (&[][..], &[][..]),
         };
         let meters_width = if meters.is_empty() { 0 } else { draw_meters(buffer, paint, meters, right_edge, y, row_h, selected) };
         let kind_text: &str = if meters.is_empty() { row.accessory.as_deref().unwrap_or(row.kind) } else { "" };
         let kind_width = if compact || kind_text.is_empty() { 0 } else { text::width(kind_text, &fonts.hint) };
         let used_right = kind_width.max(meters_width);
         let mut text_right = right_edge - used_right - if used_right > 0 { scale(12, dpi) } else { 0 };
+        if !tags.is_empty() {
+            // Its tags sit just before the time, leaving the title most of the row.
+            let width = draw_tags(buffer, paint, tags, text_right, text_x + scale(TAGS_LEAVE_DIP, dpi), y, row_h, selected);
+            if width > 0 {
+                text_right -= width + scale(10, dpi);
+            }
+        }
         if let Some(keys) = &row.keys {
             let width = caps_width(keys, fonts, dpi);
             let fill = if selected { paint.keycap_on_selection } else { paint.keycap };
@@ -1491,6 +1726,50 @@ fn draw_list(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, width: i3
         let thumb_y = list_top + ((track_height - thumb_height) as i64 * list.scroll as i64 / (total - visible as usize) as i64) as i32;
         buffer.fill_round_rect_alpha(width - scale(6, dpi), thumb_y, scale(3, dpi), thumb_height, scale(2, dpi) as f32, paint.pressed.0, paint.pressed.1);
     }
+}
+
+/// How much of a row tags leave for its title, at the least.
+const TAGS_LEAVE_DIP: i32 = 180;
+const TAG_HEIGHT_DIP: i32 = 20;
+
+/// An extension item's tags, such as "Conflicts" or "Approved", each a word or two in a pill of its
+/// colour, in a row ending at `right`. Ones that would reach past `leftmost` are left off, the last
+/// first. Gives back how wide they are, or 0 if none fit.
+#[allow(clippy::too_many_arguments)]
+fn draw_tags(buffer: &mut Backbuffer, paint: &Paint, tags: &[orbit_core::extension::Tag], right: i32, leftmost: i32, y: i32, row_h: i32, selected: bool) -> i32 {
+    let (theme, dpi, hc) = (paint.theme, paint.dpi, paint.hc);
+    let face = &paint.fonts.hint;
+    let pad = scale(8, dpi);
+    let gap = scale(6, dpi);
+    let height = scale(TAG_HEIGHT_DIP, dpi);
+    let top = y + (row_h - height) / 2;
+    let widths: Vec<i32> = tags.iter().map(|tag| text::width(&tag.text, face) + pad * 2).collect();
+    // As many as fit, from the first, which matters most.
+    let mut shown = widths.len();
+    while shown > 0 && right - (widths[..shown].iter().sum::<i32>() + gap * (shown as i32 - 1)) < leftmost {
+        shown -= 1;
+    }
+    if shown == 0 {
+        return 0;
+    }
+    let total = widths[..shown].iter().sum::<i32>() + gap * (shown as i32 - 1);
+    let mut x = right - total;
+    for (tag, &width) in tags.iter().zip(&widths).take(shown) {
+        let radius = height as f32 / 2.0;
+        let rect = RECT { left: x, top, right: x + width, bottom: top + height };
+        if hc {
+            // Told apart by their words, since colours are Windows' to choose here.
+            buffer.stroke_round_rect_alpha(x, top, width, height, radius, paint.thin as f32, theme.text, 255);
+            text::draw(buffer, &tag.text, face, if selected { theme.selection_text } else { theme.text }, rect, Align::Center);
+        } else {
+            let colours = crate::rows::tone_colors(tag.tone);
+            let (fill, alpha, ink) = crate::rows::tinted_tile(colours, paint.dark);
+            buffer.fill_round_rect_alpha(x, top, width, height, radius, fill, alpha.saturating_add(if selected { 14 } else { 0 }));
+            text::draw(buffer, &tag.text, face, ink, rect, Align::Center);
+        }
+        x += width + gap;
+    }
+    total
 }
 
 /// How wide one meter's bar is, and how wide a long label can stretch it.
@@ -2188,6 +2467,8 @@ struct FooterState<'a> {
     hovered: Option<&'static str>,
     pressed: Option<&'static str>,
     orbit_open: bool,
+    /// Ctrl+K's actions are open, so its key stays lit.
+    actions_open: bool,
 }
 
 fn draw_pill(buffer: &mut Backbuffer, paint: &Paint, area: RECT) {
@@ -2230,8 +2511,8 @@ fn draw_footer(buffer: &mut Backbuffer, paint: &Paint, state: FooterState, width
         let face = if first_hint { &fonts.hint_strong } else { &fonts.hint };
         let area = RECT { left: x, top: pill_top, right: x + pad * 2 + label_width + space + caps, bottom: pill_bottom };
         let hovered = state.hovered == Some(*keys);
-        // With a menu open, its own key stays lit.
-        let lit = hovered || (*keys == "Ctrl+K" && state.hints.len() <= 2 && state.orbit_open);
+        // With the actions open, their key stays lit, as Orbit's pill does for its menu.
+        let lit = hovered || (*keys == "Ctrl+K" && state.actions_open);
         if lit {
             let fill = if hovered && state.pressed == Some(*keys) { paint.pressed } else { paint.selection };
             let inner_height = area.bottom - area.top - hover_gap * 2;
@@ -2291,15 +2572,15 @@ fn draw_footer(buffer: &mut Backbuffer, paint: &Paint, state: FooterState, width
     }
 }
 
-/// The small menu that Ctrl+K and the Orbit pill open, floating over the list.
-#[allow(clippy::too_many_arguments)]
 /// The title of the menu that picks an app, which searches apps rather than actions.
 pub const APP_PICKER_TITLE: &str = "Open with";
 
 /// How big an app's icon is in a menu.
 pub const POPOVER_ICON_DIP: i32 = 20;
 
-fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usize, of: &str, field: &Field, caret_on: bool, view: &crate::view::View, icons: &crate::icons::IconCache) {
+/// The small menu that Ctrl+K and the Orbit pill open, floating over the list.
+#[allow(clippy::too_many_arguments)]
+fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usize, of: &str, field: &Field, caret_on: bool, view: &crate::view::View, icons: &crate::icons::IconCache, spots: &mut Spots) {
     let (theme, fonts, dpi, hc) = (paint.theme, paint.fonts, paint.dpi, paint.hc);
     let RECT { left, top, right, bottom } = at.rect;
     let (w, h) = (right - left, bottom - top);
@@ -2317,10 +2598,12 @@ fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usiz
     buffer.fill_round_rect(left, top, w, h, radius, surface);
     buffer.stroke_round_rect_alpha(left, top, w, h, radius, paint.thin as f32, rim.0, rim.1);
 
-    // What the menu is about.
+    // What the menu is about, unless a drop-down's button says so already.
     let inner = scale(14, dpi);
-    let title_rect = RECT { left: left + inner, top: top + scale(POPOVER_PAD, dpi), right: right - inner, bottom: top + scale(POPOVER_PAD + POPOVER_TITLE, dpi) };
-    text::draw(buffer, of, &fonts.section, theme.tertiary, title_rect, Align::Left);
+    if at.titled {
+        let title_rect = RECT { left: left + inner, top: top + scale(POPOVER_PAD, dpi), right: right - inner, bottom: top + scale(POPOVER_PAD + POPOVER_TITLE, dpi) };
+        text::draw(buffer, of, &fonts.section, theme.tertiary, title_rect, Align::Left);
+    }
 
     let row_x = left + scale(6, dpi);
     let row_width = w - scale(12, dpi);
@@ -2328,7 +2611,7 @@ fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usiz
     let glyph_size = scale(20, dpi);
     if view.rows.is_empty() {
         let rect = RECT { left: row_x, top: at.list_top, right: row_x + row_width, bottom: at.list_top + at.row_height };
-        let empty = if of == APP_PICKER_TITLE { "No matching apps" } else { "No matching actions" };
+        let empty = if of == APP_PICKER_TITLE { "No matching apps" } else if of == FILTER_MENU_TITLE { "No matching filters" } else { "No matching actions" };
         text::draw(buffer, empty, &fonts.small, theme.secondary, rect, Align::Center);
     }
     for (slot, index) in (view.scroll..view.rows.len()).take(shown).enumerate() {
@@ -2347,8 +2630,15 @@ fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usiz
                 buffer.blit_premultiplied(glyph_x, y + (at.row_height - size) / 2, size, pixels);
             }
         }
-        if let RowIcon::Glyph(glyph) = row.icon {
-            let color = if danger { theme.danger } else if row.accent { theme.accent } else if selected { theme.text } else { theme.secondary };
+        let symbol = match row.icon {
+            RowIcon::Glyph(glyph) => {
+                Some((glyph, if danger { theme.danger } else if row.accent { theme.accent } else if selected { theme.text } else { theme.secondary }))
+            }
+            RowIcon::Tinted(glyph, tone) if !hc => Some((glyph, crate::rows::coloured_symbol(crate::rows::tone_colors(tone), paint.dark))),
+            RowIcon::Tinted(glyph, _) => Some((glyph, if selected { theme.text } else { theme.secondary })),
+            _ => None,
+        };
+        if let Some((glyph, color)) = symbol {
             let rect = RECT { left: glyph_x, top: y, right: glyph_x + glyph_size, bottom: y + at.row_height };
             text::draw(buffer, &glyph.to_string(), &fonts.icon_tile, color, rect, Align::Center);
         }
@@ -2375,11 +2665,14 @@ fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usiz
         buffer.fill_round_rect_alpha(right - scale(5, dpi), thumb_y, scale(3, dpi), thumb, scale(2, dpi) as f32, paint.pressed.0, paint.pressed.1);
     }
 
-    // The box that narrows it down, along the bottom.
-    buffer.fill_rect_alpha(left, at.search_top, w, paint.thin, paint.divider.0, paint.divider.1);
-    let clip = RECT { left: left + inner, top: at.search_top, right: right - inner, bottom };
-    let placeholder = if of == APP_PICKER_TITLE { "Search apps…" } else { "Search actions…" };
-    draw_field(buffer, paint, field, placeholder, clip, &fonts.small, 13, caret_on, None);
+    // The box that narrows it down: along the bottom, or a drop-down's at the top, with a line
+    // between it and the rows.
+    let line = if at.search_bottom < bottom { at.search_bottom - paint.thin } else { at.search_top };
+    buffer.fill_rect_alpha(left, line, w, paint.thin, paint.divider.0, paint.divider.1);
+    let clip = RECT { left: left + inner, top: at.search_top, right: right - inner, bottom: at.search_bottom };
+    let placeholder = if of == APP_PICKER_TITLE { "Search apps…" } else if of == FILTER_MENU_TITLE { "Search filters…" } else { "Search actions…" };
+    let shift = draw_field(buffer, paint, field, placeholder, clip, &fonts.small, 13, caret_on, None, spots.shift(SpotOf::MenuSearch));
+    spots.add(SpotOf::MenuSearch, RECT { left, top: at.search_top, right, bottom: at.search_bottom }, clip, &field.text, SpotFace::Small, false, shift);
 }
 
 /// The logo in the footer, at this DPI.
@@ -2402,6 +2695,10 @@ pub const BUTTON_VIM_MODE: &str = "vim-mode";
 pub const BUTTON_ORBIT_MENU: &str = "orbit-menu";
 /// The chevron where the search symbol usually is.
 pub const BUTTON_BACK: &str = "back";
+/// The drop-down at the right of the search box that picks an extension's filter.
+pub const BUTTON_FILTER: &str = "filter";
+/// The title of the menu it opens, which Ctrl+P opens too.
+pub const FILTER_MENU_TITLE: &str = "Show";
 
 #[cfg(test)]
 mod tests {
@@ -2486,7 +2783,7 @@ mod tests {
                     let rows = plain(count);
                     let height = launcher_height(dpi, &Scope::Root, &rows, false, true, visible);
                     let shown = popover_rows_for(height, dpi);
-                    assert!(popover_needs_height(shown, dpi) <= height, "{dpi} dpi, {visible} rows, {count} results");
+                    assert!(popover_needs_height(shown, dpi, MenuSide::Right) <= height, "{dpi} dpi, {visible} rows, {count} results");
                 }
             }
         }
@@ -2497,7 +2794,7 @@ mod tests {
         let height = window_size(96, 8).1;
         let room = height - INPUT_HEIGHT - FOOTER_HEIGHT;
         let shown = popover_rows_for(height, 96);
-        let taken = popover_needs_height(shown, 96) - INPUT_HEIGHT - FOOTER_HEIGHT - POPOVER_GAP;
+        let taken = popover_needs_height(shown, 96, MenuSide::Right) - INPUT_HEIGHT - FOOTER_HEIGHT - POPOVER_GAP;
         assert!(taken * 10 <= room * 8 && taken * 10 >= room * 6, "{taken} of {room}");
         assert_eq!(popover_rows_for(window_size(96, 12).1, 96), POPOVER_MAX_ROWS, "a tall launcher shows the most");
     }
@@ -2521,8 +2818,8 @@ mod tests {
         assert_eq!(right.rect.bottom, height - FOOTER_HEIGHT);
         let left = popover_layout(width, height, 96, MenuSide::Left, 6);
         assert_eq!(left.rect.left, ROW_INSET);
-        assert!(popover_needs_height(POPOVER_MAX_ROWS, 96) <= window_size(96, 9).1, "the longest menu fits a normal window");
-        let tall = popover_needs_height(8, 96);
+        assert!(popover_needs_height(POPOVER_MAX_ROWS, 96, MenuSide::Right) <= window_size(96, 9).1, "the longest menu fits a normal window");
+        let tall = popover_needs_height(8, 96, MenuSide::Right);
         assert!(popover_layout(width, tall, 96, MenuSide::Right, 8).rect.top >= INPUT_HEIGHT, "and never reaches the search box");
     }
 
@@ -2540,6 +2837,29 @@ mod tests {
         assert_eq!(menu.row_at(x, menu.list_top + POPOVER_ROW * 2, 2, 0, 5), None, "past the last row");
         assert!(menu.contains(x, menu.search_top));
         assert!(!menu.contains(menu.rect.right, menu.search_top));
+    }
+
+    #[test]
+    fn a_drop_down_hangs_from_its_button_at_the_top_right() {
+        for dpi in [96, 144] {
+            let (width, height) = window_size(dpi, 8);
+            let shown = drop_rows_for(height, dpi);
+            let menu = popover_layout(width, height, dpi, MenuSide::Drop, shown);
+            let button_bottom = (scale(INPUT_HEIGHT, dpi) + scale(FILTER_BUTTON_DIP, dpi)) / 2;
+            assert_eq!(menu.rect.right, width - scale(BAND_RIGHT_DIP, dpi), "lined up with the button's right edge");
+            assert!(menu.rect.top > button_bottom && menu.rect.top - button_bottom <= scale(8, dpi), "just under the button");
+            assert!(menu.rect.bottom + scale(POPOVER_GAP, dpi) <= height - scale(FOOTER_HEIGHT, dpi), "{dpi}: clear of the footer");
+            assert!(!menu.titled, "its button says what it's for");
+            assert_eq!(menu.search_top, menu.rect.top, "its search box is at the top, by the button");
+            assert!(menu.list_top >= menu.search_bottom);
+            let x = menu.rect.left + 5;
+            assert_eq!(menu.row_at(x, menu.list_top, 9, 0, shown), Some(0));
+            assert_eq!(menu.row_at(x, menu.search_top + 2, 9, 0, shown), None, "the search box isn't a row");
+            assert_eq!(menu.row_at(x, menu.list_top + menu.row_height * shown as i32, 99, 0, shown), None, "below the last row");
+        }
+        let (width, _) = window_size(96, 8);
+        let short = popover_needs_height(POPOVER_MIN_ROWS, 96, MenuSide::Drop);
+        assert!(popover_layout(width, short, 96, MenuSide::Drop, POPOVER_MIN_ROWS).rect.bottom <= short - FOOTER_HEIGHT);
     }
 
     #[test]

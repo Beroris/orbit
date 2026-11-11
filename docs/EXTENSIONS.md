@@ -14,17 +14,19 @@ Settings → Extensions lists every extension in one table, these first. Each ha
 | **Weather** | On | Weather | |
 | **Speed Test** | On | Speed Test | |
 | **GitHub** | Off | My Issues, My Pull Requests, GitHub Notifications, Starred Repositories | `ghi`, `ghp`, `ghn`, `ghs` |
-| **AI Usage** | Off | AI Usage: Claude's and Codex's limits as meters | `quota` |
 
 - **Everything** is described at the end.
 - **GitHub** asks GitHub's own command-line tool, `gh`, so it uses `gh`'s sign-in and Orbit never sees a token. Its card in Settings installs `gh` with Windows Package Manager if it's missing, then opens `gh auth login` in a window of its own. A list is kept for a minute. Enter opens an item in the browser. In Notifications, Ctrl+Enter marks one as read.
-- **AI Usage** reads the sign-ins Claude Code and Codex already keep on this PC and asks each service how much of its limits is used: the 5-hour and weekly windows, and Claude's per-model week. A meter turns amber past 70% and red past 90%. If OpenAI doesn't answer, Codex's newest session log is read instead, and the row says how old that reading is. What it reads and sends is in [PRIVACY.md](PRIVACY.md#github-and-ai-usage).
+  - **My Pull Requests** lists the open ones that involve you, then under **Recently closed** those closed or merged in the last 14 days. Each says where it stands in up to two coloured pills, the most pressing first: Review requested (from you), Conflicts, Checks failing, Changes requested, Draft, Approved and Checks running; one with nothing to say is just Open, and closed ones say Merged or Closed. Its symbol is coloured as GitHub colours it: green while open, grey for a draft, purple once merged and red if closed.
+  - **My Issues** does the same for issues: Open, then Completed, Not planned or Closed.
+  - **Filters.** The drop-down at the right of the search box, or Ctrl+P, narrows a list: open ones only, leaving out what was merged or closed; pull requests you created, ones waiting for your review, ones that need attention (conflicts, failing checks or changes requested) and drafts; issues you created or are assigned; and, when a list spans more than one, a single repository. Only filters with something in them are offered, each with how many. The choice is kept for each list until Orbit quits.
+  - The action menu also copies an item's link, its reference such as `acme/web#482`, and a pull request's branch name.
 
-Their ids (`files`, `1password`, `ente-auth`, `weather`, `speed-test`, `github`, `ai-usage`) are taken: a folder extension with one of them is listed as broken and never runs.
+Their ids (`files`, `1password`, `ente-auth`, `weather`, `speed-test`, `github`) are taken: a folder extension with one of them is listed as broken and never runs.
 
 ## Aliases and hotkeys
 
-The Extensions table shows each extension with what it does and its switch. Each one opens like an accordion: click anywhere along its row, or its chevron, and its commands slide out under it, each in a row of its own with its alias and hotkey; click again to close it. Turning an extension on opens it, and turning it off closes it. One that's off can still be opened to see what it has, with its commands greyed out until it's on. Click a command's Alias or Hotkey to change it, or use the keyboard: Left and Right move between the parts of a row (an extension's chevron and switch, or a command's alias and hotkey), and Enter or Space changes the one that's lit. Each command can have:
+The Extensions table shows each extension with what it does and its switch. Each one opens like an accordion: click anywhere along its row, or its chevron, and its commands slide out under it, each in a row of its own with its alias and hotkey; click again to close it. Turning an extension on opens it, and turning it off closes it. One that's off can still be opened to see what it has, with its commands greyed out until it's on. A command's alias and hotkey can be set while it's off, and setting one turns the extension on, or says which tool it's waiting for. Click a command's Alias or Hotkey to change it, or use the keyboard: Left and Right move between the parts of a row (an extension's chevron and switch, or a command's alias and hotkey), and Enter or Space changes the one that's lit. Each command can have:
 
 - **An alias.** For a command that opens a list, and for Everything, the alias is also its keyword: typing it and a space goes straight in, so `ghi bug` searches your issues for "bug". Clearing it leaves the command with no keyword.
 - **A hotkey**, which opens the command from anywhere.
@@ -100,7 +102,7 @@ Every message is one line of UTF-8 JSON. Anything else the program prints is ign
 ```
 
 - `hello` comes once, first.
-- `search` comes when a list command opens, with an empty query, and again each time the text changes. Answer each with `items`, using the same `id`. Orbit shows only the answer to the newest search, so a slow answer to an old one is harmless.
+- `search` comes when a list command opens, with an empty query, and again each time the text changes. Answer each with `items`, using the same `id`. Orbit shows only the answer to the newest search, so a slow answer to an old one is harmless. If the list offered filters and one other than the first is chosen, `search` and `action` carry its id as `filter`, such as `"filter":"mine"`.
 - `run` comes when a `run` command is chosen. Answer with `done`.
 - `action` comes when an item's `callback` action is chosen. Answer with `done`, or with `items` to replace the list.
 
@@ -113,7 +115,7 @@ Every message is one line of UTF-8 JSON. Anything else the program prints is ign
 {"type":"notify","message":"Signed in"}
 ```
 
-- `items` replaces the list. `empty` is shown when there are none. Up to 200 items.
+- `items` replaces the list. `empty` is shown when there are none. Up to 200 items. It may also offer `filters`, below.
 - `done` ends a `run` or a callback. `message` is shown; `close` hides the launcher.
 - `error` is shown in place of the list.
 - `notify` shows a message at any time.
@@ -129,12 +131,19 @@ An item:
   "icon": "icons/bluetooth.png",
   "actions": [
     {"title": "Open", "type": "open", "target": "ms-settings:bluetooth"},
-    {"title": "Copy link", "type": "copy", "text": "ms-settings:bluetooth"}
+    {"title": "Copy link", "type": "copy", "text": "ms-settings:bluetooth", "icon": "link"}
   ]
 }
 ```
 
-`icon` is a picture in the extension's folder, or the full path of any file or folder, which shows that file's own icon. The first action runs on Enter, the second on Ctrl+Enter, and all of them are in the Ctrl+K menu. An action's optional `shortcut`, such as `"Ctrl+R"`, is shown beside it there.
+`icon` is a picture in the extension's folder, or the full path of any file or folder, which shows that file's own icon. The first action runs on Enter, the second on Ctrl+Enter, and all of them are in the Ctrl+K menu. An action's optional `shortcut`, such as `"Ctrl+R"`, is shown beside it there, and its optional `icon` names its symbol in that menu: `open`, `globe`, `link`, `hash`, `branch`, `terminal`, `copy`, `paste`, `text`, `folder`, `file`, `image`, `note`, `edit`, `trash`, `check`, `refresh`, `search`, `star`, `pin`, `tag`, `person`, `key`, `clock`, `download`, `play`, `add`, `eye-off`, `settings` or `swap`. Without one, or with another name, the kind of action chooses: an arrow out of a box to open, a folder to reveal, copy, paste, play for a callback and search for `set_query`.
+
+An item can show up to three **tags** before its `accessory`, each a word or two in a coloured pill, such as a pull request's state. `color` (or `colour`) is `green`, `red`, `orange`, `purple`, `blue` or `grey`, and anything else is grey. Tags are up to 24 characters, and ones that don't fit beside the title are left off, the last first. The item's own `color` colours its symbol, when it has no picture of its own. Items with a `section` are grouped under it, with its name as a heading wherever it changes, so send them in order:
+
+```json
+{"id": "482", "title": "Move settings to the new layout", "section": "Open", "color": "green",
+ "tags": [{"text": "Conflicts", "color": "red"}, {"text": "Draft", "color": "grey"}]}
+```
 
 An item can show up to three **meters** on the right in place of `accessory`, each a short label over a bar, for how full something is:
 
@@ -145,7 +154,14 @@ An item can show up to three **meters** on the right in place of `accessory`, ea
 ]
 ```
 
-`value` runs from 0 to 1. Anything outside is brought inside, and a meter with no `value` is left out. The bar is drawn in the accent colour, amber from 0.7 and red from 0.9. Labels are up to 24 characters, and short ones read best. AI Usage uses meters this way.
+`value` runs from 0 to 1. Anything outside is brought inside, and a meter with no `value` is left out. The bar is drawn in the accent colour, amber from 0.7 and red from 0.9. Labels are up to 24 characters, and short ones read best.
+
+An `items` answer can offer **filters**, up to 60, shown in a drop-down at the right of the search box (Ctrl+P opens it). The first is everything, and is what's chosen until another is. `subtitle` is shown beside a filter's title, such as how many it has. Keep offering the same filters while one is chosen, so the others stay on offer; with fewer than two, there's no drop-down.
+
+```json
+{"type": "items", "id": 12, "items": [ ... ],
+ "filters": [{"id": "", "title": "All pages"}, {"id": "mine", "title": "Mine", "subtitle": "4"}]}
+```
 
 | Action `type` | Fields | Does |
 |---|---|---|

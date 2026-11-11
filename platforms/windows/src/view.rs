@@ -155,11 +155,22 @@ impl Scope {
     }
 }
 
-/// Which end of the footer a small menu rises from.
+/// Where a small menu comes from: either end of the footer, or the drop-down at the right of the
+/// search box, which it hangs from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuSide {
     Left,
     Right,
+    Drop,
+}
+
+/// A small menu over the list, as the footer tells them apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuKind {
+    /// What Ctrl+K opened, which the same key closes.
+    Actions,
+    /// Orbit's own menu, a filter drop-down or an app picker.
+    Other,
 }
 
 /// A small menu on top of a list. The menu's rows are the view's for as long as it's open, so keys
@@ -373,8 +384,9 @@ impl View {
         self.select(self.selected);
     }
 
-    /// What the keys do right now, as (keys, what they do), in reading order.
-    pub fn footer_hints(&self, vim: Option<VimMode>, popover: bool) -> Vec<(&'static str, &'static str)> {
+    /// What the keys do right now, as (keys, what they do), in reading order. `menu` is the small
+    /// menu open over the list, if one is.
+    pub fn footer_hints(&self, vim: Option<VimMode>, menu: Option<MenuKind>) -> Vec<(&'static str, &'static str)> {
         let mut out = Vec::with_capacity(5);
         if let Scope::Form { multiline, choice, .. } = self.scope {
             out.push((if multiline { "Ctrl+Enter" } else { "Enter" }, "Save"));
@@ -385,22 +397,16 @@ impl View {
             out.push(("Esc", "Cancel"));
             return out;
         }
-        if popover {
-            // The menu is on top, and Ctrl+K closes it again.
-            if let Some(op) = self.selected_row().and_then(|row| row.primary.as_ref()) {
-                out.push(("Enter", primary_label(op)));
-            }
-            out.push(("Ctrl+K", "Actions"));
-            return out;
-        }
-        if vim == Some(VimMode::Normal) {
+        if vim == Some(VimMode::Normal) && menu.is_none() {
             out.push(("i", "Type"));
         }
         if let Some(op) = self.selected_row().and_then(|row| row.primary.as_ref()) {
             out.push(("Enter", primary_label(op)));
         }
-        let can_menu = self.selected_row().is_some_and(|row| row.source != RowSource::Plain);
-        if can_menu && !matches!(self.scope, Scope::Actions { .. }) {
+        // Ctrl+K closes the actions it opened, so with them open it stays, lit. Orbit's menu and a
+        // drop-down aren't its, so they leave it out.
+        let can_menu = self.selected_row().is_some_and(|row| row.source != RowSource::Plain) && !matches!(self.scope, Scope::Actions { .. });
+        if menu == Some(MenuKind::Actions) || (menu.is_none() && can_menu) {
             out.push(("Ctrl+K", "Actions"));
         }
         if matches!(self.scope, Scope::LinkArgs { fields, .. } if fields > 1) {
@@ -580,9 +586,9 @@ mod tests {
     #[test]
     fn footer_describes_the_selection() {
         let mut v = view(0);
-        assert!(v.footer_hints(None, false).is_empty(), "closing goes without saying");
+        assert!(v.footer_hints(None, None).is_empty(), "closing goes without saying");
         v.stack.push(SavedView { scope: Scope::Root, query: String::new(), selected: 0 });
-        assert_eq!(v.footer_hints(None, false), [("Esc", "Back")]);
+        assert_eq!(v.footer_hints(None, None), [("Esc", "Back")]);
         v.stack.clear();
         v.rows.push(Row {
             source: RowSource::Note { id: 1, pinned: false },
@@ -590,8 +596,20 @@ mod tests {
             ..Row::info("n", "", GLYPH_NOTE)
         });
         v.secondary_label = Some("Copy");
-        assert_eq!(v.footer_hints(None, false), [("Enter", "Open note"), ("Ctrl+K", "Actions")]);
-        assert_eq!(v.footer_hints(None, true), [("Enter", "Open note"), ("Ctrl+K", "Actions")], "a menu keeps its key lit");
+        assert_eq!(v.footer_hints(None, None), [("Enter", "Open note"), ("Ctrl+K", "Actions")]);
+    }
+
+    #[test]
+    fn a_menu_keeps_back_in_the_footer() {
+        let mut v = view(0);
+        v.rows.push(Row { primary: Some(Op::NoteOpen(1)), ..Row::info("n", "", GLYPH_NOTE) });
+        // A menu stands on the list it covers, so Esc goes back to it.
+        v.stack.push(SavedView { scope: Scope::Root, query: String::new(), selected: 0 });
+        v.scope = Scope::Actions { of: "n".into() };
+        assert_eq!(v.footer_hints(None, Some(MenuKind::Actions)), [("Enter", "Open note"), ("Ctrl+K", "Actions"), ("Esc", "Back")]);
+        assert_eq!(v.footer_hints(None, Some(MenuKind::Other)), [("Enter", "Open note"), ("Esc", "Back")], "Ctrl+K isn't Orbit's menu or a drop-down");
+        v.last_query = Some("cop".into());
+        assert_eq!(v.footer_hints(None, Some(MenuKind::Other)), [("Enter", "Open note"), ("Esc", "Clear")], "Esc clears the menu's search first");
     }
 
     #[test]
@@ -668,19 +686,19 @@ mod tests {
     fn esc_says_clear_while_something_is_typed() {
         let mut v = View::new(8);
         v.last_query = Some("test".to_string());
-        assert_eq!(v.footer_hints(None, false), [("Esc", "Clear")]);
+        assert_eq!(v.footer_hints(None, None), [("Esc", "Clear")]);
         v.last_query = Some(String::new());
-        assert!(v.footer_hints(None, false).is_empty());
+        assert!(v.footer_hints(None, None).is_empty());
         v.last_query = Some("test".to_string());
-        assert_eq!(v.footer_hints(Some(VimMode::Normal), false), [("i", "Type"), ("Esc", "Clear")]);
-        assert_eq!(v.footer_hints(Some(VimMode::Insert), false), [("Esc", "Navigate")]);
+        assert_eq!(v.footer_hints(Some(VimMode::Normal), None), [("i", "Type"), ("Esc", "Clear")]);
+        assert_eq!(v.footer_hints(Some(VimMode::Insert), None), [("Esc", "Navigate")]);
     }
 
     #[test]
     fn footer_shows_the_vim_mode_keys() {
         let v = view(0);
-        assert_eq!(v.footer_hints(Some(VimMode::Normal), false), [("i", "Type")]);
-        assert_eq!(v.footer_hints(Some(VimMode::Insert), false), [("Esc", "Navigate")]);
+        assert_eq!(v.footer_hints(Some(VimMode::Normal), None), [("i", "Type")]);
+        assert_eq!(v.footer_hints(Some(VimMode::Insert), None), [("Esc", "Navigate")]);
     }
 
     #[test]

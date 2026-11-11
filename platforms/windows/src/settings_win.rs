@@ -384,16 +384,6 @@ fn github_pressed(s: &mut State, hwnd: HWND) {
     }
 }
 
-/// What AI Usage can find on this PC, for its card.
-fn ai_usage_found() -> String {
-    let found: Vec<&str> = crate::providers::ai_services_found().iter().map(|service| service.app()).collect();
-    match found.as_slice() {
-        [] => "Neither Claude Code nor Codex is signed in on this PC yet. Sign in to either, and it shows up here.".into(),
-        [one] => format!("Found {one} on this PC."),
-        many => format!("Found {} on this PC.", many.join(" and ")),
-    }
-}
-
 /// A drop-down of sensible values. One set by hand in settings.json is offered too, so that opening
 /// Settings never changes it.
 struct Preset {
@@ -1226,13 +1216,36 @@ fn row_command(s: &State, t: usize, at: usize) -> Option<usize> {
     }
 }
 
-/// The command a row changes, which one under an extension has only while the extension is on.
+/// The command a row changes. One under an extension that's off can still be given an alias or a
+/// hotkey, and giving it one turns the extension on.
 fn row_item(s: &State, t: usize, at: usize) -> Option<usize> {
-    let item = row_command(s, t, at)?;
+    row_command(s, t, at)
+}
+
+/// Whether a row's command can be used now: not one under an extension that's off.
+fn command_on(s: &State, t: usize, at: usize) -> bool {
     match row_extension(s, t, at) {
-        Some(e) if t == TABLE_EXTENSIONS && !ext_is_on(&s.base, &s.ext_entries[e]) => None,
-        _ => Some(item),
+        Some(e) if t == TABLE_EXTENSIONS => ext_is_on(&s.base, &s.ext_entries[e]),
+        _ => true,
     }
+}
+
+/// A command under an extension that's off was just given an alias or a hotkey, which only means
+/// something with the extension on, so it's turned on. One that needs a tool that isn't installed
+/// stays off, and says so: what was set is kept for when it's on.
+fn turn_on_for_command(s: &mut State, t: usize, at: usize) {
+    if t != TABLE_EXTENSIONS || command_on(s, t, at) {
+        return;
+    }
+    let Some(e) = row_extension(s, t, at) else { return };
+    if let Some(tool) = missing_tool(&s.ext_entries[e]) {
+        let text = format!("Saved. {} stays off until its command-line tool is installed: install it from {}'s card, below.", s.ext_entries[e].name, tool.name());
+        say_table_note(s, t, &text, false);
+        return;
+    }
+    switch_extension(s, e);
+    let text = format!("{} is on now, so its commands can be used.", s.ext_entries[e].name);
+    say_table_note(s, t, &text, false);
 }
 
 /// The parts of a row that do something, left to right. A command under an extension has no
@@ -1545,17 +1558,6 @@ fn act_on_cell(s: &mut State, t: usize, at: usize, cell: SearchCell) {
     redraw_table_row(s, t, at);
 }
 
-/// A command under an extension that's off can't be changed, and says why when it's pressed.
-fn explain_off_command(s: &mut State, t: usize, at: usize) {
-    if t != TABLE_EXTENSIONS || row_command(s, t, at).is_none() || row_item(s, t, at).is_some() {
-        return;
-    }
-    if let Some(e) = row_extension(s, t, at) {
-        let text = format!("Turn {} on to give its commands an alias or a hotkey.", s.ext_entries[e].name);
-        say_table_note(s, t, &text, false);
-    }
-}
-
 /// Takes away a row's alias, from the keyboard.
 fn remove_alias(s: &mut State, t: usize, at: usize) {
     let Some(item) = row_item(s, t, at) else { return };
@@ -1628,6 +1630,9 @@ fn finish_alias_edit(s: &mut State, t: usize, keep: bool) -> bool {
         change_alias(s, item, &typed);
         show_status(s, if typed.is_empty() { "Alias removed" } else { "Alias saved" }, SAVED_MS);
         retext_table_row(s, t, at);
+        if !typed.is_empty() {
+            turn_on_for_command(s, t, at);
+        }
     }
     redraw_table_row(s, t, at);
     true
@@ -1736,7 +1741,7 @@ fn draw_table_item(s: &mut State, t: usize, item: &DRAWITEMSTRUCT) {
         }
         Some(row) => {
             let command = row_command(s, t, at);
-            let active = row_item(s, t, at).is_some();
+            let active = command_on(s, t, at);
             let cells = row_cells(s, t, at);
             let focused = unsafe { GetFocus() } == table.list;
             let editing = table.alias_row == Some(at);
@@ -1769,7 +1774,7 @@ fn draw_table_item(s: &mut State, t: usize, item: &DRAWITEMSTRUCT) {
             let on = match row {
                 SearchRow::Item(index) if t == TABLE_SEARCH => !s.base.hidden.contains(&s.search_items[index].key),
                 SearchRow::Extension(e) => ext_is_on(&s.base, &s.ext_entries[e]),
-                // A command under an extension that's off is there to see, not to change.
+                // A command under an extension that's off is quieter, and can still be changed.
                 SearchRow::Item(_) => active,
                 _ => true,
             };
@@ -1833,14 +1838,14 @@ fn draw_table_item(s: &mut State, t: usize, item: &DRAWITEMSTRUCT) {
                 let entry = &s.search_items[index];
                 // An extension that's off shows what its command answers to, quietly.
                 let ink = if active { ink } else { theme.tertiary };
-                let wants = |cell: SearchCell| active && (hover.is_some() || chosen) && cells.contains(&cell);
+                let wants = |cell: SearchCell| (hover.is_some() || chosen) && cells.contains(&cell);
 
                 // Alias.
                 let alias = alias_of(&s.base, entry);
                 if editing {
                     field(&mut buffer, alias_col);
                 } else {
-                    let lit = active && hover == Some(Some(SearchCell::Alias));
+                    let lit = hover == Some(Some(SearchCell::Alias));
                     let pill = if alias.is_empty() {
                         None
                     } else {
@@ -1870,7 +1875,7 @@ fn draw_table_item(s: &mut State, t: usize, item: &DRAWITEMSTRUCT) {
                         crate::ui::draw_keycaps(&mut buffer, &shown, hotkey_col.0 + px(6), middle, style.small, style.icon_small, (theme.keycap, 255), theme.text, dpi);
                     }
                 } else if let Some(action) = &entry.action {
-                    let lit = active && hover == Some(Some(SearchCell::Hotkey));
+                    let lit = hover == Some(Some(SearchCell::Hotkey));
                     match item_hotkey(&s.base, action) {
                         Some(keys) => {
                             let caps = crate::ui::keycaps_width(&buffer, &keys, style.small, style.icon_small, dpi);
@@ -2065,9 +2070,8 @@ unsafe extern "system" fn table_list_proc(hwnd: HWND, message: u32, wparam: WPAR
                     return LRESULT(0);
                 }
                 if at >= 0 && (key == VK_RETURN.0 || key == VK_SPACE.0) {
-                    match current_cell(s, t, at as usize) {
-                        Some(cell) => act_on_cell(s, t, at as usize, cell),
-                        None => explain_off_command(s, t, at as usize),
+                    if let Some(cell) = current_cell(s, t, at as usize) {
+                        act_on_cell(s, t, at as usize, cell);
                     }
                     return LRESULT(0);
                 }
@@ -2131,9 +2135,8 @@ unsafe extern "system" fn table_list_proc(hwnd: HWND, message: u32, wparam: WPAR
                     return LRESULT(0);
                 }
                 let result = DefSubclassProc(hwnd, message, wparam, lparam);
-                match table_cell_at(s, t, row as usize, width(), x_of(lparam)) {
-                    Some(cell) => act_on_cell(s, t, row as usize, cell),
-                    None => explain_off_command(s, t, row as usize),
+                if let Some(cell) = table_cell_at(s, t, row as usize, width(), x_of(lparam)) {
+                    act_on_cell(s, t, row as usize, cell);
                 }
                 result
             }
@@ -3759,6 +3762,7 @@ fn finish_hotkey_record(s: &mut State, hotkey: Result<Hotkey, String>) {
             if let Some((t, at)) = search_row {
                 retext_table_row(s, t, at);
                 redraw_tables(s);
+                turn_on_for_command(s, t, at);
             }
             // The keyboard carries on from the row that was just changed, on the Hotkeys page.
             if let Some(at) = s.hotkey_rows.iter().position(|row| row.binding_action(&s.base).is_some_and(|bound| same_target(&bound, &action))).filter(|_| search_row.is_none()) {
@@ -4965,7 +4969,7 @@ const PAGE_WORDS: [&str; 10] = [
     "copy paste history",
     "text expansion",
     "quicklinks bookmarks websites programs",
-    "plugins integrations files everything 1password ente passwords two-factor 2fa otp weather forecast speed test github ai usage claude codex quota limits",
+    "plugins integrations files everything 1password ente passwords two-factor 2fa otp weather forecast speed test github pull requests issues",
     "backup export import folder reset",
 ];
 
@@ -4989,7 +4993,6 @@ const FIND_WORDS: &[(&str, &str)] = &[
     ("Ente Auth", "two-factor 2fa otp codes authenticator"),
     ("Speed Test", "internet bandwidth ookla"),
     ("GitHub", "issues pull requests notifications stars gh"),
-    ("AI Usage", "claude codex chatgpt quota limits"),
     ("Everything", "files file search find voidtools"),
     ("Export", "backup"),
     ("Delete all data", "reset wipe erase"),
@@ -6808,14 +6811,6 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         let _ = EnableWindow(github_button, can_press);
         b.end_card();
 
-        b.begin_card();
-        card_title(&mut b, BuiltinExt::AiUsage);
-        b.note(&format!(
-            "When you open it, Orbit reads Claude Code's and Codex's sign-ins on this PC and sends each only to its own service, Anthropic or OpenAI. It never renews or keeps them. {}",
-            ai_usage_found()
-        ));
-        b.end_card();
-
         b.heading("From folders");
         b.begin_card();
         b.note("An extension is a folder with an orbit-extension.json and a program Orbit talks to. It runs with your permissions, like any program you start, so add only ones you trust. Each one stays off until you turn it on.");
@@ -7198,13 +7193,12 @@ pub fn preview_state(what: &str) {
                 let _ = InvalidateRect(Some(s.tables[TABLE_EXTENSIONS].list), None, false);
             }
         }
-        // Accordions: GitHub on and open, Weather open, AI Usage off but open to see what it
-        // has, and the pointer on the closed Speed Test's row. `-sliding` stops GitHub part way
-        // out.
+        // Accordions: GitHub on and open, Weather off but open to see what it has, and the pointer
+        // on the closed Speed Test's row. `-sliding` stops GitHub part way out.
         "extensions-open" | "extensions-sliding" => {
             s.base.extensions.github = true;
-            s.base.extensions.ai_usage = false;
-            for ext in [BuiltinExt::GitHub, BuiltinExt::Weather, BuiltinExt::AiUsage] {
+            s.base.fetch_weather = false;
+            for ext in [BuiltinExt::GitHub, BuiltinExt::Weather] {
                 s.ext_open.insert(ext.id().to_string());
             }
             if let Some(item) = s.search_items.iter().position(|item| item.name == "My Issues") {
@@ -7458,46 +7452,60 @@ pub fn preview_selfcheck() -> Vec<String> {
             act_on_cell(s, ext_table, everything, SearchCell::Expand);
             check("a second click closes it", !ext_open(s, e) && s.tables[ext_table].rows.len() == before, format!("{} rows", s.tables[ext_table].rows.len()));
         }
-        let ai_was = s.base.extensions.ai_usage;
-        if let Some(ai) = ext_row(s, BuiltinExt::AiUsage) {
-            if ai_was {
-                act_on_cell(s, ext_table, ai, SearchCell::Switch);
+        let github_was = s.base.extensions.github;
+        if let Some(github) = ext_row(s, BuiltinExt::GitHub) {
+            if github_was {
+                act_on_cell(s, ext_table, github, SearchCell::Switch);
             }
-            act_on_cell(s, ext_table, ai, SearchCell::Expand);
-            let command = ai + 1;
-            check("an extension that's off opens to show what it has", ext_open(s, entry_of(s, BuiltinExt::AiUsage)) && row_command(s, ext_table, command).is_some(), String::new());
-            check("but its commands can't be changed while it's off", row_cells(s, ext_table, command).is_empty() && row_item(s, ext_table, command).is_none(), String::new());
+            act_on_cell(s, ext_table, github, SearchCell::Expand);
+            let command = github + 1;
+            check("an extension that's off opens to show what it has", ext_open(s, entry_of(s, BuiltinExt::GitHub)) && row_command(s, ext_table, command).is_some(), String::new());
+            check(
+                "and its commands can be given an alias or a hotkey while it's off",
+                !command_on(s, ext_table, command) && row_cells(s, ext_table, command) == [SearchCell::Alias, SearchCell::Hotkey],
+                format!("{:?}", row_cells(s, ext_table, command)),
+            );
+            let key = row_item(s, ext_table, command).map(|item| s.search_items[item].key.clone()).unwrap_or_default();
+            act_on_cell(s, ext_table, command, SearchCell::Alias);
+            set_text(s.tables[ext_table].alias_edit, "zq");
+            finish_alias_edit(s, ext_table, true);
+            let given = row_item(s, ext_table, command).map(|item| alias_of(&s.base, &s.search_items[item])).unwrap_or_default();
+            check(
+                "giving one an alias turns the extension on",
+                given == "zq" && s.base.extensions.github && command_on(s, ext_table, command) && ext_open(s, entry_of(s, BuiltinExt::GitHub)),
+                format!("{given}, {}", get_text(s.tables[ext_table].note)),
+            );
+            if let Some(id) = key.strip_prefix("ext:") {
+                s.base.extensions.keywords.remove(id);
+                s.last_saved.extensions.keywords.remove(id);
+            }
             say_table_note(s, ext_table, "", false);
-            explain_off_command(s, ext_table, command);
-            check("and a click on one says why", get_text(s.tables[ext_table].note).starts_with("Turn AI Usage on"), get_text(s.tables[ext_table].note));
-            say_table_note(s, ext_table, "", false);
-            act_on_cell(s, ext_table, ai, SearchCell::Switch);
-            check("turning it on keeps it open, and its commands can be changed", s.base.extensions.ai_usage && ext_open(s, entry_of(s, BuiltinExt::AiUsage)) && row_cells(s, ext_table, command) == [SearchCell::Alias, SearchCell::Hotkey], String::new());
-            act_on_cell(s, ext_table, ai, SearchCell::Switch);
-            check("and turning it off closes it", !s.base.extensions.ai_usage && !ext_open(s, entry_of(s, BuiltinExt::AiUsage)), String::new());
-            if ai_was {
-                act_on_cell(s, ext_table, ai, SearchCell::Switch);
+            act_on_cell(s, ext_table, github, SearchCell::Switch);
+            check("and turning it off closes it", !s.base.extensions.github && !ext_open(s, entry_of(s, BuiltinExt::GitHub)), String::new());
+            if github_was {
+                act_on_cell(s, ext_table, github, SearchCell::Switch);
             }
         }
         // The chosen row stays chosen while one above it opens.
-        let github_e = entry_of(s, BuiltinExt::GitHub);
-        let github_open = ext_open(s, github_e);
-        if github_open {
-            set_ext_open(s, github_e, false);
+        let speed_e = entry_of(s, BuiltinExt::SpeedTest);
+        let speed_open = ext_open(s, speed_e);
+        if speed_open {
+            set_ext_open(s, speed_e, false);
         }
-        if let (Some(github), Some(last)) = (ext_row(s, BuiltinExt::GitHub), ext_row(s, BuiltinExt::AiUsage)) {
+        if let (Some(speed), Some(last)) = (ext_row(s, BuiltinExt::SpeedTest), ext_row(s, BuiltinExt::GitHub)) {
             let list = s.tables[ext_table].list;
             SendMessageW(list, LB_SETCURSEL, Some(WPARAM(last)), None);
-            act_on_cell(s, ext_table, github, SearchCell::Expand);
+            act_on_cell(s, ext_table, speed, SearchCell::Expand);
             let chosen = SendMessageW(list, LB_GETCURSEL, None, None).0;
-            check("the row that was chosen stays chosen as rows open above it", chosen == ext_row(s, BuiltinExt::AiUsage).map_or(-1, |at| at as isize) && chosen as usize > last, format!("{chosen} was {last}"));
+            check("the row that was chosen stays chosen as rows open above it", chosen == ext_row(s, BuiltinExt::GitHub).map_or(-1, |at| at as isize) && chosen as usize > last, format!("{chosen} was {last}"));
             let rows: i32 = (0..s.tables[ext_table].rows.len()).map(|at| table_row_px(s, ext_table, at)).sum();
             let mut client = RECT::default();
             let _ = GetClientRect(list, &mut client);
             check("and the table grows to fit them", client.bottom == rows, format!("{} for {rows}", client.bottom));
-            set_ext_open(s, github_e, github_open);
+            set_ext_open(s, speed_e, speed_open);
         }
         // The filter opens an extension whose command it finds.
+        let github_e = entry_of(s, BuiltinExt::GitHub);
         let ext_filter = s.tables[ext_table].filter;
         let open_before = s.ext_open.clone();
         s.ext_open.clear();

@@ -558,7 +558,7 @@ mod tests {
         let mut runners = Runners::new(data.clone());
         let message = WM_APP + 99;
         let mut answer = |id: u64, query: &str| -> (Vec<orbit_core::extension::Item>, Option<String>) {
-            let request = Request::Search { id, command: "search".into(), query: query.into() };
+            let request = Request::Search { id, command: "search".into(), query: query.into(), filter: String::new() };
             runners.send(&installed, &request, SendHwnd::new(window), message).expect("the example starts");
             let deadline = Instant::now() + Duration::from_secs(30);
             while Instant::now() < deadline {
@@ -566,7 +566,7 @@ mod tests {
                 if unsafe { PeekMessageW(&mut msg, Some(window), message, message, PM_REMOVE) }.as_bool() {
                     let event = crate::util::take_posted::<Event>(msg.wParam.0).expect("an event");
                     match event.kind {
-                        EventKind::Said(Message::Items { id: answered, items, empty }) if answered == id => return (items, empty),
+                        EventKind::Said(Message::Items { id: answered, items, empty, .. }) if answered == id => return (items, empty),
                         EventKind::Said(_) => {}
                         EventKind::Ended(why) => panic!("the example stopped: {why}"),
                     }

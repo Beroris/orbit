@@ -1,17 +1,16 @@
 //! The extensions that come with Orbit and answer with a list the way a folder extension's program
-//! does: GitHub, through GitHub's own `gh` tool, and AI Usage, from Claude Code's and Codex's
-//! sign-ins. Each question is answered on a thread of its own, and the answer comes back as
-//! `WM_ORBIT_EXTENSION`, the same as a program's, so the launcher shows both the same way.
+//! does: GitHub, through GitHub's own `gh` tool. Each question is answered on a thread of its own,
+//! and the answer comes back as `WM_ORBIT_EXTENSION`, the same as a program's, so the launcher
+//! shows both the same way.
 //!
 //! Nothing runs while they're off, and nothing is kept on disk: answers are kept in memory for a
-//! minute, so going back into a list doesn't ask again.
+//! minute, so going back into a list, typing in it or choosing a filter doesn't ask again.
 
 use crate::extensions::{Event, EventKind};
 use crate::util::{SendHwnd, box_for_post};
-use orbit_core::ai_usage::{self, Reading, Service};
 use orbit_core::builtin_ext::BuiltinExt;
 use orbit_core::extension::{Item, Message};
-use orbit_core::github;
+use orbit_core::github::{self, Ask};
 use std::collections::HashMap;
 use std::io::Read;
 use std::os::windows::process::CommandExt;
@@ -36,13 +35,21 @@ fn now() -> i64 {
 
 type Key = (BuiltinExt, String);
 
+/// A question about a list: its request id, what's typed, and the filter chosen.
+#[derive(Clone, Default)]
+struct Question {
+    id: u64,
+    query: String,
+    filter: String,
+}
+
 #[derive(Default)]
 struct State {
     /// Answers, and when they came.
     kept: HashMap<Key, (Instant, Vec<Item>)>,
     /// Lists being fetched now, and the newest question to answer when each comes. Typing while
     /// one is on its way waits for it instead of asking again.
-    asking: HashMap<Key, (u64, String)>,
+    asking: HashMap<Key, Question>,
 }
 
 /// Answers kept for a minute, by extension and command.
@@ -71,29 +78,30 @@ impl Providers {
         }
     }
 
-    /// Answers a search of a command's list, as request `id`. `fresh` asks again even if an answer
-    /// from the last minute is kept.
+    /// Answers a search of a command's list, as request `id`, narrowed by `filter`. `fresh` asks
+    /// again even if an answer from the last minute is kept.
     #[allow(clippy::too_many_arguments)]
-    pub fn search(&self, ext: BuiltinExt, command: &str, id: u64, query: &str, fresh: bool, main: SendHwnd, message: u32) {
+    pub fn search(&self, ext: BuiltinExt, command: &str, id: u64, query: &str, filter: &str, fresh: bool, main: SendHwnd, message: u32) {
         let key: Key = (ext, command.to_string());
+        let question = Question { id, query: query.to_string(), filter: filter.to_string() };
         if !fresh {
             if let Some(items) = self.kept(&key, false) {
-                post(main, message, ext, answer(ext, command, id, query, items));
+                post(main, message, ext, answer(ext, command, &question, items));
                 return;
             }
         }
         {
             let Ok(mut state) = self.state.lock() else { return };
             if let Some(asked) = state.asking.get_mut(&key) {
-                *asked = (id, query.to_string());
+                *asked = question;
                 return;
             }
-            state.asking.insert(key.clone(), (id, query.to_string()));
+            state.asking.insert(key.clone(), question);
         }
         let this = self.clone();
         let started = std::thread::Builder::new().name(format!("orbit-{}", ext.id())).spawn(move || {
             let fetched = fetch(ext, &key.1);
-            let (id, query) = {
+            let question = {
                 let Ok(mut state) = this.state.lock() else { return };
                 if let Ok(items) = &fetched {
                     state.kept.insert(key.clone(), (Instant::now(), items.clone()));
@@ -101,8 +109,8 @@ impl Providers {
                 state.asking.remove(&key).unwrap_or_default()
             };
             post(main, message, ext, match fetched {
-                Ok(items) => answer(ext, &key.1, id, &query, items),
-                Err(why) => Message::Error { id, message: why },
+                Ok(items) => answer(ext, &key.1, &question, items),
+                Err(why) => Message::Error { id: question.id, message: why },
             });
         });
         if started.is_err() {
@@ -115,9 +123,9 @@ impl Providers {
 
     /// An item's `callback` action: refresh, or mark a GitHub notification read.
     #[allow(clippy::too_many_arguments)]
-    pub fn action(&self, ext: BuiltinExt, command: &str, item: &str, action: &str, id: u64, query: &str, main: SendHwnd, message: u32) {
+    pub fn action(&self, ext: BuiltinExt, command: &str, item: &str, action: &str, id: u64, query: &str, filter: &str, main: SendHwnd, message: u32) {
         if (ext, action) != (BuiltinExt::GitHub, "read") {
-            self.search(ext, command, id, query, true, main, message);
+            self.search(ext, command, id, query, filter, true, main, message);
             return;
         }
         // Only a notification's own id goes into the address.
@@ -127,7 +135,8 @@ impl Providers {
         }
         let this = self.clone();
         let key: Key = (ext, command.to_string());
-        let (item, query) = (item.to_string(), query.to_string());
+        let item = item.to_string();
+        let question = Question { id, query: query.to_string(), filter: filter.to_string() };
         let _ = std::thread::Builder::new().name("orbit-github-read".into()).spawn(move || {
             let said = match gh(&["api", "-X", "PATCH", &format!("notifications/threads/{item}")]) {
                 Ok(_) => {
@@ -135,9 +144,9 @@ impl Providers {
                     let mut items = this.kept(&key, true).unwrap_or_default();
                     items.retain(|kept| kept.id != item);
                     this.keep(key.clone(), &items);
-                    answer(ext, &key.1, id, &query, items)
+                    answer(ext, &key.1, &question, items)
                 }
-                Err(why) => Message::Error { id, message: why },
+                Err(why) => Message::Error { id: question.id, message: why },
             };
             post(main, message, ext, said);
         });
@@ -149,46 +158,46 @@ fn post(main: SendHwnd, message: u32, ext: BuiltinExt, said: Message) {
 }
 
 /// What a hidden preview shows: answers saved in the data folder, never anything asked online.
-pub fn preview(ext: BuiltinExt, command: &str, id: u64, query: &str, dir: &Path) -> Message {
+pub fn preview(ext: BuiltinExt, command: &str, id: u64, query: &str, filter: &str, dir: &Path) -> Message {
     let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_default();
     let items = match ext {
         BuiltinExt::GitHub => github::items(command, &read(&format!("github-preview-{command}.json")), now()),
-        BuiltinExt::AiUsage => {
-            let mut readings = Vec::new();
-            if let Ok(usage) = ai_usage::parse_claude(&read("ai-usage-preview-claude.json"), "max") {
-                readings.push(Reading::Usage(usage));
-            }
-            if let Ok(usage) = ai_usage::parse_codex(&read("ai-usage-preview-codex.json")) {
-                readings.push(Reading::Usage(usage));
-            }
-            Ok(ai_usage::items(&readings, now()))
-        }
         _ => Ok(Vec::new()),
     };
+    let question = Question { id, query: query.to_string(), filter: filter.to_string() };
     match items {
-        Ok(items) => answer(ext, command, id, query, items),
+        Ok(items) => answer(ext, command, &question, items),
         Err(message) => Message::Error { id, message },
     }
 }
 
-/// The rows for what's typed, from everything fetched.
-fn answer(ext: BuiltinExt, command: &str, id: u64, query: &str, items: Vec<Item>) -> Message {
-    let (items, empty) = match ext {
-        BuiltinExt::GitHub if query.trim().is_empty() => (items, github::empty_text(command).to_string()),
-        BuiltinExt::GitHub => (github::filter(&items, query), "Nothing matches that".to_string()),
-        _ => (github::filter(&items, query), "Claude Code and Codex aren't signed in on this PC".to_string()),
+/// The rows for what's typed and the filter chosen, from everything fetched, and the filters on
+/// offer. Those come from everything fetched, so choosing one doesn't take the others away.
+fn answer(ext: BuiltinExt, command: &str, question: &Question, items: Vec<Item>) -> Message {
+    let filters = github::filters(command, &items);
+    // A filter for a repository that's gone from the list is let go.
+    let filter = if filters.iter().any(|option| option.id == question.filter) { question.filter.as_str() } else { "" };
+    let narrowed = github::apply_filter(items, filter);
+    let empty = match ext {
+        BuiltinExt::GitHub if !question.query.trim().is_empty() => "Nothing matches that",
+        BuiltinExt::GitHub if !filter.is_empty() => github::filtered_empty_text(command, filter),
+        BuiltinExt::GitHub => github::empty_text(command),
+        _ => "Nothing found",
     };
-    Message::Items { id, items, empty: Some(empty) }
+    let shown = if question.query.trim().is_empty() { narrowed } else { github::filter(&narrowed, &question.query) };
+    let filters = if filters.len() > 1 { filters } else { Vec::new() };
+    Message::Items { id: question.id, items: shown, empty: Some(empty.to_string()), filters }
 }
 
 fn fetch(ext: BuiltinExt, command: &str) -> Result<Vec<Item>, String> {
     match ext {
         BuiltinExt::GitHub => {
-            let path = github::api_path(command).ok_or_else(|| "GitHub has no such list.".to_string())?;
-            let json = gh(&["api", path])?;
+            let json = match github::ask(command, now()).ok_or_else(|| "GitHub has no such list.".to_string())? {
+                Ask::Rest(path) => gh(&["api", path])?,
+                Ask::Graphql { query, variables } => gh_graphql(query, &variables)?,
+            };
             github::items(command, &json, now())
         }
-        BuiltinExt::AiUsage => Ok(ai_usage::items(&ai_readings(), now())),
         _ => Err("That isn't a list.".into()),
     }
 }
@@ -242,6 +251,31 @@ fn signed_in_user(hosts: &str) -> Option<String> {
 /// GITHUB_TOKEN or GH_TOKEN left in the environment is set aside: gh would use it first, and an old
 /// one makes every request fail with "Bad credentials".
 fn gh(args: &[&str]) -> Result<String, String> {
+    let (status, stdout, stderr) = run_gh(args)?;
+    if status {
+        return Ok(stdout);
+    }
+    Err(gh_problem(&stderr, &stdout))
+}
+
+/// Asks GitHub's GraphQL API. When part of the answer couldn't be had, such as one repository the
+/// sign-in can't read, gh says it failed but still prints the rest, and the rest is shown.
+fn gh_graphql(query: &str, variables: &[(&str, String)]) -> Result<String, String> {
+    let mut args = vec!["api".to_string(), "graphql".to_string(), "-f".to_string(), format!("query={query}")];
+    for (name, value) in variables {
+        args.push("-f".into());
+        args.push(format!("{name}={value}"));
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (status, stdout, stderr) = run_gh(&args)?;
+    if status || stdout.contains("\"data\"") {
+        return Ok(stdout);
+    }
+    Err(gh_problem(&stderr, &stdout))
+}
+
+/// Runs gh, giving back whether it worked and what it printed to each stream.
+fn run_gh(args: &[&str]) -> Result<(bool, String, String), String> {
     let program = gh_path().ok_or_else(|| "GitHub's command-line tool isn't installed. Install it from Settings, under Extensions.".to_string())?;
     let mut command = Command::new(program);
     command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(CREATE_NO_WINDOW).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
@@ -249,11 +283,7 @@ fn gh(args: &[&str]) -> Result<String, String> {
         command.env_remove("GITHUB_TOKEN").env_remove("GH_TOKEN");
     }
     let mut child = command.spawn().map_err(|_| "GitHub's command-line tool wouldn't start.".to_string())?;
-    let (status, stdout, stderr) = finish(&mut child, GH_TIMEOUT).ok_or_else(|| "GitHub took too long to answer.".to_string())?;
-    if status {
-        return Ok(stdout);
-    }
-    Err(gh_problem(&stderr, &stdout))
+    finish(&mut child, GH_TIMEOUT).ok_or_else(|| "GitHub took too long to answer.".to_string())
 }
 
 /// What went wrong, in words to act on.
@@ -359,135 +389,25 @@ pub fn open_gh_sign_in(done: impl FnOnce() + Send + 'static) -> Result<(), Strin
     Ok(())
 }
 
-// --- AI Usage ----------------------------------------------------------------------------------
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE").map(PathBuf::from)
-}
-
-fn claude_dir() -> Option<PathBuf> {
-    std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()).map(PathBuf::from).or_else(|| Some(home()?.join(".claude")))
-}
-
-fn codex_dir() -> Option<PathBuf> {
-    std::env::var_os("CODEX_HOME").filter(|dir| !dir.is_empty()).map(PathBuf::from).or_else(|| Some(home()?.join(".codex")))
-}
-
-/// Which of the services are signed in on this PC, for Settings to say.
-pub fn ai_services_found() -> Vec<Service> {
-    let mut found = Vec::new();
-    if claude_dir().is_some_and(|dir| dir.join(".credentials.json").is_file()) {
-        found.push(Service::Claude);
-    }
-    if codex_dir().is_some_and(|dir| dir.join("auth.json").is_file()) {
-        found.push(Service::Codex);
-    }
-    found
-}
-
-/// Each service that's signed in on this PC, asked now. A service with no sign-in here is left out.
-pub fn ai_readings() -> Vec<Reading> {
-    let (claude, codex) = std::thread::scope(|scope| {
-        let claude = scope.spawn(claude_reading);
-        let codex = scope.spawn(codex_reading);
-        (claude.join().ok().flatten(), codex.join().ok().flatten())
-    });
-    claude.into_iter().chain(codex).collect()
-}
-
-fn problem(service: Service, text: impl Into<String>) -> Reading {
-    Reading::Problem { service, text: text.into() }
-}
-
-/// Says why a signed-in request was turned down, for one service.
-fn refused(service: Service, failure: crate::favicon::Failure) -> String {
-    use crate::favicon::Failure;
-    match failure {
-        Failure::Status(401 | 403) => format!("It didn't accept {}'s sign-in. Use {} once to renew it.", service.app(), service.app()),
-        Failure::Status(429) => format!("{} asked Orbit to wait. Try again in a minute.", service.name()),
-        Failure::Status(status) => format!("{} answered with an error ({status}). Try again later.", service.name()),
-        Failure::Unreachable => format!("Couldn't reach {}. Check your connection.", service.name()),
-    }
-}
-
-/// Claude: Claude Code's sign-in, sent only to Anthropic's own server to ask for its usage. The
-/// sign-in is never renewed here, since renewing it would sign Claude Code out.
-fn claude_reading() -> Option<Reading> {
-    let file = claude_dir()?.join(".credentials.json");
-    let text = std::fs::read_to_string(file).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let oauth = value.get("claudeAiOauth")?;
-    let token = oauth.get("accessToken").and_then(serde_json::Value::as_str).filter(|token| !token.is_empty())?;
-    let plan = oauth.get("subscriptionType").and_then(serde_json::Value::as_str).unwrap_or("");
-    if oauth.get("expiresAt").and_then(serde_json::Value::as_i64).is_some_and(|ms| ms / 1000 < now()) {
-        return Some(problem(Service::Claude, "Claude Code's sign-in has expired. Use Claude Code once to renew it."));
-    }
-    let bearer = format!("Bearer {token}");
-    let headers = [("Authorization", bearer.as_str()), ("anthropic-beta", "oauth-2025-04-20"), ("Accept", "application/json")];
-    Some(match crate::favicon::get_signed_in("https://api.anthropic.com/api/oauth/usage", &headers, 512 * 1024) {
-        Ok(body) => match ai_usage::parse_claude(&String::from_utf8_lossy(&body), plan) {
-            Ok(usage) => Reading::Usage(usage),
-            Err(why) => problem(Service::Claude, why),
-        },
-        Err(failure) => problem(Service::Claude, refused(Service::Claude, failure)),
-    })
-}
-
-/// Codex: its sign-in, sent only to OpenAI's own server. When that can't answer, what Codex last
-/// wrote in a session's log is shown instead, saying how old it is.
-fn codex_reading() -> Option<Reading> {
-    let dir = codex_dir()?;
-    let text = std::fs::read_to_string(dir.join("auth.json")).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let token = value.pointer("/tokens/access_token").and_then(serde_json::Value::as_str).filter(|token| !token.is_empty());
-    let Some(token) = token else {
-        return Some(problem(Service::Codex, "Codex is signed in with an API key, which has no plan limits to show."));
-    };
-    let account = value.pointer("/tokens/account_id").and_then(serde_json::Value::as_str).unwrap_or("");
-    let bearer = format!("Bearer {token}");
-    let mut headers = vec![("Authorization", bearer.as_str()), ("Accept", "application/json")];
-    if !account.is_empty() {
-        headers.push(("ChatGPT-Account-Id", account));
-    }
-    let failure = match crate::favicon::get_signed_in("https://chatgpt.com/backend-api/wham/usage", &headers, 512 * 1024) {
-        Ok(body) => match ai_usage::parse_codex(&String::from_utf8_lossy(&body)) {
-            Ok(usage) => return Some(Reading::Usage(usage)),
-            Err(why) => why,
-        },
-        Err(failure) => refused(Service::Codex, failure),
-    };
-    Some(codex_from_log(&dir).map_or_else(|| problem(Service::Codex, failure), Reading::Usage))
-}
-
-/// The newest session log under `sessions\YYYY\MM\DD`.
-fn newest_log(dir: &Path) -> Option<PathBuf> {
-    let mut at = dir.join("sessions");
-    // Year, month, then day folders, newest name first.
-    for _ in 0..3 {
-        let mut names: Vec<PathBuf> = std::fs::read_dir(&at).ok()?.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
-        names.sort();
-        at = names.pop()?;
-    }
-    std::fs::read_dir(&at)
-        .ok()?
-        .flatten()
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"))
-        .max_by_key(|entry| entry.metadata().and_then(|meta| meta.modified()).ok())
-        .map(|entry| entry.path())
-}
-
-fn codex_from_log(dir: &Path) -> Option<ai_usage::Usage> {
-    let file = newest_log(dir)?;
-    let written = std::fs::metadata(&file).and_then(|meta| meta.modified()).ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
-    // Logs can be large; the usage is near the end.
-    let bytes = std::fs::read(&file).ok()?;
-    let tail = &bytes[bytes.len().saturating_sub(MOST_BYTES)..];
-    String::from_utf8_lossy(tail).lines().rev().find_map(|line| ai_usage::parse_codex_log_line(line, written))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Asks GitHub for real, through the `gh` signed in on this PC, and says only how many of each
+    /// kind came back. Run by hand: `cargo test -p orbit-windows real_github -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "asks GitHub, with this PC's gh sign-in"]
+    fn real_github_lists_come_back() {
+        for command in ["pulls", "issues"] {
+            let items = fetch(BuiltinExt::GitHub, command).unwrap_or_else(|why| panic!("{command}: {why}"));
+            let closed = items.iter().filter(|item| item.section == github::CLOSED_SECTION).count();
+            let mut tags: Vec<String> = items.iter().flat_map(|item| item.tags.iter().map(|tag| tag.text.clone())).collect();
+            tags.sort();
+            tags.dedup();
+            let filters: Vec<String> = github::filters(command, &items).into_iter().map(|option| option.title).filter(|title| !title.contains('/')).collect();
+            println!("{command}: {} open, {closed} recently closed; tags {tags:?}; filters {filters:?}", items.len() - closed);
+        }
+    }
 
     #[test]
     fn the_signed_in_user_is_read_from_hosts() {
@@ -508,12 +428,29 @@ mod tests {
     #[test]
     fn searching_kept_answers_narrows_them() {
         let items = github::items("starred", r#"[{"full_name":"a/one","html_url":"https://github.com/a/one"},{"full_name":"b/two","html_url":"https://github.com/b/two"}]"#, 0).unwrap();
-        match answer(BuiltinExt::GitHub, "starred", 7, "two", items) {
-            Message::Items { id, items, .. } => {
+        let question = Question { id: 7, query: "two".into(), filter: String::new() };
+        match answer(BuiltinExt::GitHub, "starred", &question, items) {
+            Message::Items { id, items, filters, .. } => {
                 assert_eq!(id, 7);
                 assert_eq!(items.len(), 1);
+                assert!(filters.is_empty(), "stars have nothing to filter by");
             }
             _ => panic!("expected items"),
         }
+    }
+
+    #[test]
+    fn a_filter_narrows_the_list_and_offers_the_rest() {
+        let note = |id: u32, repo: &str| format!(r#"{{"id":"{id}","reason":"mention","updated_at":"2026-11-08T00:00:00Z","subject":{{"title":"Note {id}","url":""}},"repository":{{"full_name":"{repo}","html_url":"https://github.com/{repo}"}}}}"#);
+        let json = format!("[{},{},{}]", note(1, "o/a"), note(2, "o/b"), note(3, "o/b"));
+        let items = github::items("notifications", &json, 0).unwrap();
+        let ask = |filter: &str, query: &str| match answer(BuiltinExt::GitHub, "notifications", &Question { id: 1, query: query.into(), filter: filter.into() }, items.clone()) {
+            Message::Items { items, filters, empty, .. } => (items.len(), filters.len(), empty.unwrap_or_default()),
+            _ => panic!("expected items"),
+        };
+        assert_eq!(ask("", ""), (3, 3, "No unread notifications".into()), "everything, then each repository");
+        assert_eq!(ask("repo:o/b", ""), (2, 3, "Nothing here under this filter".into()), "choosing one keeps the others on offer");
+        assert_eq!(ask("repo:o/b", "Note 1"), (0, 3, "Nothing matches that".into()));
+        assert_eq!(ask("repo:o/gone", "").0, 3, "a filter that isn't offered any more is let go");
     }
 }

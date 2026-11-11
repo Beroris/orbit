@@ -287,6 +287,8 @@ impl App {
             }
             Op::EverythingRetry => self.refresh_results(),
             Op::ExtAction { ext, command, item, action } => self.run_extension_action(ext, command, item, action),
+            Op::OpenFilterMenu => self.open_filter_menu(),
+            Op::ExtFilter(id) => self.choose_filter(id),
             Op::OpenExtensionsSettings => {
                 self.hide(false);
                 crate::settings_win::open_on_extensions(self.editor_context(), self.settings.clone(), self.dir.clone(), &self.catalog.apps);
@@ -524,8 +526,14 @@ impl App {
         self.arm_extension_idle();
     }
 
-    /// Asks the extension whose list is open for what matches the query.
+    /// The filter chosen for a list, or empty for everything.
+    fn chosen_filter(&self, ext: &str, command: &str) -> String {
+        self.ext_filter.get(&format!("{ext}/{command}")).cloned().unwrap_or_default()
+    }
+
+    /// Asks the extension whose list is open for what matches the query, under the filter chosen.
     pub(super) fn search_extension(&mut self, ext: &str, command: &str, query: &str) {
+        let filter = self.chosen_filter(ext, command);
         if let Some(builtin) = BuiltinExt::from_id(ext).filter(|builtin| builtin.is_provider()) {
             if !builtin.is_on(&self.settings) {
                 self.view.rows = vec![Row::info(format!("{} is turned off", builtin.name()), "Turn it on in Settings, under Extensions", GLYPH_WARNING)];
@@ -535,11 +543,11 @@ impl App {
             let id = self.ext_requests;
             self.ext_waiting = Some((ext.to_string(), id));
             if self.previewing {
-                let said = crate::providers::preview(builtin, command, id, query, &self.dir);
+                let said = crate::providers::preview(builtin, command, id, query, &filter, &self.dir);
                 self.on_extension(Event { ext: ext.to_string(), run: 0, kind: EventKind::Said(said) });
                 return;
             }
-            self.providers.search(builtin, command, id, query, false, self.send, WM_ORBIT_EXTENSION);
+            self.providers.search(builtin, command, id, query, &filter, false, self.send, WM_ORBIT_EXTENSION);
             if self.view.rows.is_empty() {
                 self.view.rows.push(Row::info("Loading\u{2026}", "", crate::rows::extension_glyph(builtin)));
             }
@@ -551,7 +559,7 @@ impl App {
         };
         self.ext_requests += 1;
         let id = self.ext_requests;
-        let request = Request::Search { id, command: command.to_string(), query: query.to_string() };
+        let request = Request::Search { id, command: command.to_string(), query: query.to_string(), filter };
         match self.runners.send(&installed, &request, self.send, WM_ORBIT_EXTENSION) {
             Ok(_) => {
                 self.ext_waiting = Some((ext.to_string(), id));
@@ -576,6 +584,11 @@ impl App {
             }
             None => self.extension_icon(ext, installed.and_then(|installed| installed.icon_path()).map(|path| path.to_string_lossy().into_owned()).as_deref()),
         };
+        // A symbol can take the item's colour, as a pull request's does its state's.
+        let icon = match (icon, item.tint) {
+            (RowIcon::Glyph(glyph), Some(tone)) => RowIcon::Tinted(glyph, tone),
+            (icon, _) => icon,
+        };
         let ext = ext.to_string();
         let primary = item.actions.first().map(|action| Op::ExtAction { ext: ext.clone(), command: command.to_string(), item: item.id.clone(), action: action.clone() });
         Row {
@@ -587,8 +600,99 @@ impl App {
             primary,
             keys: None,
             accessory: (!item.accessory.is_empty()).then_some(item.accessory),
-            source: RowSource::Extension { ext, command: command.to_string(), item: item.id, actions: item.actions, meters: item.meters },
+            source: RowSource::Extension { ext, command: command.to_string(), item: item.id, actions: item.actions, meters: item.meters, tags: item.tags },
         }
+    }
+
+    /// An answer's items as rows, under a heading wherever their section changes.
+    fn extension_rows(&mut self, ext: &str, installed: Option<&Installed>, command: &str, items: Vec<Item>) -> Vec<Row> {
+        let sectioned = items.iter().any(|item| !item.section.is_empty());
+        let mut rows = Vec::with_capacity(items.len() + 2);
+        let mut section: Option<String> = None;
+        for item in items {
+            if sectioned && section.as_deref() != Some(item.section.as_str()) {
+                if !item.section.is_empty() {
+                    rows.push(Row::header(item.section.clone()));
+                }
+                section = Some(item.section.clone());
+            }
+            rows.push(self.extension_row(ext, installed, command, item));
+        }
+        rows
+    }
+
+    /// The filter drop-down's choices for the list showing, the one chosen ticked.
+    pub(super) fn open_filter_menu(&mut self) {
+        let Some((ext, command, _)) = self.open_extension_list() else { return };
+        if self.ext_filters.len() < 2 {
+            return;
+        }
+        let chosen = self.shown_filter(&ext, &command);
+        let rows: Vec<Row> = self
+            .ext_filters
+            .iter()
+            .map(|option| {
+                let mine = option.id == chosen;
+                let mut row = Row::op(option.title.clone(), option.subtitle.clone(), if mine { GLYPH_CHECK } else { ' ' }, Op::ExtFilter(option.id.clone()));
+                row.accent = mine;
+                row
+            })
+            .collect();
+        let at = rows.iter().position(|row| row.accent).unwrap_or(0);
+        self.leave_menu();
+        self.open_menu(MenuSide::Drop, ui::FILTER_MENU_TITLE.to_string(), rows);
+        self.view.select(at);
+        self.after_selection_change();
+        self.redraw();
+    }
+
+    /// Opens the filter drop-down's menu, or closes it if it's open.
+    pub(super) fn toggle_filter_menu(&mut self) {
+        if self.filter_menu_open() {
+            self.close_menu();
+        } else {
+            self.open_filter_menu();
+        }
+    }
+
+    /// The filter in force on a list, as its drop-down shows it: the one chosen if it's still on
+    /// offer, or the first, which is everything.
+    pub(super) fn shown_filter(&self, ext: &str, command: &str) -> String {
+        let chosen = self.chosen_filter(ext, command);
+        if self.ext_filters.iter().any(|option| option.id == chosen) { chosen } else { self.ext_filters.first().map(|option| option.id.clone()).unwrap_or_default() }
+    }
+
+    /// What the filter drop-down says: the title of the filter in force, and whether it narrows the
+    /// list, which is any but the first.
+    pub fn filter_label(&self) -> Option<(String, bool)> {
+        let Scope::Extension { ext, command, .. } = self.menu.as_ref().map_or(&self.view.scope, |menu| &menu.behind.scope) else { return None };
+        if self.ext_filters.len() < 2 {
+            return None;
+        }
+        let shown = self.shown_filter(ext, command);
+        let at = self.ext_filters.iter().position(|option| option.id == shown)?;
+        Some((self.ext_filters[at].title.clone(), at > 0))
+    }
+
+    /// Whether the filter drop-down's menu is the one open.
+    pub fn filter_menu_open(&self) -> bool {
+        self.menu.is_some() && matches!(&self.view.scope, Scope::Actions { of } if of == ui::FILTER_MENU_TITLE)
+    }
+
+    /// Narrows the list showing to a filter, and asks for it again.
+    fn choose_filter(&mut self, id: String) {
+        let Some((ext, command, _)) = self.open_extension_list() else { return };
+        self.leave_menu();
+        let key = format!("{ext}/{command}");
+        let first = self.ext_filters.first().map(|option| option.id.clone()).unwrap_or_default();
+        if id == first {
+            self.ext_filter.remove(&key);
+        } else {
+            self.ext_filter.insert(key, id);
+        }
+        self.view.reset_position();
+        self.refresh_results();
+        self.redraw();
     }
 
     /// The extension whose list is showing, behind a menu or not, and the text typed in it.
@@ -627,7 +731,7 @@ impl App {
                     self.report(&message);
                 }
             }
-            EventKind::Said(Message::Items { id, items, empty }) => {
+            EventKind::Said(Message::Items { id, items, empty, filters }) => {
                 if !waited_on(self, id) || !showing {
                     return;
                 }
@@ -641,10 +745,8 @@ impl App {
                     return;
                 }
                 let Scope::Extension { command, .. } = self.view.scope.clone() else { return };
-                let mut rows = Vec::with_capacity(items.len());
-                for item in items {
-                    rows.push(self.extension_row(&event.ext, installed.as_ref(), &command, item));
-                }
+                self.ext_filters = filters;
+                let mut rows = self.extension_rows(&event.ext, installed.as_ref(), &command, items);
                 if rows.is_empty() {
                     rows.push(Row::info(empty.unwrap_or_else(|| "Nothing found".into()), "", GLYPH_INFO));
                 }
@@ -706,16 +808,17 @@ impl App {
             ActionKind::SetQuery(text) => self.execute(Op::SetQuery(text)),
             ActionKind::Callback(action_id) => {
                 let query = self.open_extension_list().map(|(_, _, query)| query).unwrap_or_default();
+                let filter = self.chosen_filter(&ext, &command);
                 self.leave_menu();
                 if let Some(builtin) = BuiltinExt::from_id(&ext).filter(|builtin| builtin.is_provider()) {
                     self.ext_requests += 1;
                     let id = self.ext_requests;
                     self.ext_waiting = Some((ext, id));
                     if self.previewing {
-                        let said = crate::providers::preview(builtin, &command, id, &query, &self.dir);
+                        let said = crate::providers::preview(builtin, &command, id, &query, &filter, &self.dir);
                         self.on_extension(Event { ext: builtin.id().to_string(), run: 0, kind: EventKind::Said(said) });
                     } else {
-                        self.providers.action(builtin, &command, &item, &action_id, id, &query, self.send, WM_ORBIT_EXTENSION);
+                        self.providers.action(builtin, &command, &item, &action_id, id, &query, &filter, self.send, WM_ORBIT_EXTENSION);
                         self.status = Some(if action_id == "read" { "Marking as read\u{2026}".into() } else { "Refreshing\u{2026}".into() });
                     }
                     self.redraw();
@@ -724,7 +827,7 @@ impl App {
                 let Some(installed) = self.installed(&ext) else { return };
                 self.ext_requests += 1;
                 let id = self.ext_requests;
-                let request = Request::Action { id, command, item, action: action_id, query };
+                let request = Request::Action { id, command, item, action: action_id, query, filter };
                 match self.runners.send(&installed, &request, self.send, WM_ORBIT_EXTENSION) {
                     Ok(_) => self.ext_waiting = Some((ext, id)),
                     Err(why) => self.report(&format!("{} couldn't start. {why}", installed.manifest.name)),

@@ -382,9 +382,9 @@ A click on the alias opens a box over it: Enter keeps it, Esc puts it back, and 
 
 ## Orbit draws its own symbols
 
-**Decision.** The symbols on rows, tiles, menus and key caps are drawn by Orbit itself (`symbols.rs`), as a few strokes each on a 24-unit grid, rather than taken from the Windows icon font. Strokes are 2 units wide, or 2.4 on a tinted tile, and never thinner than a pixel and a quarter, so small ones don't go faint. They keep the icon font's code points, and anything Orbit hasn't drawn still comes from the font, though every symbol Orbit names is drawn: the test `every_symbol_orbit_uses_is_drawn` lists them. Extensions, Import and Check for Updates came from the font until the owner asked for the weak icons to be improved; Extensions is drawn as blocks with one being added, since a puzzle piece read as a mug when small. Settings uses the same symbols, in the same icon style, for its pages and extensions.
+**Decision.** The symbols on rows, tiles, menus and key caps are drawn by Orbit itself (`symbols.rs`), as a few strokes each on a 24-unit grid, rather than taken from the Windows icon font. Strokes are 2 units wide, or 2.4 on a tinted tile, and never thinner than a pixel and a quarter, so small ones don't go faint. They keep the icon font's code points, and anything Orbit hasn't drawn still comes from the font, though every symbol Orbit names is drawn: the test `every_symbol_orbit_uses_is_drawn` lists them. Extensions, Import and Check for Updates came from the font until the owner asked for the weak icons to be improved; Extensions is drawn as blocks with one being added, since a puzzle piece read as a mug when small. Settings uses the same symbols, in the same icon style, for its pages and extensions. In a Ctrl+K menu each action has a symbol for what it does: open is an arrow out of a box, a command opens with its own symbol, and copying a link, a reference or a branch name shows a link, a # and a branch rather than three copy symbols. Extensions name theirs with an action's `icon`; without one, the kind of action chooses. The test `each_action_in_a_menu_has_its_own_symbol` keeps the common menus free of repeats. Every corner is rounded, as the launcher's panels are: an outline of 14 units or more turns its corners on a radius of about 3.5 units, small blocks about 2.2, and a symbol drawn as points has its corners cut back and bent round (`soften`). Smaller than that reads as square at the 15 pixels a menu draws them. Symbols stay simple enough to read at that size: a keyboard is four keys and a space bar, not two rows, a gear has six teeth, and End task is a cross in a circle.
 
-**Why.** The owner found the font's symbols too thin, in menus as well as on tiles.
+**Why.** The owner found the font's symbols too thin, in menus as well as on tiles. Later they found the Ctrl+K menus showed two symbols for five actions, a play triangle for anything opened or run and the copy symbol for every copy, and asked for each to say what it does. Then they found some still square and sharp next to the rest of the app, the folder and End task's cross most of all.
 
 ## End task is in a running app's menu
 
@@ -454,7 +454,7 @@ A click on the alias opens a box over it: Enter keeps it, Esc puts it back, and 
 
 ## What comes with Orbit is extensions too
 
-**Decision.** Everything, 1Password, Ente Auth, Weather, Speed Test, GitHub and AI Usage are listed on the Extensions page with any from folders, each with a switch, in place of the old Integrations page and the General page's weather switch. Turning one off removes its commands from the catalog, keyword jumps and Settings' Search page, and stops anything of it that runs. GitHub and AI Usage are off until turned on. Their ids are reserved, so a folder extension can't take one. GitHub and AI Usage answer in Orbit's own process, on a thread, with the same items, actions and messages a folder extension sends, so the launcher draws and handles them the same way. Items may carry up to three meters, which AI Usage uses. Every command, built in or from a folder, can have an alias and a hotkey. For a command that opens a list, and Everything, the alias is its keyword, set on the Extensions page, the Search page or with Set alias in the launcher.
+**Decision.** Everything, 1Password, Ente Auth, Weather, Speed Test, GitHub and AI Usage (since removed, below) are listed on the Extensions page with any from folders, each with a switch, in place of the old Integrations page and the General page's weather switch. Turning one off removes its commands from the catalog, keyword jumps and Settings' Search page, and stops anything of it that runs. GitHub and AI Usage are off until turned on. Their ids are reserved, so a folder extension can't take one. GitHub and AI Usage answer in Orbit's own process, on a thread, with the same items, actions and messages a folder extension sends, so the launcher draws and handles them the same way. Items may carry up to three meters, which AI Usage uses. Every command, built in or from a folder, can have an alias and a hotkey. For a command that opens a list, and Everything, the alias is its keyword, set on the Extensions page, the Search page or with Set alias in the launcher.
 
 GitHub goes through GitHub's own `gh`, never a token of Orbit's, and when `gh` has its own sign-in it is run without `GITHUB_TOKEN` and `GH_TOKEN`, since an old one in the environment makes every request fail. AI Usage reads Claude Code's and Codex's sign-ins and sends each only to its own service. It never renews them, because renewing would sign the app out, and when OpenAI doesn't answer it falls back to Codex's own session log.
 
@@ -462,7 +462,7 @@ GitHub goes through GitHub's own `gh`, never a token of Orbit's, and when `gh` h
 
 ## Things left out on purpose
 
-No AI (AI Usage only reads how much of other services' limits you've used), cloud sync, embedded web server, driver or privileged daemon, as the brief requires. There was no plugin framework in the first version either; 1.1 added extensions as separate programs (above), with no scripting runtime inside Orbit. No periodic rescans: the app index is refreshed when asked or at start if stale.
+No AI, cloud sync, embedded web server, driver or privileged daemon, as the brief requires. There was no plugin framework in the first version either; 1.1 added extensions as separate programs (above), with no scripting runtime inside Orbit. No periodic rescans: the app index is refreshed when asked or at start if stale.
 
 ## Orbit updates itself from its GitHub releases
 
@@ -495,3 +495,33 @@ No AI (AI Usage only reads how much of other services' limits you've used), clou
 **Why.** The owner found many quicklinks without icons on a work laptop, where most links are internal, and asked for internal sites to have icons too, and for "no icon" not to be remembered, so that a site that was down or out of reach is tried again, and editing a link fetches its icon afresh. Of 50 common sites, 33 had icons before; 44 do after. Most of the rest came from icons kept on a site's own file server (Discord, Dropbox, Asana), sites that redirect to another of their own domains (notion.so to notion.com, OneDrive to microsoft.com), sites that turn away a request naming only `Orbit`, and an icon file Windows wouldn't read whole (Trello).
 
 **Cost.** Asking an internal site reveals its name to the DNS server of whatever network you're on, as opening the link would. On another network the same private name or address may be someone else's device, so a link with no icon yet could be given that device's icon until it's saved again. An internal site that needs your Windows sign-in still gives no icon, since Orbit never sends one: the sign-in could reach a device pretending to be the site. Not checking certificates is safe only because nothing in the request is secret and an icon is all that's read back. A site's file server now sees your IP address when its page names an icon there. Sites behind bot protection (cloudflare.com, openai.com), sign-in-only pages (Outlook, Google Calendar) and pages that set their icon by script (the Azure portal) still get the plain link symbol.
+
+## AI Usage is gone, and GitHub's lists say where things stand
+
+**Decision.** The AI Usage extension is removed, with its code, its card in Settings and its setting; a settings file that still has the setting loads as before. GitHub's issues and pull requests are asked for with one GraphQL query each through `gh api graphql`: the open ones that involve you and those closed in the last 14 days, which are shown under "Recently closed". A pull request carries up to two coloured tags, the most pressing first (Review requested, Conflicts, Checks failing, Changes requested, Draft, Approved, Checks running), and its symbol takes GitHub's colour for its state. A drop-down at the right of the search box, also opened with Ctrl+P, offers filters worked out from what was fetched: open ones only, yours, waiting for your review, needing attention, drafts, assigned to you, and each repository when there's more than one. It opens down from its button, with its search box at the top, rather than rising from the footer as the actions do. While any small menu is open, the footer keeps Back, since Esc closes the menu, and Ctrl+K is shown, lit, only for the actions it opened. Tags, a symbol's colour, sections and filters are part of the extension protocol, so a folder extension can use them too.
+
+**Why.** The owner found AI Usage didn't work and wasn't much use, and asked for pull requests to show their status, such as a merge conflict, with a recently closed section and filters such as by project. Once they had it, they asked for a way to leave the merged ones out, and for Back to stay in the footer while a menu is open. The REST search Orbit used before can't say whether a pull request merges cleanly or how its checks went. Filtering what's already fetched costs no extra requests and keeps the drop-down's counts true.
+
+## A command's alias and hotkey can be set while its extension is off
+
+**Decision.** On the Extensions page, a command's Alias and Hotkey can be changed while its extension is off. Giving one an alias or a hotkey turns the extension on, or, if its command-line tool is missing, says the setting is saved and which tool to install from its card.
+
+**Why.** The owner tried to give 1Password's command a hotkey with 1Password off, and only got a note to turn it on first, which read as the setting not working.
+
+## A click in a text box puts the caret where it lands
+
+**Decision.** The launcher's boxes are drawn by Orbit over hidden edit controls, so a click is mapped to a place in the text with DirectWrite's hit testing, on the same layout the text was drawn with: in the search box, a quicklink's blanks, a form's fields (one line or several) and a menu's search. Dragging selects, a double click selects a word, and Shift+click stretches the selection. A line too long for its box only slides when the caret would leave it, so a click doesn't jolt it. Clicks used to be passed to the hidden control, which measured with its own font, and form fields only took the focus, with the caret at the end.
+
+**Why.** The owner couldn't click into the middle of a quicklink's link to change part of it, and found the same in other boxes.
+
+## Orbit's menu is about Orbit
+
+**Decision.** The menu from the Orbit pill has Settings, Check for Updates, Help, Suspend Shortcuts, Restart and Quit, and shows them all without scrolling. Making a quicklink or a snippet, the emoji and the diagnostics are found by typing their names.
+
+**Why.** The owner asked for a simpler menu, without the snippet and quicklink creation it had.
+
+## Enter pastes an Ente code
+
+**Decision.** Enter on an Ente Auth code types it into the window the launcher was opened over, as key presses, so the code never goes on the clipboard. Ctrl+Enter copies it, as Enter used to. Where it can't be typed, such as into an app running as administrator, it goes on the clipboard as a copied code does: kept out of clipboard history and cleared after 30 seconds, with a note saying so. 1Password still copies on Enter, since a password is often wanted somewhere other than where the launcher was opened.
+
+**Why.** The owner asked for Ente's default to be paste, with copy as the alternative. Typing rather than pasting keeps the code off the clipboard, and is likelier to work in sign-in pages that split a code into six boxes, though that hasn't been tried.

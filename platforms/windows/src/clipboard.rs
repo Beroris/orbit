@@ -664,6 +664,28 @@ pub static PASSWORD_CHECK_TICKS: std::sync::atomic::AtomicI64 = std::sync::atomi
 /// moved, 3 a modifier stayed down.
 pub static TYPING_STOPPED: AtomicU32 = AtomicU32::new(0);
 
+/// What became of a password or code that was to be typed.
+pub enum SecretTyped {
+    Typed,
+    /// It couldn't be typed there, so it's on the clipboard as a secret, with this sequence number.
+    OnClipboard(u32),
+    Failed,
+}
+
+/// Types a password or code into `target`, so it never goes near the clipboard. Where it can't be
+/// typed, such as into an app running as administrator, it goes on the clipboard as a secret
+/// instead, kept out of history, for the caller to clear later.
+pub fn type_secret(target: HWND, text: &str) -> SecretTyped {
+    let typed = wait_for_foreground(target) && !target_is_elevated(target) && wait_for_modifiers_released() && still_focused(target) && type_text(text, target);
+    if typed {
+        return SecretTyped::Typed;
+    }
+    match write_secret(text) {
+        Some(sequence) => SecretTyped::OnClipboard(sequence),
+        None => SecretTyped::Failed,
+    }
+}
+
 fn copy_instead(request: &InsertRequest) -> InsertOutcome {
     if write_formatted(&request.text, &request.formats) { InsertOutcome::CopiedInstead } else { InsertOutcome::Failed }
 }

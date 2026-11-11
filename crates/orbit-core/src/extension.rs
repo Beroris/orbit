@@ -174,11 +174,27 @@ pub enum Request {
     /// Sent once, when the program starts.
     Hello { orbit: String, protocol: u32 },
     /// The text in the search box changed, or the command was opened (with an empty query).
-    Search { id: u64, command: String, query: String },
+    /// `filter` is the id of the filter chosen from those the last answer offered, if one was.
+    Search {
+        id: u64,
+        command: String,
+        query: String,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        filter: String,
+    },
     /// A `run` command was chosen.
     Run { id: u64, command: String },
-    /// A `callback` action was chosen on an item.
-    Action { id: u64, command: String, item: String, action: String, query: String },
+    /// A `callback` action was chosen on an item. `query` and `filter` are the list's, so that an
+    /// answer with items can be for the same search.
+    Action {
+        id: u64,
+        command: String,
+        item: String,
+        action: String,
+        query: String,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        filter: String,
+    },
 }
 
 impl Request {
@@ -211,10 +227,19 @@ pub struct ItemAction {
     pub kind: ActionKind,
     /// A key combination shown beside it in the menu, as the extension asked.
     pub shortcut: Option<String>,
+    /// Its symbol in the menu, by name: one of [`ACTION_ICONS`]. Without one, or with a name Orbit
+    /// doesn't know, its kind chooses.
+    pub icon: Option<String>,
 }
 
+/// The symbols an action can name for itself in the menu.
+pub const ACTION_ICONS: [&str; 30] = [
+    "open", "globe", "link", "hash", "branch", "terminal", "copy", "paste", "text", "folder", "file", "image", "note", "edit", "trash",
+    "check", "refresh", "search", "star", "pin", "tag", "person", "key", "clock", "download", "play", "add", "eye-off", "settings", "swap",
+];
+
 /// One row in an extension's list.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Item {
     pub id: String,
     pub title: String,
@@ -229,6 +254,71 @@ pub struct Item {
     /// Small bars on the right of the row, such as how much of a limit is used. They take the
     /// accessory's place.
     pub meters: Vec<Meter>,
+    /// Words in coloured pills on the right, before the accessory, such as "Conflicts".
+    pub tags: Vec<Tag>,
+    /// A colour for the row's symbol, when it has no picture of its own, such as green for a pull
+    /// request that's open.
+    pub tint: Option<Tone>,
+    /// The heading it's listed under. A heading is shown where it changes from the row before.
+    pub section: String,
+    /// The filters it's shown under, for a list Orbit makes itself, which filters for itself. An
+    /// extension from a folder is sent the filter and answers with what it covers.
+    pub facets: Vec<String>,
+}
+
+/// One of a few colours a tag or symbol can take, each drawn to read on light and dark.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Tone {
+    #[default]
+    Grey,
+    Green,
+    Red,
+    Orange,
+    Purple,
+    Blue,
+}
+
+impl Tone {
+    /// "green", "red" and so on. Anything else is grey.
+    pub fn parse(name: &str) -> Tone {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "green" => Tone::Green,
+            "red" => Tone::Red,
+            "orange" | "amber" | "yellow" => Tone::Orange,
+            "purple" | "violet" => Tone::Purple,
+            "blue" => Tone::Blue,
+            _ => Tone::Grey,
+        }
+    }
+}
+
+/// A word or two in a coloured pill, such as "Draft" or "Checks failing".
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tag {
+    pub text: String,
+    pub tone: Tone,
+}
+
+impl Tag {
+    pub fn new(text: &str, tone: Tone) -> Tag {
+        Tag { text: text.into(), tone }
+    }
+}
+
+/// The most tags one item may show.
+pub const MAX_TAGS: usize = 3;
+/// The most filters one answer may offer.
+pub const MAX_FILTERS: usize = 60;
+
+/// One way to narrow a list, offered in the drop-down at the right of the search box.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FilterOption {
+    /// Sent back in the next search when it's chosen. The first one offered is "everything", and
+    /// its id is usually empty.
+    pub id: String,
+    pub title: String,
+    /// A little more, such as how many rows it covers.
+    pub subtitle: String,
 }
 
 /// A bar that is filled part of the way, with a word or two on it, such as "Week 85%".
@@ -245,8 +335,8 @@ pub const MAX_METERS: usize = 3;
 /// What an extension says to Orbit.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
-    /// The list for a search, replacing what's shown.
-    Items { id: u64, items: Vec<Item>, empty: Option<String> },
+    /// The list for a search, replacing what's shown, and the filters it can be narrowed by.
+    Items { id: u64, items: Vec<Item>, empty: Option<String>, filters: Vec<FilterOption> },
     /// A `run` or `callback` finished. `close` hides the launcher.
     Done { id: u64, message: Option<String>, close: bool },
     Error { id: u64, message: String },
@@ -322,7 +412,8 @@ fn parse_action(value: &Value) -> Option<ItemAction> {
         title
     };
     let shortcut = value.get("shortcut").and_then(Value::as_str).map(|keys| keys.chars().take(24).collect());
-    Some(ItemAction { title, kind, shortcut })
+    let icon = value.get("icon").and_then(Value::as_str).map(|name| name.trim().to_ascii_lowercase()).filter(|name| ACTION_ICONS.contains(&name.as_str()));
+    Some(ItemAction { title, kind, shortcut, icon })
 }
 
 /// A meter: `{"label": "Week", "value": 0.85}`. A value outside 0 to 1 is brought inside.
@@ -357,7 +448,31 @@ fn parse_item(value: &Value, at: usize) -> Option<Item> {
         icon: raw(value, "icon").map(|icon| icon.trim().to_string()).filter(|icon| !icon.is_empty()),
         actions,
         meters: value.get("meters").and_then(Value::as_array).map(|list| list.iter().filter_map(parse_meter).take(MAX_METERS).collect()).unwrap_or_default(),
+        tags: value.get("tags").and_then(Value::as_array).map(|list| list.iter().filter_map(parse_tag).take(MAX_TAGS).collect()).unwrap_or_default(),
+        tint: tone_of(value),
+        section: text(value, "section", 60),
+        facets: Vec::new(),
     })
+}
+
+/// `"color": "green"`, or the British spelling.
+fn tone_of(value: &Value) -> Option<Tone> {
+    value.get("color").or_else(|| value.get("colour")).and_then(Value::as_str).map(Tone::parse)
+}
+
+/// A tag: `{"text": "Draft", "color": "grey"}`. One with no words is left out.
+fn parse_tag(value: &Value) -> Option<Tag> {
+    let words = text(value, "text", 24);
+    (!words.trim().is_empty()).then(|| Tag { text: words, tone: tone_of(value).unwrap_or_default() })
+}
+
+/// A filter: `{"id": "repo:o/r", "title": "o/r", "subtitle": "3"}`.
+fn parse_filter(value: &Value) -> Option<FilterOption> {
+    let title = text(value, "title", 60);
+    if title.trim().is_empty() {
+        return None;
+    }
+    Some(FilterOption { id: text(value, "id", 200), title, subtitle: text(value, "subtitle", 60) })
 }
 
 /// Reads one line from an extension. Lines that aren't a message Orbit knows are ignored, which
@@ -375,7 +490,8 @@ pub fn parse_message(line: &str) -> Option<Message> {
                 .map(|list| list.iter().take(MAX_ITEMS).enumerate().filter_map(|(at, item)| parse_item(item, at)).collect())
                 .unwrap_or_default();
             let empty = Some(text(&value, "empty", 120)).filter(|empty| !empty.trim().is_empty());
-            Some(Message::Items { id: id_of(&value), items, empty })
+            let filters = value.get("filters").and_then(Value::as_array).map(|list| list.iter().filter_map(parse_filter).take(MAX_FILTERS).collect()).unwrap_or_default();
+            Some(Message::Items { id: id_of(&value), items, empty, filters })
         }
         "done" => Some(Message::Done {
             id: id_of(&value),
@@ -455,12 +571,15 @@ mod tests {
 
     #[test]
     fn requests_are_single_lines() {
-        let line = Request::Search { id: 3, command: "search".into(), query: "blue\nlight \"x\"".into() }.to_line();
+        let line = Request::Search { id: 3, command: "search".into(), query: "blue\nlight \"x\"".into(), filter: String::new() }.to_line();
         assert_eq!(line.matches('\n').count(), 1, "{line}");
         assert!(line.ends_with('\n'));
         let back: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(back["type"], "search");
         assert_eq!(back["query"], "blue\nlight \"x\"");
+        assert!(back.get("filter").is_none(), "no filter chosen sends none, as before");
+        let filtered = Request::Search { id: 4, command: "search".into(), query: String::new(), filter: "repo:o/r".into() }.to_line();
+        assert_eq!(serde_json::from_str::<Value>(&filtered).unwrap()["filter"], "repo:o/r");
         let hello = Request::Hello { orbit: "1.1.0".into(), protocol: PROTOCOL }.to_line();
         assert!(hello.contains("\"type\":\"hello\""));
     }
@@ -470,8 +589,8 @@ mod tests {
         let line = r#"{"type":"items","id":7,"items":[
             {"id":"bt","title":"Bluetooth","subtitle":"Devices","accessory":"System","icon":"icons/bt.png",
              "actions":[{"title":"Open","type":"open","target":"ms-settings:bluetooth"},
-                        {"type":"copy","text":"ms-settings:bluetooth"},
-                        {"title":"Run it","type":"callback","id":"go","shortcut":"Ctrl+R"},
+                        {"type":"copy","text":"ms-settings:bluetooth","icon":" Link "},
+                        {"title":"Run it","type":"callback","id":"go","shortcut":"Ctrl+R","icon":"rocket"},
                         {"type":"open","target":"javascript:alert(1)"},
                         {"type":"open","target":"file:///C:/x"},
                         {"type":"reveal","path":"relative\\path"},
@@ -479,7 +598,7 @@ mod tests {
             {"title":""},
             {"title":"Second\nline", "id": 5}
         ]}"#;
-        let Some(Message::Items { id, items, empty }) = parse_message(&line.replace('\n', " ")) else { panic!() };
+        let Some(Message::Items { id, items, empty, .. }) = parse_message(&line.replace('\n', " ")) else { panic!() };
         assert_eq!(id, 7);
         assert_eq!(empty, None);
         assert_eq!(items.len(), 2, "an item with no title is dropped");
@@ -493,6 +612,9 @@ mod tests {
         );
         assert_eq!(first.actions[1].title, "Copy", "a missing title gets a plain one");
         assert_eq!(first.actions[2].shortcut.as_deref(), Some("Ctrl+R"));
+        assert_eq!(first.actions[1].icon.as_deref(), Some("link"), "a symbol is named in any case");
+        assert_eq!(first.actions[2].icon, None, "one Orbit doesn't draw is left to the kind");
+        assert_eq!(first.actions[0].icon, None);
         assert_eq!(items[1].title, "Second line", "control characters can't break a row");
         assert_eq!(items[1].id, "5");
     }
@@ -510,6 +632,28 @@ mod tests {
         assert_eq!(meters[2], Meter { label: String::new(), value: 0.0 });
         let Some(Message::Items { items, .. }) = parse_message(r#"{"type":"items","id":2,"items":[{"title":"Plain"}]}"#) else { panic!() };
         assert!(items[0].meters.is_empty(), "most items have none");
+    }
+
+    #[test]
+    fn tags_sections_and_filters_are_read() {
+        let line = r#"{"type":"items","id":3,"items":[
+            {"title":"Fix the build","section":"Open","color":"green","tags":[
+                {"text":"Conflicts","color":"red"},{"text":"Draft"},{"text":""},{"text":"Approved","colour":"GREEN"},{"text":"Fourth","color":"blue"}]},
+            {"title":"Old one","section":"Recently closed","tags":[{"text":"Merged","color":"purple"}]}],
+            "filters":[{"id":"","title":"All pull requests"},{"id":"repo:o/r","title":"o/r","subtitle":"2"},{"title":""}]}"#;
+        let Some(Message::Items { items, filters, .. }) = parse_message(&line.replace('\n', " ")) else { panic!() };
+        let tags = &items[0].tags;
+        assert_eq!(tags.len(), MAX_TAGS, "an empty tag is left out, and only the first few are kept");
+        assert_eq!(tags[0], Tag::new("Conflicts", Tone::Red));
+        assert_eq!(tags[1], Tag::new("Draft", Tone::Grey), "no colour is grey");
+        assert_eq!(tags[2].tone, Tone::Green, "either spelling, any case");
+        assert_eq!(items[0].tint, Some(Tone::Green));
+        assert_eq!(items[1].tint, None);
+        assert_eq!((items[0].section.as_str(), items[1].section.as_str()), ("Open", "Recently closed"));
+        assert_eq!(filters.len(), 2, "a filter with no title is left out");
+        assert_eq!(filters[1], FilterOption { id: "repo:o/r".into(), title: "o/r".into(), subtitle: "2".into() });
+        let Some(Message::Items { items, filters, .. }) = parse_message(r#"{"type":"items","id":2,"items":[{"title":"Plain"}]}"#) else { panic!() };
+        assert!(items[0].tags.is_empty() && items[0].section.is_empty() && filters.is_empty(), "all of it is optional");
     }
 
     #[test]

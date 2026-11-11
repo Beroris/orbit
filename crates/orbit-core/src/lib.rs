@@ -1,7 +1,6 @@
 //! Orbit's shared domain logic. No OS calls, no C code, no background work.
 
 pub mod action;
-pub mod ai_usage;
 pub mod bindings_text;
 pub mod builtin_ext;
 pub mod calc;

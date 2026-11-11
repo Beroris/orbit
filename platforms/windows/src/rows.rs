@@ -22,6 +22,8 @@ pub enum RowIcon {
     /// A file's own icon or an extension's picture, by its key in `files::icon_hash`, with the
     /// symbol to draw until it's there.
     File(u64, char),
+    /// A symbol in a colour an extension chose for the row, such as a pull request's state's.
+    Tinted(char, orbit_core::extension::Tone),
 }
 
 /// Where a clipboard image's thumbnail sits in the icon cache, away from any app's hash.
@@ -58,7 +60,6 @@ pub const GLYPH_COMMAND: char = '\u{E756}';
 pub const GLYPH_KEYBOARD: char = '\u{E765}';
 pub const GLYPH_STAR: char = '\u{E734}';
 pub const GLYPH_STAR_FILLED: char = '\u{E735}';
-pub const GLYPH_UP: char = '\u{E70E}';
 pub const GLYPH_DOWN: char = '\u{E70D}';
 pub const GLYPH_KEY: char = '\u{E8D7}';
 pub const GLYPH_REFRESH: char = '\u{E72C}';
@@ -92,8 +93,22 @@ pub const GLYPH_STOPWATCH: char = '\u{F10E}';
 pub const GLYPH_PICKER: char = '\u{F10F}';
 /// A branch, for GitHub.
 pub const GLYPH_GITHUB: char = '\u{F110}';
-/// A sparkle, for AI Usage.
-pub const GLYPH_AI: char = '\u{F111}';
+/// A funnel, for a list's filters.
+pub const GLYPH_FILTER: char = '\u{E71C}';
+// Symbols for what an action does, in the Ctrl+K menu.
+pub const GLYPH_OPEN: char = '\u{E8A7}';
+pub const GLYPH_HASH: char = '\u{F111}';
+pub const GLYPH_PASTE: char = '\u{F112}';
+pub const GLYPH_PERSON: char = '\u{E77B}';
+pub const GLYPH_CLOCK: char = '\u{E823}';
+pub const GLYPH_SWAP: char = '\u{E8AB}';
+pub const GLYPH_RESET: char = '\u{E7A7}';
+pub const GLYPH_NEW_WINDOW: char = '\u{E78B}';
+pub const GLYPH_OPEN_WITH: char = '\u{E7AC}';
+pub const GLYPH_TEXT: char = '\u{E8D2}';
+pub const GLYPH_PAUSE: char = '\u{E769}';
+pub const GLYPH_ARROW_UP: char = '\u{E74A}';
+pub const GLYPH_ARROW_DOWN: char = '\u{E74B}';
 
 /// The symbol of an extension that comes with Orbit.
 pub fn extension_glyph(ext: orbit_core::builtin_ext::BuiltinExt) -> char {
@@ -105,30 +120,44 @@ pub fn extension_glyph(ext: orbit_core::builtin_ext::BuiltinExt) -> char {
         BuiltinExt::Weather => GLYPH_WEATHER,
         BuiltinExt::SpeedTest => GLYPH_SPEED,
         BuiltinExt::GitHub => GLYPH_GITHUB,
-        BuiltinExt::AiUsage => GLYPH_AI,
     }
 }
 
-/// A command's colour, as a light shade for dark backgrounds and a deep one for light. Coloured
-/// symbols and tinted tiles are drawn in it, so commands can be told apart at a glance.
+// The colours symbols come in, each a light shade for dark backgrounds and a deep one for light.
+const BLUE: (Rgb, Rgb) = (Rgb(96, 165, 250), Rgb(37, 84, 220));
+const SKY: (Rgb, Rgb) = (Rgb(56, 196, 248), Rgb(14, 104, 206));
+const WEATHER: (Rgb, Rgb) = (Rgb(125, 211, 252), Rgb(37, 99, 235));
+const YELLOW: (Rgb, Rgb) = (Rgb(253, 214, 64), Rgb(212, 150, 8));
+const ORANGE: (Rgb, Rgb) = (Rgb(252, 170, 82), Rgb(196, 96, 8));
+const VIOLET: (Rgb, Rgb) = (Rgb(176, 148, 252), Rgb(118, 50, 228));
+const PURPLE: (Rgb, Rgb) = (Rgb(192, 132, 252), Rgb(126, 34, 206));
+const INDIGO: (Rgb, Rgb) = (Rgb(139, 150, 250), Rgb(72, 60, 214));
+const TEAL: (Rgb, Rgb) = (Rgb(52, 218, 196), Rgb(13, 130, 140));
+const GREEN: (Rgb, Rgb) = (Rgb(86, 222, 136), Rgb(22, 140, 78));
+const EMERALD: (Rgb, Rgb) = (Rgb(64, 216, 160), Rgb(5, 122, 100));
+const ROSE: (Rgb, Rgb) = (Rgb(252, 122, 150), Rgb(208, 28, 84));
+const RED: (Rgb, Rgb) = (Rgb(250, 120, 120), Rgb(196, 30, 46));
+const FUCHSIA: (Rgb, Rgb) = (Rgb(240, 134, 230), Rgb(178, 36, 190));
+// Grey, as settings usually are, though a cool grey rather than a dull one.
+const SLATE: (Rgb, Rgb) = (Rgb(166, 178, 198), Rgb(68, 82, 106));
+const GRAPHITE: (Rgb, Rgb) = (Rgb(122, 130, 146), Rgb(28, 33, 42));
+
+/// The colour an extension asked for, such as for a pull request's state.
+pub fn tone_colors(tone: orbit_core::extension::Tone) -> (Rgb, Rgb) {
+    use orbit_core::extension::Tone;
+    match tone {
+        Tone::Grey => SLATE,
+        Tone::Green => GREEN,
+        Tone::Red => RED,
+        Tone::Orange => ORANGE,
+        Tone::Purple => PURPLE,
+        Tone::Blue => BLUE,
+    }
+}
+
+/// A command's colour. Coloured symbols and tinted tiles are drawn in it, so commands can be told
+/// apart at a glance.
 pub fn tile_colors(glyph: char) -> (Rgb, Rgb) {
-    const BLUE: (Rgb, Rgb) = (Rgb(96, 165, 250), Rgb(37, 84, 220));
-    const SKY: (Rgb, Rgb) = (Rgb(56, 196, 248), Rgb(14, 104, 206));
-    const WEATHER: (Rgb, Rgb) = (Rgb(125, 211, 252), Rgb(37, 99, 235));
-    const YELLOW: (Rgb, Rgb) = (Rgb(253, 214, 64), Rgb(212, 150, 8));
-    const VIOLET: (Rgb, Rgb) = (Rgb(176, 148, 252), Rgb(118, 50, 228));
-    const PURPLE: (Rgb, Rgb) = (Rgb(192, 132, 252), Rgb(126, 34, 206));
-    const INDIGO: (Rgb, Rgb) = (Rgb(139, 150, 250), Rgb(72, 60, 214));
-    const TEAL: (Rgb, Rgb) = (Rgb(52, 218, 196), Rgb(13, 130, 140));
-    const GREEN: (Rgb, Rgb) = (Rgb(86, 222, 136), Rgb(22, 140, 78));
-    const EMERALD: (Rgb, Rgb) = (Rgb(64, 216, 160), Rgb(5, 122, 100));
-    const ROSE: (Rgb, Rgb) = (Rgb(252, 122, 150), Rgb(208, 28, 84));
-    const RED: (Rgb, Rgb) = (Rgb(250, 120, 120), Rgb(196, 30, 46));
-    const FUCHSIA: (Rgb, Rgb) = (Rgb(240, 134, 230), Rgb(178, 36, 190));
-    // Grey, as settings usually are, though a cool grey rather than a dull one.
-    const SLATE: (Rgb, Rgb) = (Rgb(166, 178, 198), Rgb(68, 82, 106));
-    const GRAPHITE: (Rgb, Rgb) = (Rgb(122, 130, 146), Rgb(28, 33, 42));
-    const ORANGE: (Rgb, Rgb) = (Rgb(253, 170, 96), Rgb(222, 82, 24));
     match glyph {
         GLYPH_NOTE => YELLOW,
         GLYPH_SNIPPET | GLYPH_IMAGE => VIOLET,
@@ -147,7 +176,6 @@ pub fn tile_colors(glyph: char) -> (Rgb, Rgb) {
         GLYPH_CURRENCY => EMERALD,
         GLYPH_WEATHER => WEATHER,
         GLYPH_GITHUB => GRAPHITE,
-        GLYPH_AI => ORANGE,
         GLYPH_LINK | GLYPH_FOLDER | GLYPH_EDIT | GLYPH_REFRESH => BLUE,
         GLYPH_WEB | GLYPH_SEARCH | GLYPH_KEY => SKY,
         GLYPH_PIN | GLYPH_TAG => ROSE,
@@ -220,8 +248,9 @@ pub enum RowSource {
     Colour(orbit_core::colour::Colour),
     /// A file or folder Everything found.
     File { path: String, is_folder: bool },
-    /// An item in an extension's list, with everything it offers to do, and the meters it shows.
-    Extension { ext: String, command: String, item: String, actions: Vec<ItemAction>, meters: Vec<orbit_core::extension::Meter> },
+    /// An item in an extension's list, with everything it offers to do, and the meters and tags it
+    /// shows.
+    Extension { ext: String, command: String, item: String, actions: Vec<ItemAction>, meters: Vec<orbit_core::extension::Meter>, tags: Vec<orbit_core::extension::Tag> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -338,6 +367,8 @@ pub enum Op {
     RefreshVault(Tool),
     /// Fetch one value and put it on the clipboard.
     CopySecret { tool: Tool, id: String, field: Field },
+    /// Fetch one value and type it into the window the launcher was opened over.
+    PasteSecret { tool: Tool, id: String, field: Field },
     /// A command from a menu, as if it had been searched for and run.
     RunBuiltin(Builtin),
     EmojiPaste(u16),
@@ -392,6 +423,10 @@ pub enum Op {
     ExtAction { ext: String, command: String, item: String, action: ItemAction },
     /// Settings, on the Extensions page.
     OpenExtensionsSettings,
+    /// The drop-down of ways to narrow an extension's list.
+    OpenFilterMenu,
+    /// Narrow the extension's list showing to the filter with this id.
+    ExtFilter(String),
 }
 
 /// Short labels for the footer: what Enter and Ctrl+Enter do on this row.
@@ -419,6 +454,9 @@ pub fn primary_label(op: &Op) -> &'static str {
         Op::CopySecret { field: Field::Password, .. } => "Copy password",
         Op::CopySecret { field: Field::Username, .. } => "Copy username",
         Op::CopySecret { field: Field::OneTimeCode, .. } => "Copy code",
+        Op::PasteSecret { field: Field::Password, .. } => "Paste password",
+        Op::PasteSecret { field: Field::Username, .. } => "Paste username",
+        Op::PasteSecret { field: Field::OneTimeCode, .. } => "Paste code",
         Op::EmojiPaste(_) => "Paste",
         Op::EmojiCopy(_) => "Copy",
         Op::NewLinkFor(_) => "Save",
@@ -447,6 +485,8 @@ pub fn primary_label(op: &Op) -> &'static str {
         Op::EverythingStart => "Start",
         Op::EverythingRetry => "Try again",
         Op::OpenExtensionsSettings => "Open Settings",
+        Op::OpenFilterMenu => "Filter",
+        Op::ExtFilter(_) => "Show",
         Op::ExtAction { action, .. } => match action.kind {
             ActionKind::Open(_) => "Open",
             ActionKind::Reveal(_) => "Show in folder",
@@ -457,6 +497,91 @@ pub fn primary_label(op: &Op) -> &'static str {
         },
         _ => "Run",
     }
+}
+
+/// The symbol for what an op does, for its row in a menu.
+pub fn op_glyph(op: &Op) -> char {
+    match op {
+        Op::RunItem { .. } | Op::OpenUrl(_) | Op::OpenLink { .. } | Op::ClipOpen(_) | Op::OpenVault(_) | Op::OpenFile(_) => GLYPH_OPEN,
+        Op::AskConfirm(_) | Op::Confirmed(_) | Op::SaveAlias { .. } | Op::NewLinkFor(_) => GLYPH_CHECK,
+        Op::Back => GLYPH_BACK,
+        Op::Copy(_) | Op::NoteCopy(_) | Op::SnippetCopy(_) | Op::ClipCopy(_) | Op::EmojiCopy(_) | Op::CopyFile(_) => GLYPH_COPY,
+        Op::FormOpenWith(_) | Op::OpenFileWith(_) => GLYPH_OPEN_WITH,
+        Op::NoteOpen(_) => GLYPH_NOTE,
+        Op::SnippetInsert(_) | Op::ClipPaste(_) | Op::EmojiPaste(_) | Op::PasteText(_) | Op::InsertPending | Op::PasteSecret { .. } => GLYPH_PASTE,
+        Op::ClipPastePlain(_) | Op::CopyPath(_) => GLYPH_TEXT,
+        Op::ConfirmHotkey | Op::RecordAgain => GLYPH_KEYBOARD,
+        Op::ClearHotkey(_) => GLYPH_DELETE,
+        Op::RefreshVault(_) | Op::EverythingRetry => GLYPH_REFRESH,
+        Op::CopySecret { field: Field::Password, .. } => GLYPH_KEY,
+        Op::CopySecret { field: Field::Username, .. } => GLYPH_PERSON,
+        Op::CopySecret { field: Field::OneTimeCode, .. } => GLYPH_CLOCK,
+        Op::LinkArgs { .. } | Op::LinkArgsNext => GLYPH_EDIT,
+        Op::Weather(_) => GLYPH_WEATHER,
+        Op::WeatherLookup(name) if name.trim().is_empty() => GLYPH_REFRESH,
+        Op::WeatherLookup(_) => GLYPH_SEARCH,
+        Op::SetQuery(_) => GLYPH_SWAP,
+        Op::SpeedTestInstall | Op::EverythingInstall => GLYPH_UPDATE,
+        Op::SpeedTestStop | Op::TimerCancel => GLYPH_END_TASK,
+        Op::TimerPause | Op::StopwatchPause => GLYPH_PAUSE,
+        Op::TimerAdd(_) => GLYPH_ADD,
+        Op::StopwatchReset => GLYPH_RESET,
+        Op::PickColour => GLYPH_PICKER,
+        Op::RevealFile(_) => GLYPH_FOLDER,
+        Op::OpenExtensionsSettings => GLYPH_SETTINGS,
+        Op::OpenFilterMenu => GLYPH_FILTER,
+        Op::ExtAction { action, .. } => action_glyph(action),
+        _ => GLYPH_PLAY,
+    }
+}
+
+/// An extension's action's symbol: the one it names, or else one for its kind.
+pub fn action_glyph(action: &ItemAction) -> char {
+    action.icon.as_deref().and_then(named_glyph).unwrap_or(match action.kind {
+        ActionKind::Open(_) => GLYPH_OPEN,
+        ActionKind::Reveal(_) => GLYPH_FOLDER,
+        ActionKind::Copy(_) => GLYPH_COPY,
+        ActionKind::Paste(_) => GLYPH_PASTE,
+        ActionKind::Callback(_) => GLYPH_PLAY,
+        ActionKind::SetQuery(_) => GLYPH_SEARCH,
+    })
+}
+
+/// The symbol for a name in [`orbit_core::extension::ACTION_ICONS`].
+fn named_glyph(name: &str) -> Option<char> {
+    Some(match name {
+        "open" => GLYPH_OPEN,
+        "globe" => GLYPH_WEB,
+        "link" => GLYPH_LINK,
+        "hash" => GLYPH_HASH,
+        "branch" => GLYPH_GITHUB,
+        "terminal" => GLYPH_COMMAND,
+        "copy" => GLYPH_COPY,
+        "paste" => GLYPH_PASTE,
+        "text" => GLYPH_TEXT,
+        "folder" => GLYPH_FOLDER,
+        "file" => GLYPH_FILE,
+        "image" => GLYPH_IMAGE,
+        "note" => GLYPH_NOTE,
+        "edit" => GLYPH_EDIT,
+        "trash" => GLYPH_DELETE,
+        "check" => GLYPH_CHECK,
+        "refresh" => GLYPH_REFRESH,
+        "search" => GLYPH_SEARCH,
+        "star" => GLYPH_STAR,
+        "pin" => GLYPH_PIN,
+        "tag" => GLYPH_TAG,
+        "person" => GLYPH_PERSON,
+        "key" => GLYPH_KEY,
+        "clock" => GLYPH_CLOCK,
+        "download" => GLYPH_UPDATE,
+        "play" => GLYPH_PLAY,
+        "add" => GLYPH_ADD,
+        "eye-off" => GLYPH_HIDE,
+        "settings" => GLYPH_SETTINGS,
+        "swap" => GLYPH_SWAP,
+        _ => return None,
+    })
 }
 
 /// Whether a file is a program, so it can be offered as administrator.
@@ -486,6 +611,8 @@ pub fn secondary_for(row: &Row, app_item_id: Option<&str>) -> Option<(&'static s
             let op = Op::ExtAction { ext: ext.clone(), command: command.clone(), item: item.clone(), action: action.clone() };
             (primary_label(&op), op)
         }),
+        // An Ente code pastes on Enter, so Ctrl+Enter copies it.
+        RowSource::Secret { tool: Tool::EnteAuth, id, .. } => Some(("Copy code", Op::CopySecret { tool: Tool::EnteAuth, id: id.clone(), field: Field::OneTimeCode })),
         RowSource::Plain | RowSource::Header | RowSource::Secret { .. } => None,
     }
 }
@@ -512,13 +639,18 @@ fn hotkey_rows(out: &mut Vec<Row>, row: &Row, choice: Option<HotkeyChoice>) {
 pub fn menu_for(row: &Row, app_item_id: Option<&str>, is_pinned: bool, hotkey: Option<HotkeyChoice>) -> Vec<Row> {
     let mut out = Vec::with_capacity(8);
     if let Some(primary) = &row.primary {
-        out.push(Row::op(primary_label(primary), "", GLYPH_PLAY, primary.clone()).with_keys("Enter"));
+        // A command opens with its own symbol, such as Settings' gear; anything else with what it does.
+        let glyph = match (&row.source, row.icon) {
+            (RowSource::Catalog { .. }, RowIcon::Glyph(glyph) | RowIcon::Tinted(glyph, _)) => glyph,
+            _ => op_glyph(primary),
+        };
+        out.push(Row::op(primary_label(primary), "", glyph, primary.clone()).with_keys("Enter"));
     }
     match &row.source {
         RowSource::Plain | RowSource::Header => {}
         RowSource::Catalog { key, .. } => {
             if let Some(id) = app_item_id {
-                out.push(Row::op("Open a new window", "", GLYPH_ADD, Op::AppNewWindow(id.to_string())).with_keys("Ctrl+Enter"));
+                out.push(Row::op("Open a new window", "", GLYPH_NEW_WINDOW, Op::AppNewWindow(id.to_string())).with_keys("Ctrl+Enter"));
                 out.push(Row::op("Run as administrator", "", GLYPH_SHIELD, Op::AppAsAdmin(id.to_string())).with_keys("Ctrl+Shift+Enter"));
                 out.push(Row::op("Open file location", "", GLYPH_FOLDER, Op::AppFolder(id.to_string())).with_keys("Ctrl+Shift+E"));
                 // No key for this one, so it can only be chosen on purpose.
@@ -529,8 +661,8 @@ pub fn menu_for(row: &Row, app_item_id: Option<&str>, is_pinned: bool, hotkey: O
             hotkey_rows(&mut out, row, hotkey);
             if is_pinned {
                 out.push(Row::op("Remove from favourites", "", GLYPH_STAR_FILLED, Op::TogglePin(key.clone())).with_keys("Ctrl+Shift+F"));
-                out.push(Row::op("Move up in favourites", "", GLYPH_UP, Op::MoveFavorite(key.clone(), -1)).with_keys("Ctrl+Shift+Up"));
-                out.push(Row::op("Move down in favourites", "", GLYPH_DOWN, Op::MoveFavorite(key.clone(), 1)).with_keys("Ctrl+Shift+Down"));
+                out.push(Row::op("Move up in favourites", "", GLYPH_ARROW_UP, Op::MoveFavorite(key.clone(), -1)).with_keys("Ctrl+Shift+Up"));
+                out.push(Row::op("Move down in favourites", "", GLYPH_ARROW_DOWN, Op::MoveFavorite(key.clone(), 1)).with_keys("Ctrl+Shift+Down"));
             } else {
                 out.push(Row::op("Add to favourites", "", GLYPH_STAR, Op::TogglePin(key.clone())).with_keys("Ctrl+Shift+F"));
             }
@@ -552,13 +684,13 @@ pub fn menu_for(row: &Row, app_item_id: Option<&str>, is_pinned: bool, hotkey: O
         }
         RowSource::Clip { id, pinned, kind, formatted } => {
             match kind {
-                ClipKind::Url => out.push(Row::op("Open in browser", "", GLYPH_WEB, Op::ClipOpen(*id)).with_keys("Ctrl+O")),
+                ClipKind::Url => out.push(Row::op("Open in browser", "", GLYPH_OPEN, Op::ClipOpen(*id)).with_keys("Ctrl+O")),
                 ClipKind::Image => out.push(Row::op("Open picture", "", GLYPH_IMAGE, Op::ClipOpen(*id)).with_keys("Ctrl+O")),
                 ClipKind::Files => out.push(Row::op("Open", "", GLYPH_FOLDER, Op::ClipOpen(*id)).with_keys("Ctrl+O")),
                 ClipKind::Text => {}
             }
             if *formatted {
-                out.push(Row::op("Paste as plain text", "", GLYPH_PLAY, Op::ClipPastePlain(*id)).with_keys("Ctrl+Shift+Enter"));
+                out.push(Row::op("Paste as plain text", "", GLYPH_TEXT, Op::ClipPastePlain(*id)).with_keys("Ctrl+Shift+Enter"));
             }
             out.push(Row::op("Copy", "", GLYPH_COPY, Op::ClipCopy(*id)).with_keys("Ctrl+Enter"));
             let label = if *pinned { "Unpin" } else { "Pin" };
@@ -568,11 +700,13 @@ pub fn menu_for(row: &Row, app_item_id: Option<&str>, is_pinned: bool, hotkey: O
         RowSource::Secret { tool, id, url } => {
             if *tool == Tool::OnePassword {
                 let copy = |field| Op::CopySecret { tool: *tool, id: id.clone(), field };
-                out.push(Row::op("Copy username", "", GLYPH_COPY, copy(Field::Username)));
-                out.push(Row::op("Copy one-time code", "", GLYPH_COPY, copy(Field::OneTimeCode)));
+                out.push(Row::op("Copy username", "", GLYPH_PERSON, copy(Field::Username)));
+                out.push(Row::op("Copy one-time code", "", GLYPH_CLOCK, copy(Field::OneTimeCode)));
                 if let Some(url) = url {
                     out.push(Row::op("Open website", url.clone(), GLYPH_WEB, Op::OpenUrl(url.clone())));
                 }
+            } else {
+                out.push(Row::op("Copy code", "", GLYPH_COPY, Op::CopySecret { tool: *tool, id: id.clone(), field: Field::OneTimeCode }).with_keys("Ctrl+Enter"));
             }
             out.push(Row::op("Refresh the list", "", GLYPH_REFRESH, Op::RefreshVault(*tool)).with_keys("Ctrl+R"));
         }
@@ -587,14 +721,14 @@ pub fn menu_for(row: &Row, app_item_id: Option<&str>, is_pinned: bool, hotkey: O
                     first.title = "Copy answer".into();
                     first.subtitle = answer.clone();
                 }
-                out.push(Row::op("Paste answer", "", GLYPH_CLIPBOARD, Op::PasteText(answer.clone())).with_keys("Ctrl+Enter"));
+                out.push(Row::op("Paste answer", "", GLYPH_PASTE, Op::PasteText(answer.clone())).with_keys("Ctrl+Enter"));
             }
             if let Some(other) = other {
                 let label = if *other_formatted { "Copy with formatting" } else { "Copy without formatting" };
-                out.push(Row::op(label, other.clone(), GLYPH_COPY, Op::Copy(other.clone())).with_keys("Ctrl+Shift+Enter"));
+                out.push(Row::op(label, other.clone(), GLYPH_TEXT, Op::Copy(other.clone())).with_keys("Ctrl+Shift+Enter"));
             }
             if let Some(reverse) = reverse {
-                out.push(Row::op("Convert the other way", "", GLYPH_REFRESH, Op::SetQuery(reverse.clone())).with_keys("Ctrl+S"));
+                out.push(Row::op("Convert the other way", "", GLYPH_SWAP, Op::SetQuery(reverse.clone())).with_keys("Ctrl+S"));
             }
         }
         RowSource::SpeedTest { summary, url } => {
@@ -602,25 +736,29 @@ pub fn menu_for(row: &Row, app_item_id: Option<&str>, is_pinned: bool, hotkey: O
                 out.push(Row::op("Copy results", "", GLYPH_COPY, Op::Copy(summary.clone())).with_keys("Ctrl+Enter"));
             }
             if let Some(url) = url {
-                out.push(Row::op("Open result on Speedtest.net", "", GLYPH_WEB, Op::OpenUrl(url.clone())).with_keys("Ctrl+O"));
+                out.push(Row::op("Open result on Speedtest.net", "", GLYPH_OPEN, Op::OpenUrl(url.clone())).with_keys("Ctrl+O"));
             }
-            out.push(Row::op("Ookla\u{2019}s End User License Agreement", "", GLYPH_WEB, Op::OpenUrl(crate::speedtest::EULA.into())));
-            out.push(Row::op("Ookla\u{2019}s Terms of Use", "", GLYPH_WEB, Op::OpenUrl(crate::speedtest::TERMS.into())));
-            out.push(Row::op("Ookla\u{2019}s Privacy Policy", "", GLYPH_WEB, Op::OpenUrl(crate::speedtest::PRIVACY.into())));
+            out.push(Row::op("Ookla\u{2019}s End User License Agreement", "", GLYPH_FILE, Op::OpenUrl(crate::speedtest::EULA.into())));
+            out.push(Row::op("Ookla\u{2019}s Terms of Use", "", GLYPH_FILE, Op::OpenUrl(crate::speedtest::TERMS.into())));
+            out.push(Row::op("Ookla\u{2019}s Privacy Policy", "", GLYPH_SHIELD, Op::OpenUrl(crate::speedtest::PRIVACY.into())));
         }
         RowSource::Clock { stopwatch: false, started, .. } => {
             if *started {
                 out.push(Row::op("Add 1 minute", "", GLYPH_ADD, Op::TimerAdd(60)));
                 out.push(Row::op("Add 5 minutes", "", GLYPH_ADD, Op::TimerAdd(300)));
-                out.push(Row::op("Cancel timer", "", GLYPH_DELETE, Op::TimerCancel).with_keys("Ctrl+Shift+Del"));
+                out.push(Row::op("Cancel timer", "", GLYPH_END_TASK, Op::TimerCancel).with_keys("Ctrl+Shift+Del"));
             }
         }
         RowSource::Clock { stopwatch: true, started, .. } => {
             if *started {
-                out.push(Row::op("Reset", "", GLYPH_REFRESH, Op::StopwatchReset).with_keys("Ctrl+Shift+Del"));
+                out.push(Row::op("Reset", "", GLYPH_RESET, Op::StopwatchReset).with_keys("Ctrl+Shift+Del"));
             }
         }
         RowSource::Colour(colour) => {
+            // The hex code first, with its own mark.
+            if let Some(first) = out.first_mut() {
+                first.icon = RowIcon::Glyph(GLYPH_HASH);
+            }
             out.push(Row::op("Copy RGB", colour.rgb(), GLYPH_COPY, Op::Copy(colour.rgb())).with_keys("Ctrl+Enter"));
             out.push(Row::op("Copy HSL", colour.hsl(), GLYPH_COPY, Op::Copy(colour.hsl())).with_keys("Ctrl+Shift+Enter"));
             out.push(Row::op("Pick another colour", "", GLYPH_PICKER, Op::PickColour));
@@ -631,9 +769,9 @@ pub fn menu_for(row: &Row, app_item_id: Option<&str>, is_pinned: bool, hotkey: O
                 out.push(Row::op("Run as administrator", "", GLYPH_SHIELD, Op::FileAsAdmin(path.clone())).with_keys("Ctrl+Shift+Enter"));
             }
             if !*is_folder {
-                out.push(Row::op("Open with\u{2026}", "", GLYPH_PLAY, Op::OpenFileWith(path.clone())).with_keys("Ctrl+O"));
+                out.push(Row::op("Open with\u{2026}", "", GLYPH_OPEN_WITH, Op::OpenFileWith(path.clone())).with_keys("Ctrl+O"));
             }
-            out.push(Row::op("Copy path", path.clone(), GLYPH_COPY, Op::CopyPath(path.clone())).with_keys("Ctrl+Shift+C"));
+            out.push(Row::op("Copy path", path.clone(), GLYPH_TEXT, Op::CopyPath(path.clone())).with_keys("Ctrl+Shift+C"));
             out.push(Row::op(if *is_folder { "Copy folder" } else { "Copy file" }, "To paste into a folder or an email", GLYPH_COPY, Op::CopyFile(path.clone())).with_keys("Ctrl+Shift+F"));
             if *is_folder {
                 out.push(Row::op("Open in Terminal", "", GLYPH_COMMAND, Op::TerminalHere(path.clone())).with_keys("Ctrl+Shift+T"));
@@ -644,14 +782,7 @@ pub fn menu_for(row: &Row, app_item_id: Option<&str>, is_pinned: bool, hotkey: O
             out.clear();
             for (at, action) in actions.iter().enumerate() {
                 let op = Op::ExtAction { ext: ext.clone(), command: command.clone(), item: item.clone(), action: action.clone() };
-                let glyph = match action.kind {
-                    ActionKind::Open(_) => GLYPH_PLAY,
-                    ActionKind::Reveal(_) => GLYPH_FOLDER,
-                    ActionKind::Copy(_) => GLYPH_COPY,
-                    ActionKind::Paste(_) => GLYPH_CLIPBOARD,
-                    ActionKind::Callback(_) => GLYPH_PLAY,
-                    ActionKind::SetQuery(_) => GLYPH_SEARCH,
-                };
+                let glyph = action_glyph(action);
                 let keys = match at {
                     0 => Some("Enter".to_string()),
                     1 => Some("Ctrl+Enter".to_string()),
@@ -866,6 +997,64 @@ mod tests {
     }
 
     #[test]
+    fn each_action_in_a_menu_has_its_own_symbol() {
+        let glyphs = |menu: Vec<Row>| -> Vec<(String, char)> {
+            menu.into_iter().map(|row| (row.title, if let RowIcon::Glyph(glyph) = row.icon { glyph } else { ' ' })).collect()
+        };
+        let check = |what: &str, menu: Vec<Row>| {
+            let shown = glyphs(menu);
+            for (at, (title, glyph)) in shown.iter().enumerate() {
+                assert_ne!(*glyph, ' ', "{what}: {title} has no symbol");
+                assert!(shown[..at].iter().all(|(_, other)| other != glyph), "{what}: {title} shares its symbol: {shown:?}");
+            }
+        };
+        // A pull request, as GitHub's list gives it.
+        let json = r#"{"data":{"viewer":{"login":"me"},"open":{"nodes":[{"number":1,"title":"Change","url":"https://github.com/o/r/pull/1","isDraft":false,"state":"OPEN","updatedAt":"2026-11-09T21:00:00Z","closedAt":null,"headRefName":"fix-1","mergeable":"MERGEABLE","reviewDecision":null,"author":{"login":"me"},"repository":{"nameWithOwner":"o/r"},"reviewRequests":{"nodes":[]},"commits":{"nodes":[]}}]},"closed":{"nodes":[]}}}"#;
+        let item = orbit_core::github::items("pulls", json, 1_794_268_800).unwrap().remove(0);
+        let first = item.actions[0].clone();
+        let pull = Row {
+            source: RowSource::Extension { ext: "github".into(), command: "pulls".into(), item: item.id.clone(), actions: item.actions, meters: Vec::new(), tags: Vec::new() },
+            primary: Some(Op::ExtAction { ext: "github".into(), command: "pulls".into(), item: item.id, action: first }),
+            ..Row::info("Change", "", GLYPH_GITHUB)
+        };
+        let shown = glyphs(menu_for(&pull, None, false, None));
+        assert_eq!(shown.iter().map(|(_, glyph)| *glyph).collect::<Vec<_>>(), [GLYPH_OPEN, GLYPH_LINK, GLYPH_HASH, GLYPH_GITHUB, GLYPH_REFRESH]);
+        check("pull request", menu_for(&pull, None, false, None));
+
+        let app = Row { source: RowSource::Catalog { item: 0, key: "app:x".into() }, primary: Some(Op::RunItem { item: 0, key: "app:x".into() }), kind: "Switch to", ..Row::info("x", "", GLYPH_NOTE) };
+        let hotkey = HotkeyChoice { action: Action::FocusOrLaunchApp { id: "x".into(), name: "x".into() }, current: Some("Hyper+C".into()) };
+        check("app", menu_for(&Row { icon: RowIcon::App(1), ..app.clone() }, Some("x"), true, Some(hotkey)));
+        let command = Row { icon: RowIcon::Glyph(GLYPH_SETTINGS), ..app };
+        assert_eq!(glyphs(menu_for(&command, None, false, None))[0].1, GLYPH_SETTINGS, "a command opens with its own symbol");
+
+        let login = Row {
+            source: RowSource::Secret { tool: Tool::OnePassword, id: "a".into(), url: Some("https://x.example".into()) },
+            primary: Some(Op::CopySecret { tool: Tool::OnePassword, id: "a".into(), field: Field::Password }),
+            ..Row::info("GitHub", "", GLYPH_KEY)
+        };
+        check("login", menu_for(&login, None, false, None));
+        for (path, is_folder) in [("C:\\x\\setup.exe", false), ("C:\\x", true)] {
+            let file = Row { source: RowSource::File { path: path.into(), is_folder }, primary: Some(Op::OpenFile(path.into())), ..Row::info("x", "", GLYPH_FILE) };
+            check(path, menu_for(&file, None, false, None));
+        }
+        let clip = Row { source: RowSource::Clip { id: 5, kind: ClipKind::Url, pinned: false, formatted: true }, primary: Some(Op::ClipPaste(5)), ..Row::info("x", "", GLYPH_CLIPBOARD) };
+        check("clip", menu_for(&clip, None, false, None));
+        let snippet = Row { source: RowSource::Snippet { id: 2 }, primary: Some(Op::SnippetInsert(2)), ..Row::info("s", "", GLYPH_SNIPPET) };
+        check("snippet", menu_for(&snippet, None, false, None));
+    }
+
+    #[test]
+    fn every_symbol_an_action_can_name_is_drawn() {
+        for name in orbit_core::extension::ACTION_ICONS {
+            let glyph = named_glyph(name).unwrap_or_else(|| panic!("{name} has no symbol"));
+            let action = ItemAction { title: "x".into(), kind: ActionKind::Callback("x".into()), shortcut: None, icon: Some(name.into()) };
+            assert_eq!(action_glyph(&action), glyph);
+        }
+        let plain = ItemAction { title: "x".into(), kind: ActionKind::Open("https://x.example".into()), shortcut: None, icon: None };
+        assert_eq!(action_glyph(&plain), GLYPH_OPEN, "with none named, its kind chooses");
+    }
+
+    #[test]
     fn menus_offer_a_hotkey_and_show_the_current_one() {
         let app = Row {
             source: RowSource::Catalog { item: 0, key: "app:x".into() },
@@ -896,11 +1085,12 @@ mod tests {
 
         let code = Row {
             source: RowSource::Secret { tool: Tool::EnteAuth, id: "b".into(), url: None },
-            primary: Some(Op::CopySecret { tool: Tool::EnteAuth, id: "b".into(), field: Field::OneTimeCode }),
+            primary: Some(Op::PasteSecret { tool: Tool::EnteAuth, id: "b".into(), field: Field::OneTimeCode }),
             ..Row::info("GitHub", "", GLYPH_KEY)
         };
         let titles: Vec<String> = menu_for(&code, None, false, None).into_iter().map(|row| row.title).collect();
-        assert_eq!(titles, ["Copy code", "Refresh the list"]);
+        assert_eq!(titles, ["Paste code", "Copy code", "Refresh the list"]);
+        assert_eq!(secondary_for(&code, None).map(|(label, _)| label), Some("Copy code"), "Ctrl+Enter copies it");
     }
 
     #[test]
