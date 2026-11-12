@@ -126,7 +126,14 @@ fn parse_args() -> Args {
             "--backdrop" => args.backdrop = iter.next().and_then(|t| ui::Backdrop::parse(&t.to_string_lossy())),
             // Draws one frame to a file and exits, without ever showing a window or taking focus.
             "--preview-frame" => {
-                args.preview = iter.next().map(|out| app::Preview { out: PathBuf::from(out), query: String::new(), actions: false, scope: None, select: 0, motion: None, step: 0 });
+                args.preview = iter.next().map(|out| app::Preview { out: PathBuf::from(out), query: String::new(), actions: false, scope: None, select: 0, hover: None, motion: None, step: 0 });
+            }
+            // Draws a row as if the pointer were over it.
+            "--preview-hover" => {
+                let index = iter.next().and_then(|t| t.to_string_lossy().parse().ok());
+                if let Some(preview) = &mut args.preview {
+                    preview.hover = index;
+                }
             }
             "--preview-select" => {
                 let index = iter.next().and_then(|t| t.to_string_lossy().parse().ok()).unwrap_or(0);
