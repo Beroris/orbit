@@ -198,6 +198,8 @@ pub struct Preview {
     pub scope: Option<String>,
     /// Which row to select before drawing.
     pub select: usize,
+    /// Which row to draw with the pointer over it.
+    pub hover: Option<usize>,
     /// A moment partway through a motion to draw instead, such as ("select", 40): what's moving,
     /// and how many milliseconds in.
     pub motion: Option<(String, u64)>,
@@ -360,7 +362,15 @@ pub struct App {
     index_recheck: bool,
     taskbar_created: u32,
     trim_after_ms: Option<u32>,
-    last_mouse: (i32, i32),
+    /// Where the pointer was on screen when it last moved, or when the launcher opened.
+    pointer_at: POINT,
+    /// The pointer has moved over the launcher since it opened or since the last key, so the row
+    /// under it is lit. A row under a still pointer isn't being pointed at.
+    pointing: bool,
+    /// The row last drawn with the pointer over it.
+    pub hovered_row: Option<usize>,
+    /// A preview's stand-in for the pointer, which isn't there.
+    pub preview_hover: Option<usize>,
     /// Where the footer's buttons were last drawn, and what each is called.
     pub footer_buttons: Vec<(RECT, &'static str)>,
     pub hovered_button: Option<&'static str>,
@@ -1014,7 +1024,10 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             index_recheck: false,
             taskbar_created,
             trim_after_ms: options.trim_after_ms,
-            last_mouse: (i32::MIN, i32::MIN),
+            pointer_at: POINT { x: i32::MIN, y: i32::MIN },
+            pointing: false,
+            hovered_row: None,
+            preview_hover: None,
             footer_buttons: Vec::new(),
             hovered_button: None,
             pressed_button: None,
@@ -1171,6 +1184,7 @@ impl App {
             WM_MOUSELEAVE => {
                 self.hovered_button = None;
                 self.pressed_button = None;
+                self.pointing = false;
                 self.redraw();
                 Some(LRESULT(0))
             }
@@ -1249,6 +1263,8 @@ impl App {
                 let delta = (wparam.0 >> 16) as i16 as i32;
                 let lines = if self.view.grid.is_some() { 1 } else { 2 };
                 self.view.scroll_by(if delta > 0 { -lines } else { lines });
+                // Scrolling is using the mouse, so what comes under the pointer is lit.
+                self.start_pointing();
                 self.redraw();
                 Some(LRESULT(0))
             }
@@ -1954,6 +1970,9 @@ impl App {
             }
             self.hovered_button = None;
             self.pressed_button = None;
+            // Wherever the pointer is, the first row stays chosen, and nothing is lit until it moves.
+            self.pointing = false;
+            let _ = GetCursorPos(&mut self.pointer_at);
             // It opens as it is, with nothing on its way from last time.
             self.motion.settle();
             ui::render(self);
@@ -2501,6 +2520,7 @@ impl App {
             }
             _ => {
                 self.status = None;
+                self.preview_hover = preview.hover;
                 // Drawn as it is, unless it's a moment partway through a motion that's wanted.
                 self.motion.settle();
                 match preview.motion.clone() {
@@ -2899,6 +2919,7 @@ impl App {
     }
 
     fn on_key(&mut self, vk: u16, t_key: i64) -> bool {
+        self.stop_pointing(vk);
         let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
         self.on_key_as(vk, ctrl, t_key)
     }
@@ -3960,23 +3981,69 @@ impl App {
             }
             self.redraw();
         }
-        // A window appearing under a still pointer must not steal the keyboard selection.
-        if self.last_mouse == (x, y) || self.last_mouse == (i32::MIN, i32::MIN) {
-            self.last_mouse = (x, y);
+        // Windows says the pointer moved when the launcher appears or moves under a still one,
+        // which isn't pointing at anything.
+        let mut at = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut at);
+        }
+        if at == self.pointer_at {
             return;
         }
-        self.last_mouse = (x, y);
-        if let Some(index) = self.row_under(x, y) {
-            if index != self.view.selected {
-                // What's under the pointer is on screen already, and moving over it mustn't scroll
-                // the list out from under the pointer.
-                let scroll = self.view.scroll;
-                self.view.select(index);
-                self.view.scroll = scroll;
-                self.after_selection_change();
-                self.redraw();
-            }
+        self.pointer_at = at;
+        // Pointing only lights a row. The selection stays where the keys put it until a click.
+        self.start_pointing();
+        if self.row_under(x, y) != self.hovered_row {
+            self.redraw();
         }
+    }
+
+    /// The pointer is in use, so the row under it is lit, until it leaves or a key is pressed.
+    fn start_pointing(&mut self) {
+        if self.pointing {
+            return;
+        }
+        self.pointing = true;
+        let mut track = TRACKMOUSEEVENT {
+            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: TME_LEAVE,
+            hwndTrack: self.main,
+            dwHoverTime: 0,
+        };
+        unsafe {
+            let _ = TrackMouseEvent(&mut track);
+        }
+    }
+
+    /// The keys are in use, so the row under the pointer stops being lit until it moves again.
+    /// Holding a modifier for a chord or a click doesn't count.
+    fn stop_pointing(&mut self, vk: u16) {
+        // Shift, Ctrl, Alt, Caps Lock, both Windows keys, and each side's Shift, Ctrl and Alt.
+        const MODIFIERS: [u16; 12] = [0x10, 0x11, 0x12, 0x14, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5];
+        if !self.pointing || MODIFIERS.contains(&vk) {
+            return;
+        }
+        self.pointing = false;
+        if self.hovered_row.is_some() {
+            self.redraw();
+        }
+    }
+
+    /// The row the pointer is over, if it's pointing at one now.
+    pub fn pointed_row(&self) -> Option<usize> {
+        if self.preview_hover.is_some() {
+            return self.preview_hover;
+        }
+        if !self.pointing || !self.visible {
+            return None;
+        }
+        let mut point = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut point);
+            let _ = ScreenToClient(self.main, &mut point);
+        }
+        let margin = ui::frame_margin(self.dpi);
+        self.row_under(point.x - margin, point.y - margin)
     }
 
     /// The launcher's size as last drawn.

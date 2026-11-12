@@ -128,6 +128,8 @@ const BLUR_TINT_LIGHT: u32 = 0x60F8_F6F6;
 // Layers over the glass, as how much of the overlay colour shows through.
 const ALPHA_DIVIDER: u8 = 20;
 const ALPHA_SELECTION: u8 = 22;
+/// Under the pointer: there to see, and plainly not the selection.
+const ALPHA_HOVER: u8 = 10;
 const ALPHA_PRESSED: u8 = 40;
 const ALPHA_KEYCAP: u8 = 8;
 const ALPHA_KEYCAP_ON_SELECTION: u8 = 16;
@@ -1045,6 +1047,7 @@ struct Paint<'a> {
     keycap: (Rgb, u8),
     keycap_on_selection: (Rgb, u8),
     selection: (Rgb, u8),
+    hover: (Rgb, u8),
     pressed: (Rgb, u8),
     tile: (Rgb, u8),
     tile_on_selection: (Rgb, u8),
@@ -1065,6 +1068,8 @@ struct ListState<'a> {
     grid: Option<&'a Grid>,
     /// Where the selection is drawn, which glides behind the selected row. `None` draws it on the row.
     highlight: Option<RECT>,
+    /// The row the pointer is over.
+    hover: Option<usize>,
 }
 
 /// Draws the current state into the frame. Allocates what was shed while the launcher was hidden.
@@ -1132,6 +1137,9 @@ pub fn render(app: &mut App) {
         None => app.placeholder_text(),
     };
     let glass = app.glass;
+    // The row under the pointer, in the menu if one is open, else in the list.
+    let hover = app.pointed_row();
+    app.hovered_row = hover;
     let caret_on = app.caret_on && !matches!(app.view.scope, Scope::SetHotkey { .. } | Scope::Confirm(_));
 
     let surface = if hc { theme.background } else if dark { SURFACE_DARK } else { SURFACE_LIGHT };
@@ -1152,6 +1160,7 @@ pub fn render(app: &mut App) {
             keycap: layer(theme.keycap, ALPHA_KEYCAP),
             keycap_on_selection: layer(theme.keycap_on_selection, ALPHA_KEYCAP_ON_SELECTION),
             selection: layer(theme.selection, ALPHA_SELECTION),
+            hover: (theme.overlay, ALPHA_HOVER),
             pressed: layer(theme.keycap_on_selection, ALPHA_PRESSED),
             tile: layer(theme.keycap, ALPHA_TILE),
             tile_on_selection: layer(theme.keycap_on_selection, ALPHA_KEYCAP),
@@ -1232,6 +1241,7 @@ pub fn render(app: &mut App) {
                 query: &menu.behind.query,
                 grid: menu.behind.grid.as_ref(),
                 highlight: None,
+                hover: None,
             },
             None => ListState {
                 rows: &app.view.rows,
@@ -1241,6 +1251,7 @@ pub fn render(app: &mut App) {
                 query: &field.text,
                 grid: app.view.grid.as_ref(),
                 highlight: None,
+                hover,
             },
         };
         let form = match (&app.menu, &app.form) {
@@ -1347,7 +1358,7 @@ pub fn render(app: &mut App) {
             let travel = (scale(MENU_RISE_DIP, dpi) as f32 * (1.0 - arrived)).round() as i32;
             let shift = if menu.side == MenuSide::Drop { -travel } else { travel };
             let at = geometry.shifted(shift);
-            let target = popover_selection(geometry, &app.view, menu.shown, dpi);
+            let target = popover_row(geometry, &app.view, app.view.selected, menu.shown, dpi);
             let glide = motion::key((menu_key, &field.text, app.view.rows.len(), app.view.scroll));
             let highlight = target.map(|target| {
                 let mut rect = app.motion.menu_selection.aim(glide, target, now, animate).to_rect();
@@ -1359,10 +1370,10 @@ pub fn render(app: &mut App) {
                 let reach = scale(POPOVER_SHADOW_DIP + 4, dpi);
                 let area = RECT { left: at.rect.left - reach, top: at.rect.top - reach, right: at.rect.right + reach, bottom: at.rect.bottom + reach };
                 let saved = buffer.save_area(area);
-                draw_popover(buffer, &paint, at, menu.shown, of, &field, caret_on, &app.view, &app.icons, &mut spots, highlight);
+                draw_popover(buffer, &paint, at, menu.shown, of, &field, caret_on, &app.view, &app.icons, &mut spots, highlight, hover);
                 buffer.mix_back_area(area, &saved, (0.3 + arrived * 1.4).min(1.0));
             } else {
-                draw_popover(buffer, &paint, at, menu.shown, of, &field, caret_on, &app.view, &app.icons, &mut spots, highlight);
+                draw_popover(buffer, &paint, at, menu.shown, of, &field, caret_on, &app.view, &app.icons, &mut spots, highlight, hover);
             }
         }
 
@@ -1426,7 +1437,12 @@ fn page_key(scope: &Scope) -> u64 {
 
 /// Where the selected row's highlight goes in a list `width` wide, if it's one that has one.
 fn selection_rect(list: &ListState, width: i32, reach: i32, dpi: u32) -> Option<RECT> {
-    let (index, y, row_h) = rows_down_to(list.rows, list.scroll, dpi, reach).into_iter().find(|&(index, _, _)| index == list.selected)?;
+    row_rect(list, list.selected, width, reach, dpi)
+}
+
+/// Where a row of a list `width` wide is lit, if it's one that can be.
+fn row_rect(list: &ListState, at: usize, width: i32, reach: i32, dpi: u32) -> Option<RECT> {
+    let (index, y, row_h) = rows_down_to(list.rows, list.scroll, dpi, reach).into_iter().find(|&(index, _, _)| index == at)?;
     let row = list.rows.get(index)?;
     if row.is_header() || (index == 0 && is_answer_card(list.rows)) {
         return None;
@@ -1435,15 +1451,27 @@ fn selection_rect(list: &ListState, width: i32, reach: i32, dpi: u32) -> Option<
     Some(RECT { left: row_x, top: y, right: width - row_x, bottom: y + row_h })
 }
 
-/// Where the highlight goes in a menu, under its selected row, if that's showing.
-fn popover_selection(at: Popover, view: &crate::view::View, shown: usize, dpi: u32) -> Option<RECT> {
-    if view.selected >= view.rows.len() {
+/// Where a row of a menu is lit, such as under the selected one, if it's showing.
+fn popover_row(at: Popover, view: &crate::view::View, index: usize, shown: usize, dpi: u32) -> Option<RECT> {
+    if index >= view.rows.len() {
         return None;
     }
-    let slot = view.selected.checked_sub(view.scroll).filter(|&slot| slot < shown)?;
+    let slot = index.checked_sub(view.scroll).filter(|&slot| slot < shown)?;
     let inset = scale(POPOVER_ROW_INSET, dpi);
     let y = at.list_top + slot as i32 * at.row_height;
     Some(RECT { left: at.rect.left + inset, top: y, right: at.rect.right - inset, bottom: y + at.row_height })
+}
+
+/// A row or tile with the pointer over it: a fainter wash than the selection's. In high contrast,
+/// where layers are solid, an outline in the selection's colour, so it can't be taken for it.
+fn draw_hover(buffer: &mut Backbuffer, paint: &Paint, rect: RECT, radius: f32) {
+    let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+    if paint.hc {
+        let line = (paint.thin as f32 * 1.5).max(1.5);
+        buffer.stroke_round_rect_alpha(rect.left, rect.top, w, h, radius, line, paint.theme.selection, 255);
+    } else {
+        buffer.fill_round_rect_alpha(rect.left, rect.top, w, h, radius, paint.hover.0, paint.hover.1);
+    }
 }
 
 /// How a button is being pointed at.
@@ -1732,6 +1760,10 @@ fn draw_list(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, width: i3
     let tiles = !hc && !matches!(list.scope, Scope::Actions { .. } | Scope::Confirm(_) | Scope::Help | Scope::Diagnostics);
     let can_mark = list.scope.can_filter() && !list.query.trim().is_empty();
 
+    // Under it all, the row the pointer is over, unless that's the selected one.
+    if let Some(rect) = list.hover.filter(|&at| at != list.selected).and_then(|at| row_rect(list, at, width, reach, dpi)) {
+        draw_hover(buffer, paint, rect, row_radius);
+    }
     // The highlight goes down first, wherever it's got to on its way to the selected row.
     if let Some(rect) = list.highlight {
         let (h, x) = (rect.bottom - rect.top, rect.left);
@@ -2615,6 +2647,9 @@ fn draw_grid(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, grid: &Gr
         let RECT { left, top, right, bottom } = cell.rect;
         buffer.fill_round_rect_alpha(left, top, right - left, bottom - top, tile_radius, paint.tile.0, paint.tile.1);
     }
+    if let Some(cell) = cells.iter().find(|cell| Some(cell.index) == list.hover && cell.index != list.selected) {
+        draw_hover(buffer, paint, cell.rect, tile_radius);
+    }
     if let Some(RECT { left, top, right, bottom }) = highlight {
         let (w, h) = (right - left, bottom - top);
         // Over a tile, this comes to the same as the pressed look the selected tile used to have.
@@ -2764,7 +2799,7 @@ pub const POPOVER_ICON_DIP: i32 = 20;
 
 /// The small menu that Ctrl+K and the Orbit pill open, floating over the list.
 #[allow(clippy::too_many_arguments)]
-fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usize, of: &str, field: &Field, caret_on: bool, view: &crate::view::View, icons: &crate::icons::IconCache, spots: &mut Spots, highlight: Option<RECT>) {
+fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usize, of: &str, field: &Field, caret_on: bool, view: &crate::view::View, icons: &crate::icons::IconCache, spots: &mut Spots, highlight: Option<RECT>, hover: Option<usize>) {
     let (theme, fonts, dpi, hc) = (paint.theme, paint.fonts, paint.dpi, paint.hc);
     let RECT { left, top, right, bottom } = at.rect;
     let (w, h) = (right - left, bottom - top);
@@ -2793,6 +2828,9 @@ fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usiz
     let row_width = w - scale(POPOVER_ROW_INSET * 2, dpi);
     let row_radius = scale(POPOVER_ROW_RADIUS, dpi) as f32;
     let glyph_size = scale(20, dpi);
+    if let Some(rect) = hover.filter(|&index| index != view.selected).and_then(|index| popover_row(at, view, index, shown, dpi)) {
+        draw_hover(buffer, paint, rect, row_radius);
+    }
     // The highlight goes down first, wherever it's got to on its way to the selected row.
     if let Some(rect) = highlight {
         buffer.fill_round_rect_alpha(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, row_radius, paint.selection.0, paint.selection.1);

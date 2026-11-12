@@ -549,3 +549,11 @@ No AI, cloud sync, embedded web server, driver or privileged daemon, as the brie
 **Checked on a real screen** (2026-11-12, 2560x1440 at 300 Hz, recorded frame by frame over a striped window): the first frame shows about 13 ms after the hotkey, with focus, so keys typed straight away all land; focus is back in the window behind within 3 ms of Esc, and a click 20 ms into the fade-out reaches it; selection, menu, page and height all move as above; nothing is drawn while nothing moves. With the switch off, every change is complete on its first frame. While the launcher grows, Windows moves the blur a frame or two after the panel, so for those frames the bottom strip of the panel shows what's behind it unblurred; 1.3.1, which jumped the whole way in one frame, left up to three times as much showing.
 
 **Not done.** The macOS host doesn't move yet.
+
+## The pointer lights a row, and only a click chooses it
+
+**Decision.** The pointer over a row, a menu entry or an emoji lights it with a fainter wash than the selection's (in high contrast, an outline in the selection's colour), and the selection stays where the keys put it. A click selects what's under the pointer and opens it, as it always did, and a right click selects it and opens its actions. The launcher opening under a still pointer lights nothing, and the first row stays selected. The light goes when the pointer leaves or a key other than a modifier is pressed, and comes back when the pointer moves. Scrolling with the wheel counts as moving it.
+
+**Why.** The owner asked for it. With the pointer in the middle of the screen, opening Orbit chose whatever row came up under it, so Enter didn't run the top result.
+
+**Not done.** The macOS host still selects the row under the pointer when it moves.
