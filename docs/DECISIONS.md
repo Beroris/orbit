@@ -531,3 +531,21 @@ No AI, cloud sync, embedded web server, driver or privileged daemon, as the brie
 **Decision.** Enter on an Ente Auth code types it into the window the launcher was opened over, as key presses, so the code never goes on the clipboard. Ctrl+Enter copies it, as Enter used to. Where it can't be typed, such as into an app running as administrator, it goes on the clipboard as a copied code does: kept out of clipboard history and cleared after 30 seconds, with a note saying so. 1Password still copies on Enter, since a password is often wanted somewhere other than where the launcher was opened.
 
 **Why.** The owner asked for Ente's default to be paste, with copy as the alternative. Typing rather than pasting keeps the code off the clipboard, and is likelier to work in sign-in pages that split a code into six boxes, though that hasn't been tried.
+
+## The launcher moves, but never makes anyone wait
+
+**Decision.** The launcher fades in as it rises the last 8 DIPs into place (150 ms), and fades out quicker (110 ms). The selection glides from row to row (110 ms), in lists, menus and the emoji grid. A menu rises from the footer, or drops from its button (140 ms). One page cross-fades into the next (100 ms), and a menu fades as it closes. The bottom edge eases to its new height (150 ms). The rules that keep this from slowing anything down:
+
+- What's shown changes at once. Keys, clicks and hit-testing act on the new state straight away, and only the picture catches up.
+- It's there at once: the launcher shows at 30% on its first frame, and a menu at about 30% on its first frame and solid within about 30 ms. Moves ease out, fast at first.
+- Gone is gone. As soon as the launcher starts to fade out, focus is back in the app it was opened over, and clicks go through it.
+- A list that changes under the selection, from typing or scrolling, makes it jump, not glide across content that's been replaced. So do the first frame after opening, and a show while it's already open.
+- Typing doesn't cross-fade: the results change in place. Only going to another page does.
+- A frame clock that sleeps while nothing moves, and frames that give way to waiting input.
+- It follows Windows' animation effects setting, and has its own switch in Settings → General.
+
+**Why.** The owner asked for animations where they don't make Orbit slower to use. A drawn frame costs about 0.9 ms (1.2 ms while the height changes), so motion at the screen's refresh rate is affordable.
+
+**Checked on a real screen** (2026-11-12, 2560x1440 at 300 Hz, recorded frame by frame over a striped window): the first frame shows about 13 ms after the hotkey, with focus, so keys typed straight away all land; focus is back in the window behind within 3 ms of Esc, and a click 20 ms into the fade-out reaches it; selection, menu, page and height all move as above; nothing is drawn while nothing moves. With the switch off, every change is complete on its first frame. While the launcher grows, Windows moves the blur a frame or two after the panel, so for those frames the bottom strip of the panel shows what's behind it unblurred; 1.3.1, which jumped the whole way in one frame, left up to three times as much showing.
+
+**Not done.** The macOS host doesn't move yet.

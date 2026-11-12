@@ -6,11 +6,13 @@ use crate::app::App;
 use crate::gfx::{Backbuffer, Rgb, Shadow, compose_panel, create_font, delete_font, paint_shadow};
 use crate::grid::{COLUMNS, Grid, Line};
 use crate::inline_form::InlineForm;
+use crate::motion::{self, Crossfade};
 use crate::rows::*;
 use crate::text::{self, Align, Face};
 use crate::view::{MenuKind, MenuSide, Scope};
 use crate::worker::{ClipPreview, PreviewBody};
 use std::collections::HashMap;
+use std::time::Instant;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DwmSetWindowAttribute};
@@ -69,6 +71,12 @@ const POPOVER_RADIUS: i32 = 16;
 const POPOVER_ROW: i32 = 36;
 const POPOVER_ROW_RADIUS: i32 = 10;
 const POPOVER_PAD: i32 = 6;
+/// How far a menu's rows sit inside its sides.
+const POPOVER_ROW_INSET: i32 = 6;
+/// How far a menu's shadow reaches.
+const POPOVER_SHADOW_DIP: i32 = 22;
+/// How far a menu travels as it comes in.
+const MENU_RISE_DIP: i32 = 10;
 const POPOVER_TITLE: i32 = 26;
 const POPOVER_SEARCH: i32 = 42;
 const POPOVER_GAP: i32 = 8;
@@ -125,6 +133,8 @@ const ALPHA_KEYCAP: u8 = 8;
 const ALPHA_KEYCAP_ON_SELECTION: u8 = 16;
 const ALPHA_CAP_RIM: u8 = 40;
 const ALPHA_TILE: u8 = 14;
+/// Around the selected emoji: enough to find it, without a hard box round it.
+const ALPHA_CELL_RIM: u8 = 60;
 const ALPHA_PILL: u8 = 12;
 const ALPHA_PILL_RIM: u8 = 16;
 const ALPHA_SHEEN: u8 = 8;
@@ -993,6 +1003,12 @@ pub fn popover_layout(width: i32, height: i32, dpi: u32, side: MenuSide, shown: 
 }
 
 impl Popover {
+    /// The same menu, `dy` lower down, as it is on its way in.
+    pub fn shifted(self, dy: i32) -> Popover {
+        let rect = RECT { top: self.rect.top + dy, bottom: self.rect.bottom + dy, ..self.rect };
+        Popover { rect, list_top: self.list_top + dy, search_top: self.search_top + dy, search_bottom: self.search_bottom + dy, ..self }
+    }
+
     pub fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.rect.left && x < self.rect.right && y >= self.rect.top && y < self.rect.bottom
     }
@@ -1047,6 +1063,8 @@ struct ListState<'a> {
     scope: &'a Scope,
     query: &'a str,
     grid: Option<&'a Grid>,
+    /// Where the selection is drawn, which glides behind the selected row. `None` draws it on the row.
+    highlight: Option<RECT>,
 }
 
 /// Draws the current state into the frame. Allocates what was shed while the launcher was hidden.
@@ -1064,13 +1082,43 @@ pub fn render(app: &mut App) {
     let behind_scope = app.menu.as_ref().map_or(&app.view.scope, |menu| &menu.behind.scope);
     let is_grid = app.menu.as_ref().map_or(app.view.grid.is_some(), |menu| menu.behind.grid.is_some());
     let mut height = launcher_height(dpi, behind_scope, behind_rows, is_grid, app.settings.launcher.fit_results, visible);
-    let _ = full_height;
     if let Some(menu) = &app.menu {
         height = height.max(popover_needs_height(menu.shown, dpi, menu.side));
     }
-    if app.backbuffer.as_ref().is_none_or(|b| b.width != width || b.height != height) {
+
+    // What moves: the bottom edge eases to where the results want it, a new page fades in over the
+    // last, and a menu rises into place. Everything is laid out where it's going straight away, so
+    // keys and clicks never wait for any of it.
+    let now = app.motion_clock.unwrap_or_else(Instant::now);
+    let animate = app.motion_on;
+    let height = app.motion.height.aim(height as f32, motion::RESIZE, now, animate).round() as i32;
+    let depth = app.view.stack.len() - usize::from(app.menu.is_some());
+    let page = motion::key((page_key(behind_scope), depth));
+    let menu_key = app.menu.as_ref().map(|menu| motion::key((menu.side as u8, page_key(&app.view.scope))));
+    let menu_was = app.motion.menu_open.map(|(key, _)| key);
+    // The first frame since everything settled shows things as they are, a menu included.
+    let first = app.motion.page.is_none();
+    if menu_key != menu_was {
+        app.motion.menu_open = menu_key.map(|key| (key, (animate && !first).then_some(now)));
+        app.motion.menu_selection.reset();
+    }
+    let page_changed = app.motion.page.is_some_and(|last| last != page);
+    let menu_closed = menu_was.is_some() && menu_key.is_none();
+    app.motion.page = Some(page);
+    if animate
+        && (page_changed || menu_closed)
+        && let Some(last) = app.backbuffer.as_ref().filter(|last| last.width == width)
+    {
+        app.motion.crossfade = Some(Crossfade { pixels: last.snapshot(), width, height: last.height, start: now });
+    }
+
+    // The bitmap has room for the launcher at its tallest, so a height that changes on every frame
+    // doesn't make a new one each time.
+    let room = full_height.max(height);
+    let fits = app.backbuffer.as_mut().is_some_and(|buffer| buffer.width == width && buffer.set_height(height));
+    if !fits {
         app.backbuffer = None;
-        app.backbuffer = Backbuffer::new(width, height);
+        app.backbuffer = Backbuffer::with_room(width, height, room);
     }
     let vim = app.vim_mode();
     let input_x = input_left(&app.view.scope, dpi);
@@ -1175,7 +1223,7 @@ pub fn render(app: &mut App) {
         }
 
         // The list: the view's own rows, or what the menu opened over.
-        let list = match &app.menu {
+        let mut list = match &app.menu {
             Some(menu) => ListState {
                 rows: &menu.behind.rows,
                 scroll: menu.behind.scroll,
@@ -1183,6 +1231,7 @@ pub fn render(app: &mut App) {
                 scope: &menu.behind.scope,
                 query: &menu.behind.query,
                 grid: menu.behind.grid.as_ref(),
+                highlight: None,
             },
             None => ListState {
                 rows: &app.view.rows,
@@ -1191,6 +1240,7 @@ pub fn render(app: &mut App) {
                 scope: &app.view.scope,
                 query: &field.text,
                 grid: app.view.grid.as_ref(),
+                highlight: None,
             },
         };
         let form = match (&app.menu, &app.form) {
@@ -1212,8 +1262,19 @@ pub fn render(app: &mut App) {
             app.form_boxes = boxes.0;
             app.form_chips = boxes.1;
         } else {
+        // The selection glides from where it was to the row now chosen, as long as it's the same list,
+        // scrolled the same: a list that's changed under it has it jump instead.
+        let glide = motion::key((page, list.query, list.rows.len(), list.scroll, width));
         match list.grid {
-            Some(grid) => draw_grid(buffer, &paint, &list, grid, width, &app.emoji_table, &mut app.emoji_cache),
+            Some(grid) => {
+                let cells = grid_cells(&list, grid, width, dpi);
+                let target = cells.iter().find(|cell| cell.index == list.selected).map(|cell| cell.rect);
+                list.highlight = target.map(|target| app.motion.selection.aim(glide, target, now, animate).to_rect());
+                if target.is_none() {
+                    app.motion.selection.reset();
+                }
+                draw_grid(buffer, &paint, &list, grid, &cells, width, &app.emoji_table, &mut app.emoji_cache);
+            }
             None => {
                 // The list carries on under the footer and fades out there, rather than stopping
                 // short with an empty band. Only when there's more below what can be chosen.
@@ -1223,7 +1284,13 @@ pub fn render(app: &mut App) {
                 // Past the bottom too, so a title near it keeps the row under it, faint as that is.
                 let reach = fade.as_ref().map_or(height, |_| height + scale(ROW_HEIGHT, dpi) * 2);
                 let split = is_split(list.scope, list.rows);
-                draw_list(buffer, &paint, &list, if split { split_x(dpi) } else { width }, visible, reach, &app.icons, split);
+                let list_width = if split { split_x(dpi) } else { width };
+                let target = selection_rect(&list, list_width, reach, dpi);
+                list.highlight = target.map(|target| app.motion.selection.aim(glide, target, now, animate).to_rect());
+                if target.is_none() {
+                    app.motion.selection.reset();
+                }
+                draw_list(buffer, &paint, &list, list_width, visible, reach, &app.icons, split);
                 if let (Some(fade), Some(saved)) = (fade, saved) {
                     buffer.fade_back(fade.from, &saved, fade.from, fade.to);
                 }
@@ -1274,10 +1341,44 @@ pub fn render(app: &mut App) {
                 _ => "",
             };
             let geometry = popover_layout(width, height, dpi, menu.side, menu.shown);
-            draw_popover(buffer, &paint, geometry, menu.shown, of, &field, caret_on, &app.view, &app.icons, &mut spots);
+            // A menu rises from the footer, or drops from its button, and is there at once: it's
+            // mostly opaque by the second frame, and only its last few pixels of travel take longer.
+            let arrived = app.motion.menu_in(now);
+            let travel = (scale(MENU_RISE_DIP, dpi) as f32 * (1.0 - arrived)).round() as i32;
+            let shift = if menu.side == MenuSide::Drop { -travel } else { travel };
+            let at = geometry.shifted(shift);
+            let target = popover_selection(geometry, &app.view, menu.shown, dpi);
+            let glide = motion::key((menu_key, &field.text, app.view.rows.len(), app.view.scroll));
+            let highlight = target.map(|target| {
+                let mut rect = app.motion.menu_selection.aim(glide, target, now, animate).to_rect();
+                rect.top += shift;
+                rect.bottom += shift;
+                rect
+            });
+            if arrived < 1.0 {
+                let reach = scale(POPOVER_SHADOW_DIP + 4, dpi);
+                let area = RECT { left: at.rect.left - reach, top: at.rect.top - reach, right: at.rect.right + reach, bottom: at.rect.bottom + reach };
+                let saved = buffer.save_area(area);
+                draw_popover(buffer, &paint, at, menu.shown, of, &field, caret_on, &app.view, &app.icons, &mut spots, highlight);
+                buffer.mix_back_area(area, &saved, (0.3 + arrived * 1.4).min(1.0));
+            } else {
+                draw_popover(buffer, &paint, at, menu.shown, of, &field, caret_on, &app.view, &app.icons, &mut spots, highlight);
+            }
+        }
+
+        // The last page, fading out over this one. Not over the footer, which stays where it is
+        // while the bottom edge moves, so an old one left fading where it was would read as two.
+        if let Some(fade) = &app.motion.crossfade {
+            let left = fade.remaining(now);
+            let reach = fade.height.min(height) - scale(FOOTER_HEIGHT, dpi);
+            buffer.fade_over(&fade.pixels, fade.width, reach, left);
         }
         app.text_spots = spots.now;
     }
+    if app.motion.crossfade.as_ref().is_some_and(|fade| fade.remaining(now) <= 0.0) {
+        app.motion.crossfade = None;
+    }
+    app.motion.unsettled = app.motion.moving(now);
 
     // Round it off and put the shadow around it. The window only ever shows this finished frame.
     let shadow = Shadow {
@@ -1287,17 +1388,62 @@ pub fn render(app: &mut App) {
         strength: if hc { 0.0 } else if dark { SHADOW_DARK } else { SHADOW_LIGHT },
     };
     let (frame_w, frame_h) = frame_size(dpi, (width, height));
-    let fresh = app.frame.as_ref().is_none_or(|frame| frame.width != frame_w || frame.height != frame_h) || app.frame_shadow != Some(shadow);
-    if fresh {
-        app.frame = None;
-        app.frame = Backbuffer::new(frame_w, frame_h);
-        app.frame_shadow = Some(shadow);
-    }
+    // The shadow only depends on the launcher's size, so it's painted again only when that changes:
+    // on every frame while the bottom edge moves, and not otherwise.
+    let kept = app.frame_shadow == Some(shadow)
+        && app.frame.as_mut().is_some_and(|frame| frame.width == frame_w && frame.room() >= frame_h);
+    let reshaped = match app.frame.as_mut() {
+        Some(frame) if kept => {
+            let before = frame.height;
+            frame.set_height(frame_h);
+            before != frame_h
+        }
+        _ => {
+            app.frame = None;
+            app.frame = Backbuffer::with_room(frame_w, frame_h, frame_size(dpi, (width, room)).1);
+            app.frame_shadow = Some(shadow);
+            true
+        }
+    };
     let (Some(frame), Some(panel)) = (app.frame.as_mut(), app.backbuffer.as_ref()) else { return };
-    if fresh {
+    if reshaped {
         paint_shadow(frame, width, height, radius, shadow);
     }
     compose_panel(frame, panel, radius, shadow);
+}
+
+/// What makes a page itself, for telling when another has replaced it. A form moving to its next
+/// field, or a colour being picked again, is still the same page.
+fn page_key(scope: &Scope) -> u64 {
+    let kind = std::mem::discriminant(scope);
+    match scope {
+        Scope::Extension { ext, command, .. } => motion::key((kind, ext, command)),
+        Scope::Actions { of } => motion::key((kind, of)),
+        Scope::Vault(tool) => motion::key((kind, format!("{tool:?}"))),
+        _ => motion::key(kind),
+    }
+}
+
+/// Where the selected row's highlight goes in a list `width` wide, if it's one that has one.
+fn selection_rect(list: &ListState, width: i32, reach: i32, dpi: u32) -> Option<RECT> {
+    let (index, y, row_h) = rows_down_to(list.rows, list.scroll, dpi, reach).into_iter().find(|&(index, _, _)| index == list.selected)?;
+    let row = list.rows.get(index)?;
+    if row.is_header() || (index == 0 && is_answer_card(list.rows)) {
+        return None;
+    }
+    let row_x = scale(ROW_INSET, dpi);
+    Some(RECT { left: row_x, top: y, right: width - row_x, bottom: y + row_h })
+}
+
+/// Where the highlight goes in a menu, under its selected row, if that's showing.
+fn popover_selection(at: Popover, view: &crate::view::View, shown: usize, dpi: u32) -> Option<RECT> {
+    if view.selected >= view.rows.len() {
+        return None;
+    }
+    let slot = view.selected.checked_sub(view.scroll).filter(|&slot| slot < shown)?;
+    let inset = scale(POPOVER_ROW_INSET, dpi);
+    let y = at.list_top + slot as i32 * at.row_height;
+    Some(RECT { left: at.rect.left + inset, top: y, right: at.rect.right - inset, bottom: y + at.row_height })
 }
 
 /// How a button is being pointed at.
@@ -1586,6 +1732,17 @@ fn draw_list(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, width: i3
     let tiles = !hc && !matches!(list.scope, Scope::Actions { .. } | Scope::Confirm(_) | Scope::Help | Scope::Diagnostics);
     let can_mark = list.scope.can_filter() && !list.query.trim().is_empty();
 
+    // The highlight goes down first, wherever it's got to on its way to the selected row.
+    if let Some(rect) = list.highlight {
+        let (h, x) = (rect.bottom - rect.top, rect.left);
+        buffer.fill_round_rect_alpha(x, rect.top, rect.right - x, h, row_radius, paint.selection.0, paint.selection.1);
+        if hc {
+            // Marks the selection without relying on telling two colours apart.
+            let bar = scale(14, dpi);
+            buffer.fill_round_rect(x + scale(3, dpi), rect.top + (h - bar) / 2, scale(3, dpi), bar, scale(2, dpi) as f32, theme.accent);
+        }
+    }
+
     for (index, y, row_h) in rows_down_to(list.rows, list.scroll, dpi, reach) {
         let row = &list.rows[index];
         if row.is_header() {
@@ -1599,7 +1756,7 @@ fn draw_list(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, width: i3
             continue;
         }
         let selected = index == list.selected;
-        if selected {
+        if selected && list.highlight.is_none() {
             buffer.fill_round_rect_alpha(row_x, y, row_width, row_h, row_radius, paint.selection.0, paint.selection.1);
             if hc {
                 // Marks the selection without relying on telling two colours apart.
@@ -2399,13 +2556,41 @@ fn crop(pixels: &[u8], stride: usize, w: i32, h: i32) -> std::borrow::Cow<'_, [u
     std::borrow::Cow::Owned(out)
 }
 
-fn draw_grid(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, grid: &Grid, width: i32, emoji: &[orbit_core::emoji::Emoji], cache: &mut HashMap<u16, Vec<u8>>) {
-    let (theme, fonts, dpi) = (paint.theme, paint.fonts, paint.dpi);
+/// One emoji's tile in the grid, where it's drawn this frame.
+struct GridCell {
+    index: usize,
+    at: u16,
+    rect: RECT,
+}
+
+/// Where each emoji showing goes, so the highlight can glide to one before any are drawn.
+fn grid_cells(list: &ListState, grid: &Grid, width: i32, dpi: u32) -> Vec<GridCell> {
     let list_top = scale(INPUT_HEIGHT + PADDING, dpi);
     let inset = scale(ROW_INSET, dpi);
     let across = width - inset * 2;
     let cell_width = across / COLUMNS as i32;
     let gap = scale(3, dpi);
+    let mut cells = Vec::new();
+    for &(line, top, height) in &grid.layout(list.scroll) {
+        let Line::Cells { start, count } = line else { continue };
+        let y = list_top + scale(top, dpi);
+        let line_height = scale(height, dpi);
+        for column in 0..count {
+            let index = start + column;
+            let Some(RowIcon::Emoji(at)) = list.rows.get(index).map(|row| row.icon) else { continue };
+            let left = inset + across * column as i32 / COLUMNS as i32 + gap;
+            let rect = RECT { left, top: y + gap, right: left + cell_width - gap * 2, bottom: y + line_height - gap };
+            cells.push(GridCell { index, at, rect });
+        }
+    }
+    cells
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_grid(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, grid: &Grid, cells: &[GridCell], width: i32, emoji: &[orbit_core::emoji::Emoji], cache: &mut HashMap<u16, Vec<u8>>) {
+    let (theme, fonts, dpi) = (paint.theme, paint.fonts, paint.dpi);
+    let list_top = scale(INPUT_HEIGHT + PADDING, dpi);
+    let inset = scale(ROW_INSET, dpi);
     let tile_radius = scale(CELL_RADIUS, dpi) as f32;
     let size = scale(EMOJI_DIP, dpi);
 
@@ -2417,36 +2602,35 @@ fn draw_grid(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, grid: &Gr
     }
     let layout = grid.layout(list.scroll);
     for &(line, top, height) in &layout {
-        let y = list_top + scale(top, dpi);
-        let line_height = scale(height, dpi);
-        match line {
-            Line::Title(row) => {
-                let Some(title) = list.rows.get(row).map(|row| &row.title) else { continue };
-                let rect = RECT { left: inset + scale(6, dpi), top: y + scale(6, dpi), right: width - inset, bottom: y + line_height };
-                text::draw(buffer, title, &fonts.section, theme.tertiary, rect, Align::Left);
-            }
-            Line::Cells { start, count } => {
-                for column in 0..count {
-                    let index = start + column;
-                    let Some(RowIcon::Emoji(at)) = list.rows.get(index).map(|row| row.icon) else { continue };
-                    let left = inset + across * column as i32 / COLUMNS as i32;
-                    let (tile_x, tile_y) = (left + gap, y + gap);
-                    let (tile_w, tile_h) = (cell_width - gap * 2, line_height - gap * 2);
-                    let selected = index == list.selected;
-                    let fill = if selected { paint.pressed } else { paint.tile };
-                    buffer.fill_round_rect_alpha(tile_x, tile_y, tile_w, tile_h, tile_radius, fill.0, fill.1);
-                    if selected {
-                        buffer.stroke_round_rect_alpha(tile_x, tile_y, tile_w, tile_h, tile_radius, 1.5, if paint.hc { theme.accent } else { theme.overlay }, if paint.hc { 255 } else { 110 });
-                    }
-                    if cache.len() >= EMOJI_CACHE_MAX && !cache.contains_key(&at) {
-                        cache.clear();
-                    }
-                    let Some(entry) = emoji.get(at as usize) else { continue };
-                    let pixels = cache.entry(at).or_insert_with(|| text::emoji_pixels(entry.glyph, size).unwrap_or_default());
-                    buffer.blit_premultiplied(tile_x + (tile_w - size) / 2, tile_y + (tile_h - size) / 2, size, pixels);
-                }
-            }
+        if let Line::Title(row) = line {
+            let Some(title) = list.rows.get(row).map(|row| &row.title) else { continue };
+            let y = list_top + scale(top, dpi);
+            let rect = RECT { left: inset + scale(6, dpi), top: y + scale(6, dpi), right: width - inset, bottom: y + scale(height, dpi) };
+            text::draw(buffer, title, &fonts.section, theme.tertiary, rect, Align::Left);
         }
+    }
+    // Every tile, then the highlight over them, wherever it's got to, then the emoji over that.
+    let highlight = list.highlight.or_else(|| cells.iter().find(|cell| cell.index == list.selected).map(|cell| cell.rect));
+    for cell in cells {
+        let RECT { left, top, right, bottom } = cell.rect;
+        buffer.fill_round_rect_alpha(left, top, right - left, bottom - top, tile_radius, paint.tile.0, paint.tile.1);
+    }
+    if let Some(RECT { left, top, right, bottom }) = highlight {
+        let (w, h) = (right - left, bottom - top);
+        // Over a tile, this comes to the same as the pressed look the selected tile used to have.
+        let lift = if paint.hc { paint.pressed } else { (paint.pressed.0, ALPHA_PRESSED - ALPHA_TILE) };
+        buffer.fill_round_rect_alpha(left, top, w, h, tile_radius, lift.0, lift.1);
+        let (rim, alpha) = if paint.hc { (theme.accent, 255) } else { (theme.overlay, ALPHA_CELL_RIM) };
+        buffer.stroke_round_rect_alpha(left, top, w, h, tile_radius, (paint.thin as f32 * 1.25).max(1.25), rim, alpha);
+    }
+    for cell in cells {
+        if cache.len() >= EMOJI_CACHE_MAX && !cache.contains_key(&cell.at) {
+            cache.clear();
+        }
+        let Some(entry) = emoji.get(cell.at as usize) else { continue };
+        let pixels = cache.entry(cell.at).or_insert_with(|| text::emoji_pixels(entry.glyph, size).unwrap_or_default());
+        let RECT { left, top, right, bottom } = cell.rect;
+        buffer.blit_premultiplied(left + (right - left - size) / 2, top + (bottom - top - size) / 2, size, pixels);
     }
     // The same small scrollbar as a list.
     if layout.len() < grid.lines.len() {
@@ -2580,7 +2764,7 @@ pub const POPOVER_ICON_DIP: i32 = 20;
 
 /// The small menu that Ctrl+K and the Orbit pill open, floating over the list.
 #[allow(clippy::too_many_arguments)]
-fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usize, of: &str, field: &Field, caret_on: bool, view: &crate::view::View, icons: &crate::icons::IconCache, spots: &mut Spots) {
+fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usize, of: &str, field: &Field, caret_on: bool, view: &crate::view::View, icons: &crate::icons::IconCache, spots: &mut Spots, highlight: Option<RECT>) {
     let (theme, fonts, dpi, hc) = (paint.theme, paint.fonts, paint.dpi, paint.hc);
     let RECT { left, top, right, bottom } = at.rect;
     let (w, h) = (right - left, bottom - top);
@@ -2593,7 +2777,7 @@ fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usiz
         (POPOVER_LIGHT, (theme.overlay, ALPHA_POPOVER_RIM))
     };
     if !hc {
-        buffer.shadow_round_rect(left, top + scale(4, dpi), w, h, radius, scale(22, dpi) as f32, Rgb(0, 0, 0), if paint.dark { 120 } else { 60 });
+        buffer.shadow_round_rect(left, top + scale(4, dpi), w, h, radius, scale(POPOVER_SHADOW_DIP, dpi) as f32, Rgb(0, 0, 0), if paint.dark { 120 } else { 60 });
     }
     buffer.fill_round_rect(left, top, w, h, radius, surface);
     buffer.stroke_round_rect_alpha(left, top, w, h, radius, paint.thin as f32, rim.0, rim.1);
@@ -2605,10 +2789,14 @@ fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usiz
         text::draw(buffer, of, &fonts.section, theme.tertiary, title_rect, Align::Left);
     }
 
-    let row_x = left + scale(6, dpi);
-    let row_width = w - scale(12, dpi);
+    let row_x = left + scale(POPOVER_ROW_INSET, dpi);
+    let row_width = w - scale(POPOVER_ROW_INSET * 2, dpi);
     let row_radius = scale(POPOVER_ROW_RADIUS, dpi) as f32;
     let glyph_size = scale(20, dpi);
+    // The highlight goes down first, wherever it's got to on its way to the selected row.
+    if let Some(rect) = highlight {
+        buffer.fill_round_rect_alpha(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, row_radius, paint.selection.0, paint.selection.1);
+    }
     if view.rows.is_empty() {
         let rect = RECT { left: row_x, top: at.list_top, right: row_x + row_width, bottom: at.list_top + at.row_height };
         let empty = if of == APP_PICKER_TITLE { "No matching apps" } else if of == FILTER_MENU_TITLE { "No matching filters" } else { "No matching actions" };
@@ -2618,7 +2806,7 @@ fn draw_popover(buffer: &mut Backbuffer, paint: &Paint, at: Popover, shown: usiz
         let row = &view.rows[index];
         let y = at.list_top + slot as i32 * at.row_height;
         let selected = index == view.selected;
-        if selected {
+        if selected && highlight.is_none() {
             buffer.fill_round_rect_alpha(row_x, y, row_width, at.row_height, row_radius, paint.selection.0, paint.selection.1);
         }
         let danger = matches!(row.icon, RowIcon::Glyph(GLYPH_DELETE));
@@ -2703,6 +2891,27 @@ pub const FILTER_MENU_TITLE: &str = "Show";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_is_still_itself_while_what_is_in_it_changes() {
+        let form = |multiline| Scope::Form { title: "New quicklink".into(), link: true, multiline, choice: false };
+        assert_eq!(page_key(&form(false)), page_key(&form(true)), "moving between a form's fields");
+        let colour = |r| Scope::Colour(orbit_core::colour::Colour { r, g: 0, b: 0 });
+        assert_eq!(page_key(&colour(10)), page_key(&colour(200)), "picking another colour");
+        assert_ne!(page_key(&Scope::Root), page_key(&Scope::Clipboard));
+        let list = |command: &str| Scope::Extension { ext: "github".into(), command: command.into(), title: String::new(), placeholder: String::new() };
+        assert_ne!(page_key(&list("issues")), page_key(&list("pulls")), "another of an extension's lists");
+    }
+
+    #[test]
+    fn a_menu_on_its_way_in_keeps_its_parts_together() {
+        let at = popover_layout(720, 520, 96, MenuSide::Right, 5);
+        let moved = at.shifted(7);
+        assert_eq!(moved.rect.top - at.rect.top, 7);
+        assert_eq!(moved.rect.bottom - at.rect.bottom, 7);
+        assert_eq!((moved.list_top - at.list_top, moved.search_top - at.search_top, moved.search_bottom - at.search_bottom), (7, 7, 7));
+        assert_eq!((moved.rect.left, moved.rect.right, moved.row_height), (at.rect.left, at.rect.right, at.row_height));
+    }
 
     fn plain(n: usize) -> Vec<Row> {
         (0..n).map(|i| Row::info(format!("{i}"), "", ' ')).collect()

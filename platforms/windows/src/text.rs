@@ -88,16 +88,20 @@ pub struct Face {
     /// For a face of symbols, their size in pixels and whether they're heavy. Orbit draws most of
     /// its symbols itself (see `symbols.rs`) and only falls back to the font for the rest.
     symbol: Option<(f32, bool)>,
+    /// Which face this is, for the cache of text already drawn. Never reused, unlike an address.
+    id: u32,
 }
 
 impl Face {
     fn from_format(engine: &Engine, format: IDWriteTextFormat) -> Option<Face> {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
         unsafe {
             format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP).ok()?;
             format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER).ok()?;
         }
         let ellipsis = unsafe { engine.factory.CreateEllipsisTrimmingSign(&format) }.ok();
-        Some(Face { format, ellipsis, symbol: None })
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(Face { format, ellipsis, symbol: None, id })
     }
 
     /// Text. `px` is its size on this screen, `dip` the same size at 100%, which picks the cut.
@@ -178,6 +182,20 @@ pub fn width(text: &str, face: &Face) -> i32 {
     if text.is_empty() {
         return 0;
     }
+    let known = CACHE.with(|cache| cache.borrow().widths.get(&(face.id, text.to_string())).copied());
+    if let Some(width) = known {
+        return width;
+    }
+    let width = measure(text, face);
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.bytes += text.len() + 16;
+        cache.widths.insert((face.id, text.to_string()), width);
+    });
+    width
+}
+
+fn measure(text: &str, face: &Face) -> i32 {
     let Some(engine) = engine() else { return 0 };
     let units = one_line(text);
     let Some(layout) = layout(engine, &units, face, 100_000.0, 100.0) else { return 0 };
@@ -200,6 +218,63 @@ struct Target {
     coverage: Vec<u8>,
     /// Draw a font's own colours, for emoji.
     in_colour: bool,
+    /// Keep how much of each pixel the letters cover, in `clip`, rather than drawing them: the
+    /// first plane for the ink, the second for the marked ink.
+    capture: Option<(Vec<u8>, Vec<u8>)>,
+}
+
+/// A line of text as it was last drawn: how much of each pixel its letters cover, relative to the
+/// top left of its box, so drawing it again is only a blend.
+struct Drawn {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    plain: Vec<u8>,
+    /// For the marked stretches, if there are any.
+    marked: Vec<u8>,
+}
+
+/// What makes one line of drawn text different from another.
+#[derive(PartialEq, Eq, Hash)]
+struct DrawnKey {
+    face: u32,
+    text: String,
+    width: i32,
+    height: i32,
+    align: u8,
+    spans: Vec<Span>,
+}
+
+/// Text drawn and measured since the launcher last hid. Redrawing a frame, as the selection glides
+/// or a menu rises, then costs a blend per line instead of laying it out and rasterizing it again.
+#[derive(Default)]
+struct Cache {
+    drawn: std::collections::HashMap<DrawnKey, Drawn>,
+    widths: std::collections::HashMap<(u32, String), i32>,
+    bytes: usize,
+}
+
+/// Past this, the cache starts again. A frame's text takes a few hundred kilobytes at most.
+const CACHE_MOST_BYTES: usize = 3 << 20;
+
+thread_local! {
+    static CACHE: std::cell::RefCell<Cache> = std::cell::RefCell::new(Cache::default());
+    static WEIGHTS: std::cell::RefCell<Vec<(Rgb, [u8; 256])>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Lets go of the text kept for redrawing, as when the launcher hides.
+pub fn forget_drawn() {
+    CACHE.with(|cache| *cache.borrow_mut() = Cache::default());
+}
+
+fn trim_cache() {
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.bytes > CACHE_MOST_BYTES {
+            *cache = Cache::default();
+        }
+    });
 }
 
 /// A stretch of a line to draw in the second colour, in UTF-16 units from its start.
@@ -221,13 +296,31 @@ pub fn draw_marked(buffer: &Backbuffer, text: &str, face: &Face, ink: Rgb, rect:
             return;
         }
     }
-    let Some(engine) = engine() else { return };
-    if text.is_empty() {
+    let (box_width, box_height) = (rect.right - rect.left, rect.bottom - rect.top);
+    if text.is_empty() || box_width <= 0 || box_height <= 0 {
         return;
     }
+    let key = DrawnKey { face: face.id, text: text.to_string(), width: box_width, height: box_height, align: align as u8, spans: spans.to_vec() };
+    let done = CACHE.with(|cache| cache.borrow().drawn.get(&key).map(|drawn| blend_drawn(buffer, drawn, rect, ink, marked_ink)).is_some());
+    if done {
+        return;
+    }
+    let Some(drawn) = capture_line(text, face, box_width, box_height, align, spans) else { return };
+    blend_drawn(buffer, &drawn, rect, ink, marked_ink);
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.bytes += drawn.plain.len() + drawn.marked.len() + key.text.len() + 64;
+        cache.drawn.insert(key, drawn);
+    });
+    trim_cache();
+}
+
+/// Lays out one line in a box this big and keeps how much of each pixel its letters cover, cut
+/// down to where there are any.
+fn capture_line(text: &str, face: &Face, box_width: i32, box_height: i32, align: Align, spans: &[Span]) -> Option<Drawn> {
+    let engine = engine()?;
     let units = one_line(text);
-    let (box_width, box_height) = ((rect.right - rect.left).max(1) as f32, (rect.bottom - rect.top).max(1) as f32);
-    let Some(line) = layout(engine, &units, face, box_width, box_height) else { return };
+    let line = layout(engine, &units, face, box_width as f32, box_height as f32)?;
     unsafe {
         let alignment = match align {
             Align::Left => DWRITE_TEXT_ALIGNMENT_LEADING,
@@ -243,7 +336,83 @@ pub fn draw_marked(buffer: &Backbuffer, text: &str, face: &Face, ink: Rgb, rect:
             let _ = line.SetDrawingEffect(&engine.marker, DWRITE_TEXT_RANGE { startPosition: start, length });
         }
     }
-    render(engine, buffer, &line, ink, marked_ink, rect.left as f32, rect.top as f32, rect);
+    let area = (box_width * box_height) as usize;
+    let mut target = Target {
+        factory: engine.factory.clone(),
+        bits: std::ptr::null_mut(),
+        width: box_width,
+        clip: RECT { left: 0, top: 0, right: box_width, bottom: box_height },
+        ink: Rgb(0, 0, 0),
+        marked_ink: Rgb(0, 0, 0),
+        weights: [0; 256],
+        coverage: Vec::new(),
+        in_colour: false,
+        capture: Some((vec![0; area], if spans.is_empty() { Vec::new() } else { vec![0; area] })),
+    };
+    let context = &mut target as *mut Target as *const core::ffi::c_void;
+    // The box's own corner is a whole pixel, so letters land the same wherever it's drawn.
+    unsafe { line.Draw(Some(context), &engine.renderer, 0.0, 0.0) }.ok()?;
+    let (plain, marked) = target.capture.take()?;
+    Some(crop(plain, marked, box_width, box_height))
+}
+
+/// The smallest part of the two planes that has anything in it.
+fn crop(plain: Vec<u8>, marked: Vec<u8>, width: i32, height: i32) -> Drawn {
+    let w = width as usize;
+    let used = |at: usize| plain[at] != 0 || marked.get(at).is_some_and(|&value| value != 0);
+    let (mut x0, mut y0, mut x1, mut y1) = (w, height as usize, 0, 0);
+    for y in 0..height as usize {
+        for x in 0..w {
+            if used(y * w + x) {
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+            }
+        }
+    }
+    if x1 <= x0 || y1 <= y0 {
+        return Drawn { x: 0, y: 0, width: 0, height: 0, plain: Vec::new(), marked: Vec::new() };
+    }
+    let cut = |plane: &[u8]| -> Vec<u8> {
+        if plane.is_empty() {
+            return Vec::new();
+        }
+        (y0..y1).flat_map(|y| plane[y * w + x0..y * w + x1].iter().copied()).collect()
+    };
+    Drawn { x: x0 as i32, y: y0 as i32, width: (x1 - x0) as i32, height: (y1 - y0) as i32, plain: cut(&plain), marked: cut(&marked) }
+}
+
+/// Blends a line kept by [`capture_line`] into its box, cut off at the box's edges.
+fn blend_drawn(buffer: &Backbuffer, drawn: &Drawn, rect: RECT, ink: Rgb, marked_ink: Rgb) {
+    let (bits, width, height) = buffer.raw();
+    let clip = RECT { left: rect.left.max(0), top: rect.top.max(0), right: rect.right.min(width), bottom: rect.bottom.min(height) };
+    let (x0, y0) = (rect.left + drawn.x, rect.top + drawn.y);
+    let (from, to) = ((clip.left - x0).max(0), (clip.right - x0).min(drawn.width));
+    if from >= to {
+        return;
+    }
+    let curve = weights(ink);
+    for row in 0..drawn.height {
+        let y = y0 + row;
+        if y < clip.top || y >= clip.bottom {
+            continue;
+        }
+        let start = (row * drawn.width) as usize;
+        // Safety: the row and columns are inside the buffer, which `raw` describes.
+        let pixels = unsafe { std::slice::from_raw_parts_mut(bits.add((y * width + x0 + from) as usize), (to - from) as usize) };
+        let plain = &drawn.plain[start + from as usize..start + to as usize];
+        for (pixel, &amount) in pixels.iter_mut().zip(plain) {
+            if amount != 0 {
+                *pixel = blend_coverage(*pixel, ink, curve[amount as usize]);
+            }
+        }
+        if !drawn.marked.is_empty() {
+            let marked = &drawn.marked[start + from as usize..start + to as usize];
+            for (pixel, &amount) in pixels.iter_mut().zip(marked) {
+                if amount != 0 {
+                    *pixel = blend_coverage(*pixel, marked_ink, curve[amount as usize]);
+                }
+            }
+        }
+    }
 }
 
 /// Text over several lines from the top of `rect`, broken between words, and inside a word only
@@ -411,9 +580,10 @@ fn render(engine: &Engine, buffer: &Backbuffer, line: &IDWriteTextLayout, ink: R
         clip,
         ink,
         marked_ink,
-        weights: weights_for(ink),
+        weights: weights(ink),
         coverage: Vec::new(),
         in_colour: false,
+        capture: None,
     };
     let context = &mut target as *mut Target as *const core::ffi::c_void;
     let _ = unsafe { line.Draw(Some(context), &engine.renderer, x, y) };
@@ -442,9 +612,10 @@ pub fn emoji_pixels(glyph: &str, size: i32) -> Option<Vec<u8>> {
         clip: RECT { left: 0, top: 0, right: size, bottom: size },
         ink,
         marked_ink: ink,
-        weights: weights_for(ink),
+        weights: weights(ink),
         coverage: Vec::new(),
         in_colour: true,
+        capture: None,
     };
     let context = &mut target as *mut Target as *const core::ffi::c_void;
     unsafe { line.Draw(Some(context), &engine.renderer, 0.0, 0.0) }.ok()?;
@@ -452,7 +623,8 @@ pub fn emoji_pixels(glyph: &str, size: i32) -> Option<Vec<u8>> {
 }
 
 /// Adds one layer of letters, each pixel by how much of it they cover.
-fn blend_run(target: &mut Target, run: *const DWRITE_GLYPH_RUN, measuring: DWRITE_MEASURING_MODE, x: f32, y: f32, ink: Rgb, opacity: f32, curve: Option<[u8; 256]>) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn blend_run(target: &mut Target, run: *const DWRITE_GLYPH_RUN, measuring: DWRITE_MEASURING_MODE, x: f32, y: f32, ink: Rgb, opacity: f32, curve: Option<[u8; 256]>, marked_run: bool) -> Result<()> {
     let (mode, fit) = if curve.is_some() {
         (DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, DWRITE_GRID_FIT_MODE_ENABLED)
     } else {
@@ -473,6 +645,19 @@ fn blend_run(target: &mut Target, run: *const DWRITE_GLYPH_RUN, measuring: DWRIT
     let rows = (area.bottom - area.top) as usize;
     target.coverage.resize(span * rows, 0);
     unsafe { analysis.CreateAlphaTexture(DWRITE_TEXTURE_ALIASED_1x1, &area, &mut target.coverage)? };
+    if let Some((plain, marked)) = target.capture.as_mut() {
+        // Kept as it is, for the curve and colour to go on each time it's drawn. Letters from
+        // another run that touch the same pixel cover it together.
+        let plane = if marked_run && !marked.is_empty() { marked } else { plain };
+        for row in 0..rows {
+            let start = (area.top as usize + row) * target.width as usize + area.left as usize;
+            for (kept, &amount) in plane[start..start + span].iter_mut().zip(&target.coverage[row * span..(row + 1) * span]) {
+                let (a, b) = (*kept as u32, amount as u32);
+                *kept = (a + b - a * b / 255).min(255) as u8;
+            }
+        }
+        return Ok(());
+    }
     for row in 0..rows {
         let start = (area.top as usize + row) * target.width as usize + area.left as usize;
         let pixels = unsafe { std::slice::from_raw_parts_mut(target.bits.add(start), span) };
@@ -487,6 +672,22 @@ fn blend_run(target: &mut Target, run: *const DWRITE_GLYPH_RUN, measuring: DWRIT
         }
     }
     Ok(())
+}
+
+/// [`weights_for`], worked out once for each colour: it takes 256 powers.
+fn weights(ink: Rgb) -> [u8; 256] {
+    WEIGHTS.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        if let Some((_, table)) = kept.iter().find(|(colour, _)| *colour == ink) {
+            return *table;
+        }
+        let table = weights_for(ink);
+        if kept.len() >= 24 {
+            kept.clear();
+        }
+        kept.push((ink, table));
+        table
+    })
 }
 
 /// Blending straight in screen values makes light letters on dark look thin, and dark letters on
@@ -538,17 +739,17 @@ impl IDWriteTextRenderer_Impl for Sink_Impl {
                         let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
                         (Rgb(channel(layer.runColor.r), channel(layer.runColor.g), channel(layer.runColor.b)), layer.runColor.a)
                     };
-                    blend_run(target, &layer.glyphRun, measuring, layer.baselineOriginX, layer.baselineOriginY, ink, opacity, None)?;
+                    blend_run(target, &layer.glyphRun, measuring, layer.baselineOriginX, layer.baselineOriginY, ink, opacity, None, false)?;
                 }
                 return Ok(());
             }
             // A symbol with no colours of its own.
             let ink = target.ink;
-            return blend_run(target, run, measuring, x, y, ink, 1.0, None);
+            return blend_run(target, run, measuring, x, y, ink, 1.0, None, false);
         }
         let ink = if effect.is_some() { target.marked_ink } else { target.ink };
         let curve = target.weights;
-        blend_run(target, run, measuring, x, y, ink, 1.0, Some(curve))
+        blend_run(target, run, measuring, x, y, ink, 1.0, Some(curve), effect.is_some())
     }
 
     fn DrawUnderline(&self, _context: *const core::ffi::c_void, _x: f32, _y: f32, _underline: *const DWRITE_UNDERLINE, _effect: Ref<IUnknown>) -> Result<()> {
@@ -696,6 +897,35 @@ mod tests {
         draw_clipped(&buffer, "", &face(), Rgb(255, 255, 255), 0, rect);
         assert_eq!(inked(&buffer), 0);
         assert_eq!(width("", &face()), 0);
+    }
+
+    #[test]
+    fn text_is_drawn_the_same_from_the_cache_wherever_it_goes() {
+        let face = face();
+        let spans = found_spans("Remote Desktop", "desk");
+        let draw_at = |x: i32, y: i32, ink: Rgb| {
+            let buffer = Backbuffer::new(260, 60).unwrap();
+            let rect = RECT { left: x, top: y, right: x + 180, bottom: y + 24 };
+            draw_marked(&buffer, "Remote Desktop", &face, ink, rect, Align::Left, &spans, Rgb(255, 255, 255));
+            buffer.snapshot()
+        };
+        forget_drawn();
+        let grey = Rgb(150, 150, 160);
+        let first = draw_at(10, 8, grey);
+        assert_eq!(draw_at(10, 8, grey), first, "drawn again from what was kept");
+        let moved = draw_at(47, 29, grey);
+        for y in 0..24 {
+            for x in 0..180 {
+                assert_eq!(moved[((y + 29) * 260 + x + 47) as usize], first[((y + 8) * 260 + x + 10) as usize], "at {x},{y}");
+            }
+        }
+        // The colour isn't kept, only where the letters are.
+        assert_ne!(draw_at(10, 8, Rgb(250, 120, 0)), first);
+        // Nor is the measuring: the same width, kept or not.
+        let kept = width("Remote Desktop", &face);
+        forget_drawn();
+        assert_eq!(width("Remote Desktop", &face), kept);
+        forget_drawn();
     }
 
     #[test]

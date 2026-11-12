@@ -7,18 +7,19 @@ What's built, and what's next by impact. "Tested" below means the automated suit
 | Feature | Windows | macOS |
 |---|---|---|
 | Launcher, search, app launching | tested | tested |
-| Ctrl/Cmd+K action menu | written as a small menu over the list, seen in off-screen frames; its automated checks are written and **not run yet** | tested, as the older full list |
-| Orbit menu from the footer logo | seen in off-screen frames; automated check written and **not run yet** | not built |
-| Updates from GitHub releases: the daily look, the download, the notification, the tray item and Settings' Updates row | unit tested; the look and download tested against the real release on GitHub; the Settings row seen in off-screen frames. **Installing an update hasn't been run end to end yet** | not built |
-| Emoji list | unit tested, seen in off-screen frames; pasting check written and **not run yet** | not built |
+| Ctrl/Cmd+K action menu | a small menu over the list; tested with keys and with clicks sent to the window, and seen on a real screen | tested, as the older full list |
+| Orbit menu from the footer logo | tested with a click sent to the window | not built |
+| Updates from GitHub releases: the daily look, the download, the notification, the tray item and Settings' Updates row | unit tested; the look and download tested against the real release on GitHub; the Settings row seen in off-screen frames. Installing an update ran end to end once on the owner's PC, from 1.2.0 to 1.2.1 | not built |
+| Emoji list | tested, including pasting where you were typing | not built |
 | Quicklink and command forms, and making them from the launcher | unit tested, forms seen in off-screen frames; **not used on screen yet** | not built |
-| Launcher shortcut left to games and listed apps | check with a listed app written and **not run yet**; no real game tried | not built |
+| Launcher shortcut left to games and listed apps | tested with a listed app; no real game tried | not built |
 | Scrolling Settings pages, and the Snippets and Links pages | unit tested, seen in off-screen frames; real wheel, Tab and dragging **not tested** | not built |
-| Settings saving as you change them, with no Save or Cancel | checked by driving the hidden window with messages; end-to-end check written and **not run yet** | not built |
+| Settings saving as you change them, with no Save or Cancel | tested: changes made with keys and clicks save with Settings still open, and closing it unchanged changes nothing | not built |
 | Settings overhaul: key recorder for the launcher shortcut, hotkeys added and changed on the Hotkeys page, lists sized to fit, dependent settings dimmed, drop-downs for numbers, confirm in place, window fits small screens | checked by driving the hidden window with messages and seen in off-screen frames; real keys, focus, a real second monitor and a screen smaller than the window **not tested** | not built |
 | Ctrl+Backspace in Settings and forms | unit tested for where a word starts; not pressed in the real windows yet | not built |
 | Searching Settings from the box at the top left, with Ctrl+F or / to get there | unit tested, checked by driving the hidden window with messages, and seen in off-screen frames. **Real typing, clicks and focus not tried on screen yet** | not built |
-| Less glass, rounder corners, soft shadow (layered window over a blur plate) | off-screen frames only. **The blur plate and the corners haven't been seen on a real screen** | not built |
+| Less glass, rounder corners, soft shadow (layered window over a blur plate) | seen on a real screen, recorded frame by frame | not built |
+| Motion: fades, a gliding selection, menus rising, pages cross-fading, the height easing, and the Animations switch | seen on a real screen, recorded frame by frame, with the switch on and off; keys typed at once and clicks during the fade-out checked there too | not built |
 | Set a hotkey from the action menu | tested | not built |
 | Keycap badges and redesigned look | checked by screenshots, before the rounder design above | not built |
 | An app's hotkey, pressed again, minimizes it | tested | not built |
@@ -31,7 +32,7 @@ What's built, and what's next by impact. "Tested" below means the automated suit
 | Settings window | tested | tested for what the checks open; Data page buttons compiled only |
 | Highlight colour from the system accent | unit tested, seen on one grey accent; other accents and changing it live not tried | not built |
 | Searchable list of apps for exclusions | tested | not built: still typed names |
-| Footer hints as buttons | tested with clicks sent to the window, before they moved into rounded pills; the updated check is **not run yet** | not built |
+| Footer hints as buttons | tested with clicks sent to the window | not built |
 | Vim keys with Alt, and full Vim | tested with injected keys | not built |
 | Search that forgives typing mistakes | tested | not built on the app side, though the search is shared |
 | Favourites section, reorder, favourites-only opening | tested | not built |
@@ -39,7 +40,7 @@ What's built, and what's next by impact. "Tested" below means the automated suit
 | macOS feel keys | tested with injected keys | not applicable: a Mac already has them |
 | Earlier, stronger glass look | seen on screen over a bright picture and over black, dark and light; judged by eye. Replaced by the row above | not built |
 | Clipboard image thumbnails | hidden frames checked with made-up images | not built |
-| 1Password and Ente Auth | automated checks use stand-ins for their tools; the owner confirmed listing and copying with their real ones. Typing an Ente code on Enter, and the clipboard when it can't be typed, **not tried with the real tool yet**. Clearing a copied password after 30 s failed its check and was fixed afterwards: **the fix has not been run yet** | not built |
+| 1Password and Ente Auth | automated checks use stand-ins for their tools; the owner confirmed listing and copying with their real ones. Typing an Ente code on Enter, and copying it on Ctrl+Enter, tested with the stand-in; **not tried with the real tool yet**, nor the clipboard when it can't be typed. Clearing a copied password after 30 s tested | not built |
 | Installing the Ente tool from Settings | the app's install code ran for real into a scratch folder, and the PATH step on a scratch registry key. The button itself: not tested | not built |
 | Installing the 1Password tool from Settings | **not tested**, so a real install doesn't change the owner's PC unasked | not built |
 | Orbit Setup: install, update and uninstall, then the welcome in the installed Orbit | unit tested; every page seen in off-screen frames; a silent install, an update over 1.0.0, uninstall and reinstall tested in a sandbox by `scripts/test-install-windows.ps1`. **Clicking through the Setup window, and the handover from Setup to the installed Orbit, have not been tried yet** | not built |
