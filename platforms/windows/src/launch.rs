@@ -185,6 +185,8 @@ fn is_app_window(hwnd: HWND) -> bool {
 pub struct RunningApps {
     exe_names: Vec<String>,
     aumids: Vec<String>,
+    /// A File Explorer folder window is open.
+    explorer: bool,
 }
 
 impl RunningApps {
@@ -211,6 +213,9 @@ impl RunningApps {
     }
 
     pub fn has(&self, app: &AppEntry) -> bool {
+        if is_file_explorer(app) {
+            return self.explorer;
+        }
         if !app.aumid.is_empty() && self.aumids.iter().any(|id| id.eq_ignore_ascii_case(&app.aumid)) {
             return true;
         }
@@ -242,10 +247,26 @@ unsafe extern "system" fn gather_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
             let mut args: (&mut RunningApps, u32) = (running, pid);
             let _ = EnumChildWindows(Some(hwnd), Some(gather_child), LPARAM(&mut args as *mut _ as isize));
         } else {
+            running.explorer |= is_explorer_window(hwnd, pid);
             running.add_process(pid);
         }
         BOOL(1)
     }
+}
+
+/// The shell folder the app list knows File Explorer by.
+const FILE_EXPLORER_FOLDER: &str = "::{52205fd8-5dfb-447d-801a-d0b52f2e83e1}";
+
+/// File Explorer is listed by a shell folder and an app ID that its process never reports, so
+/// neither names its windows.
+fn is_file_explorer(app: &AppEntry) -> bool {
+    app.aumid.eq_ignore_ascii_case("Microsoft.Windows.Explorer") || app.exe.eq_ignore_ascii_case(FILE_EXPLORER_FOLDER)
+}
+
+/// A folder window of File Explorer. The same process runs the desktop and the taskbar, so only
+/// its folder windows count.
+fn is_explorer_window(hwnd: HWND, pid: u32) -> bool {
+    class_name(hwnd) == "CabinetWClass" && process_image_path(pid).is_some_and(|path| exe_name(&path.to_lowercase()) == "explorer.exe")
 }
 
 /// Does this window belong to the app? A UWP frame is hosted by another process, so its content
@@ -254,6 +275,9 @@ fn window_is_app(hwnd: HWND, app: &AppEntry) -> bool {
     unsafe {
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if is_file_explorer(app) {
+            return is_explorer_window(hwnd, pid);
+        }
         if class_name(hwnd) == "ApplicationFrameWindow" {
             let mut found = false;
             let args: (*const AppEntry, u32, *mut bool) = (app, pid, &mut found);
@@ -477,5 +501,24 @@ mod tests {
         assert!(end_task(&app).is_err(), "nothing left to end");
         let explorer = AppEntry { id: "e".into(), name: "File Explorer".into(), exe: r"c:\windows\explorer.exe".into(), aumid: String::new() };
         assert!(end_task(&explorer).unwrap_err().contains("taskbar"));
+    }
+
+    /// Only reads which windows are open; nothing is shown, focused or started.
+    #[test]
+    fn file_explorer_is_its_folder_windows_only() {
+        let explorer = AppEntry { id: "Microsoft.Windows.Explorer".into(), name: "File Explorer".into(), exe: FILE_EXPLORER_FOLDER.into(), aumid: "Microsoft.Windows.Explorer".into() };
+        assert!(is_file_explorer(&explorer));
+        let other = AppEntry { id: "x".into(), name: "Notepad".into(), exe: r"c:\windows\notepad.exe".into(), aumid: String::new() };
+        assert!(!is_file_explorer(&other));
+        // The desktop and taskbar belong to explorer.exe too, but never count as a File Explorer window.
+        if let Some(window) = find_running_window(&explorer) {
+            assert_eq!(class_name(window), "CabinetWClass");
+        }
+        unsafe {
+            let desktop = windows::Win32::UI::WindowsAndMessaging::FindWindowW(windows::core::w!("Progman"), PCWSTR::null());
+            if let Ok(desktop) = desktop {
+                assert!(!window_is_app(desktop, &explorer));
+            }
+        }
     }
 }
