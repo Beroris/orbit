@@ -173,6 +173,9 @@ const TIMER_FILES_RETRY: usize = 11;
 pub const TIMER_UPDATE_CHECK: usize = 12;
 /// Setup was started to update Orbit, and should have closed it by now.
 pub const TIMER_UPDATE_SETUP: usize = 13;
+/// The Start menu changed but the app list didn't, so it looks once more. See `on_index_done`.
+const TIMER_INDEX_RECHECK: usize = 14;
+const INDEX_RECHECK_MS: u32 = 15_000;
 /// How long a copied password or code stays on the clipboard.
 const SECRET_CLEAR_MS: u32 = 30_000;
 /// How long the names in a password manager stay in memory after being fetched.
@@ -352,6 +355,9 @@ pub struct App {
     /// An app changed while memory was too tight to look. Caught up on the next show.
     index_owed: bool,
     index_dirty: bool,
+    /// The run under way, or the next one, is for a change the watcher saw. If it finds the
+    /// list unchanged, Orbit looks once more a little later.
+    index_recheck: bool,
     taskbar_created: u32,
     trim_after_ms: Option<u32>,
     last_mouse: (i32, i32),
@@ -1005,6 +1011,7 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             index_running: false,
             index_owed: false,
             index_dirty: false,
+            index_recheck: false,
             taskbar_created,
             trim_after_ms: options.trim_after_ms,
             last_mouse: (i32::MIN, i32::MIN),
@@ -1325,6 +1332,10 @@ impl App {
             WM_ORBIT_INDEX_DIRTY => {
                 // An app came or went, so the list catches up now, on battery too: it's one short
                 // run per change. Only when memory is nearly gone does it wait, for the next show.
+                self.index_recheck = true;
+                unsafe {
+                    let _ = KillTimer(Some(self.main), TIMER_INDEX_RECHECK);
+                }
                 if self.shed_active {
                     self.index_owed = true;
                 } else {
@@ -2334,6 +2345,13 @@ impl App {
             TIMER_FILES_RETRY => self.on_files_retry(),
             TIMER_UPDATE_CHECK => crate::update::on_check_timer(self.settings.check_updates),
             TIMER_UPDATE_SETUP => crate::update::on_setup_timer(),
+            TIMER_INDEX_RECHECK => {
+                if self.shed_active {
+                    self.index_owed = true;
+                } else {
+                    self.start_indexer(false);
+                }
+            }
             _ => {}
         }
     }
@@ -6595,9 +6613,11 @@ impl App {
 
     fn on_index_done(&mut self, ok: bool) {
         self.index_running = false;
+        let mut changed = false;
         if ok {
             if let Some(apps) = indexer::load_index(&self.dir) {
                 if apps != self.catalog.apps {
+                    changed = true;
                     self.catalog.set_apps(apps, &self.settings);
                     self.worker.send(Req::LoadUsage);
                 }
@@ -6611,6 +6631,14 @@ impl App {
         if self.index_dirty {
             self.index_dirty = false;
             self.start_indexer(false);
+        } else if std::mem::take(&mut self.index_recheck) && ok && !changed {
+            // The indexer reads Windows' own app list, which catches up with the Start menu
+            // folders a few seconds after they change, and later than that on a busy PC. A run that
+            // found nothing new may have looked too soon, and no further change would come to
+            // start another, so it looks once more.
+            unsafe {
+                let _ = SetTimer(Some(self.main), TIMER_INDEX_RECHECK, INDEX_RECHECK_MS, None);
+            }
         }
     }
 
