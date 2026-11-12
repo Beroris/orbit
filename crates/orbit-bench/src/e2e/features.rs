@@ -2454,8 +2454,48 @@ fn reset_shortcuts(report: &mut Report, options: &E2eOptions, root: &Path, sink:
     sink.focus();
 }
 
+/// The sign-in entry that starts Orbit, exactly as Windows holds it, or `None` without one.
+fn sign_in_entry() -> Option<Vec<u16>> {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
+    let mut buffer = vec![0u16; 2048];
+    let mut size = (buffer.len() * 2) as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            w!("Orbit"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buffer.as_mut_ptr() as *mut _),
+            Some(&mut size),
+        )
+    };
+    status.is_ok().then(|| {
+        buffer.truncate(size as usize / 2);
+        buffer
+    })
+}
+
+/// Writes a sign-in entry read by [`sign_in_entry`] back as it was.
+fn put_back_sign_in_entry(entry: &[u16]) {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW};
+    unsafe {
+        let _ = RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            w!("Orbit"),
+            REG_SZ.0,
+            Some(entry.as_ptr() as *const _),
+            (entry.len() * 2) as u32,
+        );
+    }
+}
+
 fn delete_local_data(report: &mut Report, options: &E2eOptions, root: &Path, sink: &Sink, chord: &[INPUT]) {
     const TEST: &str = "Delete All Orbit Data";
+    // The copy under test only deletes what's its own. A sign-in entry that starts another copy,
+    // such as the Orbit installed on this PC, isn't.
+    let entry_before = sign_in_entry();
     let (dir, log) = fresh_dir(root, "delete", &base_settings());
     {
         let store = Store::open(&dir, true).expect("store");
@@ -2497,6 +2537,17 @@ fn delete_local_data(report: &mut Report, options: &E2eOptions, root: &Path, sin
     press(VK_RETURN.0);
     let exited = poll(Duration::from_secs(5), || session.child.try_wait().ok().flatten().is_some());
     report.check("Delete All Orbit Data: Orbit quits afterwards", exited as u32, 1);
+    match &entry_before {
+        Some(before) => {
+            let kept = sign_in_entry().as_ref() == Some(before);
+            report.check("Delete All Orbit Data leaves another copy's sign-in entry alone", kept as u32, 1);
+            if !kept {
+                // Put back, so running the suite never changes what starts when this PC signs in.
+                put_back_sign_in_entry(before);
+            }
+        }
+        None => report.not_tested.push(format!("{TEST}: leaving another copy's sign-in entry alone, as no Orbit starts at sign-in here")),
+    }
     if !exited {
         quit(&mut session);
         return;
