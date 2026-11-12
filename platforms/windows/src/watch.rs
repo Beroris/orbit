@@ -7,7 +7,7 @@ use crate::util::{SendHwnd, wide_path};
 use std::path::PathBuf;
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Storage::FileSystem::{
-    FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME, FindCloseChangeNotification,
+    FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE, FindCloseChangeNotification,
     FindFirstChangeNotificationW, FindNextChangeNotification,
 };
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent, WaitForMultipleObjects};
@@ -38,7 +38,10 @@ fn run(main: SendHwnd, dirty_message: u32) {
     let mut handles: Vec<HANDLE> = Vec::new();
     for dir in start_menu_dirs() {
         let path = wide_path(&dir);
-        let filter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME;
+        // Names catch shortcuts added, removed or renamed. Writes catch a shortcut saved over one
+        // of the same name, as an installer does when it reinstalls or moves its program: the
+        // name stays, so only the write says the shortcut now points somewhere else.
+        let filter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE;
         if let Ok(handle) = unsafe { FindFirstChangeNotificationW(PCWSTR(path.as_ptr()), true, filter) } {
             handles.push(handle);
         }
