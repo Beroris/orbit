@@ -6861,8 +6861,13 @@ pub fn launch_at_login_registered() -> bool {
     command.trim().trim_matches('"').eq_ignore_ascii_case(&exe.display().to_string())
 }
 
+/// Turning it off only removes an entry that starts this copy. Another copy's stays, such as the
+/// installed Orbit's while a portable or test copy deletes its own data.
 pub fn set_launch_at_login(enabled: bool) {
     use windows::Win32::System::Registry::*;
+    if !enabled && !launch_at_login_registered() {
+        return;
+    }
     let value_name = w!("Orbit");
     unsafe {
         let mut key = HKEY::default();
