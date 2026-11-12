@@ -80,6 +80,35 @@ The macOS resident figure includes shared system frameworks, which is why it's s
 
 **Typing right after the shortcut.** With keys sent 0 ms after the shortcut, 0 of 20 rounds kept every key. At 5 ms, 20 of 20 did, and at 15 and 30 ms all rounds were clean. A person can't type that fast, but a key pressed at the same moment as the shortcut can reach the previous app.
 
+## Drawing a frame
+
+How long the launcher takes to draw one frame, before it's shown. Measured on 2026-11-11 with hidden previews (`--preview-frame`) of the same data, 96 DPI, release builds, p50 of 400 frames, comparing 1.3.1 with 1.4.0, which added motion. The timing loop was added for the measurement and isn't in the code. These times are part of "query seen to frame drawn" above, which wasn't run again.
+
+| Frame | 1.3.1 | 1.4.0 |
+|---|---:|---:|
+| Home list, drawn again | 3.00 ms | 0.87 ms |
+| Results for "co", drawn again | 3.05 ms | 1.14 ms |
+| Results with the actions menu open | 5.00 ms | 1.72 ms |
+| First frame after opening, home list | 4.55 ms | 1.94 ms |
+| First frame after opening, actions menu | 7.71 ms | 3.03 ms |
+| A frame while the bottom edge moves | | 1.0 to 1.7 ms |
+
+Most of the time went on drawing symbols pixel by pixel and on laying out and rasterizing text on every frame. Both are now kept between frames (see [ARCHITECTURE.md](ARCHITECTURE.md)), which costs up to 3 MB for text while the launcher is open, let go when the working set is trimmed. The three frames compared came out the same, byte for byte, as 1.3.1's. Showing the frame (`UpdateLayeredWindow`) takes about 0.1 ms on top.
+
+The real window, from `orbit-bench e2e` on 2026-11-12 (Ryzen 5 5600X, 2560x1440 at 300 Hz), 1.3.1 then 1.4.0, one run each, p50:
+
+| Measure | 1.3.1 | 1.4.0 |
+|---|---:|---:|
+| Key injected to window visible | 5.21 ms | 2.46 ms |
+| Key injected to Orbit in front | 5.40 ms | 3.29 ms |
+| Hotkey to window shown and painted | 7.55 ms | 2.97 ms |
+| Key injected to the frame with its results | 4.15 ms | 3.21 ms |
+| Rounds with every key caught, typing 5 ms after the hotkey | 18 of 20 | 20 of 20 |
+| Private memory after the trim | 9.3 MB | 9.4 MB |
+| Private memory with the launcher open, with results | 9.7 MB | 11.9 MB |
+
+The bench's trim message now does what the trim timer does 15 s after the launcher closes, so what's kept for drawing goes too, and the heap is asked to give its free blocks back. Idle CPU and disk writes stay at zero, with one more thread, the frame clock, which sleeps while nothing moves.
+
 ## Method
 
 - **T0 to T6** are QueryPerformanceCounter timestamps in the app, written only with `--bench-log`: T0 hotkey message, T1 frame ready, T2 window shown, T3 input focused, T4 query seen, T5 results built, T6 frame drawn. "Key injected" times start in the benchmark process, just before `SendInput`.

@@ -31,6 +31,7 @@ mod keys;
 mod launch;
 mod link_form;
 mod metrics;
+mod motion;
 mod rates;
 mod rows;
 mod screen_picker;
@@ -125,7 +126,7 @@ fn parse_args() -> Args {
             "--backdrop" => args.backdrop = iter.next().and_then(|t| ui::Backdrop::parse(&t.to_string_lossy())),
             // Draws one frame to a file and exits, without ever showing a window or taking focus.
             "--preview-frame" => {
-                args.preview = iter.next().map(|out| app::Preview { out: PathBuf::from(out), query: String::new(), actions: false, scope: None, select: 0, step: 0 });
+                args.preview = iter.next().map(|out| app::Preview { out: PathBuf::from(out), query: String::new(), actions: false, scope: None, select: 0, motion: None, step: 0 });
             }
             "--preview-select" => {
                 let index = iter.next().and_then(|t| t.to_string_lossy().parse().ok()).unwrap_or(0);
@@ -143,6 +144,14 @@ fn parse_args() -> Args {
                 let text = iter.next().map(|t| t.to_string_lossy().into_owned());
                 if let Some(preview) = &mut args.preview {
                     preview.scope = text;
+                }
+            }
+            // Draws a moment partway through a motion, as "--preview-motion select 40".
+            "--preview-motion" => {
+                let what = iter.next().map(|t| t.to_string_lossy().into_owned()).unwrap_or_default();
+                let ms = iter.next().and_then(|t| t.to_string_lossy().parse().ok()).unwrap_or(0);
+                if let Some(preview) = &mut args.preview {
+                    preview.motion = Some((what, ms));
                 }
             }
             "--preview-actions" => {

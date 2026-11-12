@@ -1197,10 +1197,13 @@ fn settings_window(report: &mut Report, options: &E2eOptions, root: &Path, sink:
             report.not_tested.push(format!("settings difference after save:\nbefore: {before}\nafter: {after}"));
         }
     }
-    // The Hotkeys page: Edit as text, the search box, then the list. Delete asks, then removes a row.
+    // The Hotkeys page, two down from General: Edit as text, the search box, then the list. Delete
+    // asks, then removes a row.
     if open(&session) {
-        press(VK_DOWN.0);
-        sleep(60);
+        for _ in 0..2 {
+            press(VK_DOWN.0);
+            sleep(60);
+        }
         for _ in 0..3 {
             press(VK_TAB.0);
             sleep(40);
@@ -1255,10 +1258,6 @@ fn note_opened(session: &Session) -> bool {
     wait_until(Duration::from_secs(2), || find_window(session.pid, w!("OrbitNote")).is_some())
 }
 
-fn snippet_opened(session: &Session) -> bool {
-    wait_until(Duration::from_secs(2), || find_window(session.pid, w!("OrbitSnippet")).is_some())
-}
-
 /// The hints in the launcher's footer are buttons. Clicks go straight to the window, so the real
 /// pointer doesn't move. Positions are from the launcher's bottom right, inside the window's shadow,
 /// in the footer's order at 100%.
@@ -1293,8 +1292,9 @@ fn footer_buttons(report: &mut Report, options: &E2eOptions, root: &Path, sink: 
         let _ = PostMessageW(Some(session.main), WM_LBUTTONDOWN, WPARAM(1), point);
         let _ = PostMessageW(Some(session.main), WM_LBUTTONUP, WPARAM(0), point);
     }
-    sleep(150);
-    report.check("clicking the shadow around the launcher closes it", (!session.visible()) as u32, 1);
+    // It fades out, so give it that long.
+    let closed = wait_until(Duration::from_millis(600), || !session.visible());
+    report.check("clicking the shadow around the launcher closes it", closed as u32, 1);
     if !run_query(&session, chord, "new note") {
         stopped(report, TEST);
         quit(&mut session);
@@ -1463,6 +1463,41 @@ fn launcher_stands_aside(report: &mut Report, options: &E2eOptions, root: &Path,
     sink.focus();
 }
 
+/// Two commands for the Vim checks, each counting its runs. Searching `qzvim` lists them in this
+/// order on any PC, whatever's installed or running and however often each has run: the first's
+/// name is the whole query, which no amount of use can outrank.
+struct VimTargets {
+    first: PathBuf,
+    second: PathBuf,
+}
+
+const VIM_QUERY: &str = "qzvim";
+
+impl VimTargets {
+    fn add(options: &E2eOptions, root: &Path, name: &str, settings: &mut Settings) -> VimTargets {
+        let probe = probe_path(options);
+        let first = root.join(format!("{name}-first.txt"));
+        let second = root.join(format!("{name}-second.txt"));
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
+        settings.custom_commands.push(probe_command("bench-vim-first", "Qzvim", &probe, &first));
+        settings.custom_commands.push(probe_command("bench-vim-second", "Qzvim Second", &probe, &second));
+        VimTargets { first, second }
+    }
+
+    fn counts(&self) -> (usize, usize) {
+        (runs_recorded(&self.first), runs_recorded(&self.second))
+    }
+
+    /// Waits for something to run, then says whether it was the first result (or the second), once.
+    fn ran(&self, before: (usize, usize), second: bool) -> bool {
+        poll(Duration::from_secs(3), || self.counts() != before);
+        sleep(300);
+        let expected = if second { (before.0, before.1 + 1) } else { (before.0 + 1, before.1) };
+        self.counts() == expected
+    }
+}
+
 /// Holding Alt to navigate, with typing otherwise as usual.
 fn vim_keys(report: &mut Report, options: &E2eOptions, root: &Path, sink: &Sink, chord: &[INPUT]) {
     use orbit_core::vim::KeyboardMode;
@@ -1471,43 +1506,49 @@ fn vim_keys(report: &mut Report, options: &E2eOptions, root: &Path, sink: &Sink,
     const VK_L: u16 = 0x4C;
     const VK_UPPER_K: u16 = 0x4B;
     const VK_H: u16 = 0x48;
+    if !probe_path(options).exists() {
+        report.not_tested.push(format!("{TEST}: the probe program is missing"));
+        return;
+    }
     for (mode, name) in [(KeyboardMode::VimKeys, "vim-keys"), (KeyboardMode::Standard, "standard-keys")] {
         let mut settings = base_settings();
         settings.launcher.keyboard = mode;
+        let targets = VimTargets::add(options, root, name, &mut settings);
         let (dir, log) = fresh_dir(root, name, &settings);
         let Some(mut session) = launch_session(options, &dir, &log, Some(HOTKEY_TEXT)) else {
             report.check("Vim keys: Orbit starts", 0, 1);
             return;
         };
         sleep(400);
-        if !run_query(&session, chord, "new ") {
+        sink.focus();
+        if !run_query(&session, chord, VIM_QUERY) {
             stopped(report, TEST);
             quit(&mut session);
             return;
         }
+        let before = targets.counts();
         alt_and(VK_J);
         press(VK_RETURN.0);
         if mode == KeyboardMode::Standard {
-            report.check("with standard keys, Alt+J doesn't move the selection", note_opened(&session) as u32, 1);
-            close_editors(&session);
+            report.check("with standard keys, Alt+J doesn't move the selection", targets.ran(before, false) as u32, 1);
             hide_launcher(&session);
             quit(&mut session);
             sink.focus();
             continue;
         }
-        report.check("Alt+J moves down", snippet_opened(&session) as u32, 1);
-        close_editors(&session);
+        report.check("Alt+J moves down", targets.ran(before, true) as u32, 1);
         hide_launcher(&session);
-        if !run_query(&session, chord, "new ") {
+        sink.focus();
+        if !run_query(&session, chord, VIM_QUERY) {
             stopped(report, TEST);
             quit(&mut session);
             return;
         }
+        let before = targets.counts();
         alt_and(VK_J);
         alt_and(VK_UPPER_K);
         alt_and(VK_L);
-        report.check("Alt+K moves up, and Alt+L runs the result", note_opened(&session) as u32, 1);
-        close_editors(&session);
+        report.check("Alt+K moves up, and Alt+L runs the result", targets.ran(before, false) as u32, 1);
         hide_launcher(&session);
         // Plain letters still type, and letting go of Alt leaves the keyboard in the box.
         if !open_launcher(&session, sink, chord) {
@@ -1531,8 +1572,13 @@ fn vim_keys(report: &mut Report, options: &E2eOptions, root: &Path, sink: &Sink,
 fn full_vim(report: &mut Report, options: &E2eOptions, root: &Path, sink: &Sink, chord: &[INPUT]) {
     use orbit_core::vim::KeyboardMode;
     const TEST: &str = "full Vim";
+    if !probe_path(options).exists() {
+        report.not_tested.push(format!("{TEST}: the probe program is missing"));
+        return;
+    }
     let mut settings = base_settings();
     settings.launcher.keyboard = KeyboardMode::Vim;
+    let targets = VimTargets::add(options, root, "full-vim", &mut settings);
     let (dir, log) = fresh_dir(root, "full-vim", &settings);
     let Some(mut session) = launch_session(options, &dir, &log, Some(HOTKEY_TEXT)) else {
         report.check("full Vim: Orbit starts", 0, 1);
@@ -1560,27 +1606,29 @@ fn full_vim(report: &mut Report, options: &E2eOptions, root: &Path, sink: &Sink,
     report.check("Vim: h with nothing to go back to leaves Orbit open", session.visible() as u32, 1);
 
     // i to type, Esc to navigate, and Esc again to close.
-    type_text("inew ");
-    report.check("Vim: i starts typing", (text(&session) == "new ") as u32, 1);
+    type_text("i");
+    type_text(VIM_QUERY);
+    report.check("Vim: i starts typing", (text(&session) == VIM_QUERY) as u32, 1);
     press(VK_ESCAPE.0);
     sleep(80);
     report.check("Vim: Esc while typing keeps Orbit open", session.visible() as u32, 1);
     type_text("zz");
-    report.check("Vim: after Esc, letters don't type", (text(&session) == "new ") as u32, 1);
+    report.check("Vim: after Esc, letters don't type", (text(&session) == VIM_QUERY) as u32, 1);
 
     // j moves, l runs.
+    let before = targets.counts();
     type_text("jl");
-    report.check("Vim: j moves down and l runs the result", snippet_opened(&session) as u32, 1);
-    close_editors(&session);
+    report.check("Vim: j moves down and l runs the result", targets.ran(before, true) as u32, 1);
     hide_launcher(&session);
 
     // Enter while typing runs the result.
     open_or_stop!();
-    type_text("inew ");
+    type_text("i");
+    type_text(VIM_QUERY);
     sleep(150);
+    let before = targets.counts();
     press(VK_RETURN.0);
-    report.check("Vim: Enter while typing runs the result", note_opened(&session) as u32, 1);
-    close_editors(&session);
+    report.check("Vim: Enter while typing runs the result", targets.ran(before, false) as u32, 1);
     hide_launcher(&session);
 
     // It always opens navigating, even after typing last time.
@@ -1633,14 +1681,15 @@ fn full_vim(report: &mut Report, options: &E2eOptions, root: &Path, sink: &Sink,
 
     // Menus start out navigating, and h comes back to the same search.
     type_text("dd");
-    type_text("inew ");
+    type_text("i");
+    type_text(VIM_QUERY);
     sleep(150);
     press(VK_TAB.0);
     sleep(150);
     type_text("zz");
     let menu_navigating = text(&session).is_empty();
     type_text("h");
-    report.check("Vim: the action menu opens navigating, and h goes back to the search", (menu_navigating && text(&session) == "new " && session.visible()) as u32, 1);
+    report.check("Vim: the action menu opens navigating, and h goes back to the search", (menu_navigating && text(&session) == VIM_QUERY && session.visible()) as u32, 1);
     press(VK_ESCAPE.0);
     sleep(80);
     report.check("Vim: Esc while navigating clears the search first", (session.visible() && text(&session).is_empty()) as u32, 1);
@@ -1649,12 +1698,13 @@ fn full_vim(report: &mut Report, options: &E2eOptions, root: &Path, sink: &Sink,
 
     // Alt keys work while typing.
     open_or_stop!();
-    type_text("inew ");
+    type_text("i");
+    type_text(VIM_QUERY);
     sleep(150);
+    let before = targets.counts();
     alt_and(0x4A);
     press(VK_RETURN.0);
-    report.check("Vim: Alt+J moves down while typing", snippet_opened(&session) as u32, 1);
-    close_editors(&session);
+    report.check("Vim: Alt+J moves down while typing", targets.ran(before, true) as u32, 1);
     hide_launcher(&session);
     quit(&mut session);
     sink.focus();
@@ -1690,10 +1740,11 @@ fn app_picker(report: &mut Report, options: &E2eOptions, root: &Path, sink: &Sin
         if !opened {
             return false;
         }
-        press(VK_DOWN.0);
-        sleep(40);
-        press(VK_DOWN.0);
-        sleep(60);
+        // HyperKey is three pages down from General, then past its six settings to the search box.
+        for _ in 0..3 {
+            press(VK_DOWN.0);
+            sleep(50);
+        }
         for _ in 0..7 {
             press(VK_TAB.0);
             sleep(25);
@@ -3617,8 +3668,9 @@ fn integrations(report: &mut Report, options: &E2eOptions, root: &Path, sink: &S
     }
     hide_launcher(&session);
 
-    // Ente Auth.
+    // Ente Auth. Enter types the code where the launcher was opened, and Ctrl+Enter copies it.
     sink.focus();
+    let typed_before = sink_has(sink, "123456");
     if run_query(&session, chord, "ente auth") {
         press(VK_RETURN.0);
         let listed = wait_until(Duration::from_secs(3), || count_calls("ente auth code list --all --json --no-input --offline") == 1);
@@ -3626,9 +3678,23 @@ fn integrations(report: &mut Report, options: &E2eOptions, root: &Path, sink: &S
         wait_until(Duration::from_secs(3), || count_calls("ente auth code list --all --json --no-input") == 2);
         sleep(250);
         press(VK_RETURN.0);
-        let got = poll(Duration::from_secs(3), || clipboard_text().as_deref() == Some("123456"));
-        report.check("Enter on a code copies it", got as u32, 1);
-        report.check("codes are read without touching the network", (count_calls("ente auth code view qzcode1 --json --offline --no-input") == 1) as u32, 1);
+        let typed = !typed_before && wait_until(Duration::from_secs(3), || sink_has(sink, "123456"));
+        report.check("Enter on a code types it where you were", typed as u32, 1);
+        hide_launcher(&session);
+        sink.focus();
+        let lists = count_calls("ente auth code list");
+        if run_query(&session, chord, "ente auth") {
+            press(VK_RETURN.0);
+            wait_until(Duration::from_secs(3), || count_calls("ente auth code list") >= lists + 2);
+            sleep(250);
+            send(&chord_inputs(&[VK_CONTROL.0, VK_RETURN.0]));
+            let got = poll(Duration::from_secs(3), || clipboard_text().as_deref() == Some("123456"));
+            report.check("Ctrl+Enter on a code copies it", got as u32, 1);
+        } else {
+            stopped(report, TEST);
+        }
+        let offline = count_calls("ente auth code view qzcode1 --json --offline --no-input");
+        report.check("codes are read without touching the network", (offline == 2 && count_calls("ente auth code view") == 2) as u32, 1);
     } else {
         stopped(report, TEST);
     }

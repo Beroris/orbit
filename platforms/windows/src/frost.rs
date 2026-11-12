@@ -21,6 +21,7 @@ pub struct Frost {
     visual: SpriteVisual,
     shape: CompositionRoundedRectangleGeometry,
     size: (i32, i32, i32),
+    opacity: f32,
 }
 
 impl Frost {
@@ -44,7 +45,7 @@ impl Frost {
             let clip = compositor.CreateGeometricClipWithGeometry(&shape).ok()?;
             visual.SetClip(&clip).ok()?;
             target.SetRoot(&visual).ok()?;
-            Some(Frost { _queue: queue, _target: target, visual, shape, size: (0, 0, 0) })
+            Some(Frost { _queue: queue, _target: target, visual, shape, size: (0, 0, 0), opacity: 1.0 })
         }
     }
 
@@ -58,5 +59,15 @@ impl Frost {
         let _ = self.visual.SetSize(size);
         let _ = self.shape.SetSize(size);
         let _ = self.shape.SetCornerRadius(Vector2 { X: radius as f32, Y: radius as f32 });
+    }
+
+    /// How much of the blur shows, from 0 to 1, so it fades with the launcher.
+    pub fn set_opacity(&mut self, opacity: f32) {
+        let opacity = opacity.clamp(0.0, 1.0);
+        if (self.opacity - opacity).abs() < 0.002 {
+            return;
+        }
+        self.opacity = opacity;
+        let _ = self.visual.SetOpacity(opacity);
     }
 }

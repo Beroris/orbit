@@ -19,6 +19,7 @@ use crate::integrations::{self, Failure, Tool};
 use crate::keys;
 use crate::launch::{self, LaunchRequest};
 use crate::metrics::{Metrics, ShowTimes};
+use crate::motion::Fade;
 use crate::rows::*;
 use crate::tray::{self, MenuChoice, MenuState};
 use crate::ui::{self, Fonts, Theme};
@@ -194,6 +195,9 @@ pub struct Preview {
     pub scope: Option<String>,
     /// Which row to select before drawing.
     pub select: usize,
+    /// A moment partway through a motion to draw instead, such as ("select", 40): what's moving,
+    /// and how many milliseconds in.
+    pub motion: Option<(String, u64)>,
     pub step: u32,
 }
 
@@ -277,6 +281,12 @@ pub struct App {
     /// The compositor's blur in the plate, in the launcher's exact shape. Without it, the plate
     /// falls back to Windows' own backdrop, a little inside the launcher's corners.
     frost: Option<crate::frost::Frost>,
+    /// Everything in the launcher that's on its way somewhere. See `motion.rs`.
+    pub motion: crate::motion::Motion,
+    /// Whether things move: Orbit's setting, and Windows' own.
+    pub motion_on: bool,
+    /// The moment motion is drawn at, for a preview of one partway through. Otherwise it's now.
+    pub motion_clock: Option<Instant>,
     /// The small menu, when one is open.
     pub menu: Option<Menu>,
     /// Told when another program comes to the front. Only there if something depends on that.
@@ -557,8 +567,11 @@ fn create_frosted_plate() -> Option<(HWND, crate::frost::Frost)> {
             ..Default::default()
         };
         let _ = RegisterClassExW(&class);
+        // Layered as well as transparent, so clicks pass through to other programs' windows too.
+        // `HTTRANSPARENT` alone only passes them to windows of Orbit's own, and while the launcher
+        // fades away, the blur is the topmost thing left under the pointer.
         let plate = CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
             w!("OrbitPlate"),
             w!(""),
             WS_POPUP,
@@ -572,6 +585,8 @@ fn create_frosted_plate() -> Option<(HWND, crate::frost::Frost)> {
             None,
         )
         .ok()?;
+        // A layered window shows nothing until it's told how opaque it is.
+        let _ = SetLayeredWindowAttributes(plate, windows::Win32::Foundation::COLORREF(0), 255, LWA_ALPHA);
         // The blur is shaped by its own clip, so Windows mustn't round or outline the window.
         let corner = DWMWCP_DONOTROUND;
         let _ = DwmSetWindowAttribute(plate, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const _ as *const _, std::mem::size_of_val(&corner) as u32);
@@ -587,6 +602,36 @@ fn create_frosted_plate() -> Option<(HWND, crate::frost::Frost)> {
             }
         }
     }
+}
+
+/// An opacity from 0 to 1 as a layered window takes it.
+fn opacity_byte(opacity: f32) -> u8 {
+    (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// Lets clicks through a window to whatever is behind it, as the launcher does while it fades away.
+fn set_click_through(window: HWND, on: bool) {
+    unsafe {
+        let style = GetWindowLongPtrW(window, GWL_EXSTYLE);
+        let through = WS_EX_TRANSPARENT.0 as isize;
+        let wanted = if on { style | through } else { style & !through };
+        if wanted != style {
+            SetWindowLongPtrW(window, GWL_EXSTYLE, wanted);
+        }
+    }
+}
+
+/// Lets go of what's kept for drawing the launcher quickly: text, symbols and shadows already drawn.
+fn forget_drawing() {
+    crate::text::forget_drawn();
+    crate::symbols::forget_masks();
+    crate::gfx::forget_shadows();
+}
+
+/// Keys or clicks are waiting. They come before another frame, and draw one themselves.
+fn input_waiting() -> bool {
+    let status = unsafe { GetQueueStatus(QS_KEY | QS_MOUSEBUTTON) };
+    status >> 16 != 0
 }
 
 /// The blur's own window, from Windows' backdrop. Used when the compositor can't make one.
@@ -882,6 +927,7 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
         crate::rows::set_icon_style(settings.icon_style);
         let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
         let icon_capacity = if settings.low_resource_mode { 16 } else { 64 };
+        let settings_animate = settings.launcher.animate;
 
         let extension_data_dir = options.data_dir.clone();
         let mut app = App {
@@ -909,6 +955,9 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             plate: None,
             plate_size: (0, 0),
             frost: None,
+            motion: crate::motion::Motion::default(),
+            motion_on: settings_animate && crate::motion::windows_animates(),
+            motion_clock: None,
             menu: None,
             foreground_events: None,
             launcher_aside: false,
@@ -1207,7 +1256,7 @@ impl App {
             WM_DISPLAYCHANGE => {
                 crate::displays::changed();
                 if self.visible {
-                    self.hide(false);
+                    self.hide_now(false);
                 }
                 None
             }
@@ -1469,13 +1518,19 @@ impl App {
                 }
                 Some(LRESULT(0))
             }
+            crate::motion::WM_ORBIT_TICK => {
+                crate::motion::tick_done();
+                self.on_motion_tick();
+                Some(LRESULT(0))
+            }
             WM_ORBIT_BENCH_FLUSH => {
                 self.metrics.flush();
                 let memory = util::process_memory();
                 Some(LRESULT((memory.private_bytes >> 10) as isize))
             }
             WM_ORBIT_BENCH_TRIM => {
-                self.trim_working_set();
+                // What the trim timer does, now rather than 15 seconds after the launcher closes.
+                self.trim_while_hidden();
                 Some(LRESULT(0))
             }
             WM_ORBIT_SPEEDTEST => {
@@ -1747,14 +1802,16 @@ impl App {
                 let _ = ShowWindow(plate, SW_HIDE);
                 return;
             }
+            // Windows' own backdrop can't fade with the launcher, so it waits until it has come.
+            if self.frost.is_none() && self.motion.fade.is_some() {
+                let _ = ShowWindow(plate, SW_HIDE);
+                return;
+            }
             let Some(panel) = self.backbuffer.as_ref().map(|buffer| (buffer.width, buffer.height)) else { return };
             let mut rect = RECT::default();
             let _ = GetWindowRect(self.main, &mut rect);
             let margin = ui::frame_margin(self.dpi);
-            // The compositor's blur takes the launcher's shape exactly. Windows' own rounds less
-            // than the launcher's corners, so it's drawn a little inside them, where its corners
-            // stay hidden behind the launcher's.
-            let inset = if self.frost.is_some() { 0 } else { plate_inset(ui::window_radius(self.dpi), ui::scale(PLATE_CORNER_DIP, self.dpi)) };
+            let inset = self.plate_inset();
             let (width, height) = (panel.0 - inset * 2, panel.1 - inset * 2);
             if let Some(frost) = self.frost.as_mut() {
                 frost.fit(width, height, ui::window_radius(self.dpi));
@@ -1766,6 +1823,13 @@ impl App {
             }
             let _ = SetWindowPos(plate, Some(self.main), rect.left + margin + inset, rect.top + margin + inset, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
+    }
+
+    /// How far inside the launcher's edge the blur starts. The compositor's blur takes the
+    /// launcher's shape exactly. Windows' own rounds less than the launcher's corners, so it's drawn
+    /// a little inside them, where its corners stay hidden behind the launcher's.
+    fn plate_inset(&self) -> i32 {
+        if self.frost.is_some() { 0 } else { plate_inset(ui::window_radius(self.dpi), ui::scale(PLATE_CORNER_DIP, self.dpi)) }
     }
 
     /// Puts the blur behind the launcher, or takes it away, to match the settings and Windows.
@@ -1798,6 +1862,8 @@ impl App {
     }
 
     fn refresh_theme(&mut self) {
+        // Windows' animation effects come and go with the same messages as its colours.
+        self.motion_on = self.settings.launcher.animate && crate::motion::windows_animates();
         let theme = ui::resolve_theme(self.settings.appearance);
         let changed = theme != self.theme;
         self.theme = theme;
@@ -1851,6 +1917,7 @@ impl App {
     pub fn show(&mut self, scope: Scope, source: &str, t0: i64) {
         self.running_apps = None;
         let mut times = ShowTimes { t0, ..Default::default() };
+        let was_showing = self.visible;
         unsafe {
             if !self.visible {
                 let foreground = GetForegroundWindow();
@@ -1876,26 +1943,47 @@ impl App {
             }
             self.hovered_button = None;
             self.pressed_button = None;
+            // It opens as it is, with nothing on its way from last time.
+            self.motion.settle();
             ui::render(self);
             times.t1 = qpc();
             let (width, full_height) = ui::frame_size(self.dpi, ui::window_size(self.dpi, self.full_rows() as i32));
             let (width, height) = self.frame.as_ref().map_or((width, full_height), |frame| (frame.width, frame.height));
             self.window_height = height;
+            // It's there at once, mostly, and settles in over the next few frames as it rises the
+            // last few pixels into place. Asked for again while it fades away, it comes back from
+            // however much of it still shows.
+            let now = Instant::now();
+            // Already showing, as when another list's hotkey is pressed, it stays as it is.
+            let returning = !was_showing && matches!(self.motion.fade, Some(Fade::Out { .. }));
+            let from = if returning { self.opacity_now(now) } else { crate::motion::SHOW_FROM };
+            self.motion.fade = (self.motion_on && !was_showing).then_some(Fade::In { start: now, x, y, from, rise: !returning });
+            let (opacity, below) = self.motion.fade.map_or((1.0, 0.0), |fade| fade.at(now));
+            let top = y + self.lift(below);
             // Its picture is in place before it appears, so it never shows an empty window.
             if let Some(frame) = &self.frame {
-                frame.present(self.main, Some((x, y)));
+                frame.present(self.main, Some((x, top)), opacity_byte(opacity));
+            }
+            if returning {
+                set_click_through(self.main, false);
             }
             let _ = SetWindowPos(
                 self.main,
                 Some(HWND_TOPMOST),
                 x,
-                y,
+                top,
                 width,
                 height,
                 SWP_SHOWWINDOW | SWP_NOREDRAW,
             );
             self.visible = true;
+            if let Some(frost) = self.frost.as_mut() {
+                frost.set_opacity(opacity);
+            }
             self.sync_plate();
+            if self.motion.busy() {
+                crate::motion::want_frames(self.main);
+            }
             times.t2 = qpc();
             if !SetForegroundWindow(self.main).as_bool() {
                 launch::force_foreground(self.main);
@@ -1923,7 +2011,22 @@ impl App {
         }
     }
 
+    /// Puts the launcher away. It fades out, but it's gone as far as anything else is concerned
+    /// straight away: focus is back where it was, and clicks go through it.
     pub fn hide(&mut self, restore_focus: bool) {
+        self.hide_with(restore_focus, true);
+    }
+
+    /// Puts the launcher away without fading: before something looks at the screen, and when the
+    /// screen or the session is going away.
+    pub fn hide_now(&mut self, restore_focus: bool) {
+        self.hide_with(restore_focus, false);
+        if self.motion.fade.is_some() {
+            self.finish_hide();
+        }
+    }
+
+    fn hide_with(&mut self, restore_focus: bool, fade: bool) {
         self.end_recording();
         self.waiting_value = None;
         self.hold_open = None;
@@ -1955,10 +2058,14 @@ impl App {
         }
         unsafe {
             let _ = KillTimer(Some(self.main), TIMER_CARET);
-            if let Some(plate) = self.plate {
-                let _ = ShowWindow(plate, SW_HIDE);
-            }
-            let _ = ShowWindow(self.main, SW_HIDE);
+        }
+        self.motion.settle();
+        if fade && self.motion_on && !self.previewing {
+            self.fade_out();
+        } else {
+            self.finish_hide();
+        }
+        unsafe {
             if restore_focus && !self.prev_foreground.is_invalid() && IsWindow(Some(self.prev_foreground)).as_bool() {
                 let _ = SetForegroundWindow(self.prev_foreground);
             }
@@ -1977,6 +2084,21 @@ impl App {
             }
         }
         self.arm_extension_idle();
+    }
+
+    /// Gives memory back once the launcher has been closed a while. What's kept to draw quickly
+    /// goes too, and is quick to make again.
+    fn trim_while_hidden(&mut self) {
+        if !self.visible {
+            forget_drawing();
+            // Freed memory stays with the heap until it's asked to give whole free blocks back.
+            unsafe {
+                if let Ok(heap) = windows::Win32::System::Memory::GetProcessHeap() {
+                    windows::Win32::System::Memory::HeapCompact(heap, windows::Win32::System::Memory::HEAP_FLAGS(0));
+                }
+            }
+            self.trim_working_set();
+        }
     }
 
     fn trim_working_set(&mut self) {
@@ -1999,6 +2121,7 @@ impl App {
             self.apply_cache_limits();
             if tight {
                 self.vaults.clear();
+                forget_drawing();
                 self.worker.send(Req::Shed);
             }
         }
@@ -2027,12 +2150,129 @@ impl App {
             return;
         }
         ui::render(self);
-        let Some(frame) = &self.frame else { return };
-        // The top stays put, and the bottom follows the results.
-        frame.present(self.main, None);
-        if frame.height != self.window_height {
-            self.window_height = frame.height;
+        let Some(height) = self.frame.as_ref().map(|frame| frame.height) else { return };
+        let opacity = opacity_byte(self.opacity_now(Instant::now()));
+        // The top stays put, and the bottom follows the results. The blur behind never reaches past
+        // the launcher's edge, even for a frame: it shrinks first, and grows after.
+        let (changed, shrinking) = (height != self.window_height, height < self.window_height);
+        self.window_height = height;
+        if changed && shrinking {
             self.sync_plate();
+        }
+        if let Some(frame) = &self.frame {
+            frame.present(self.main, None, opacity);
+        }
+        if changed && !shrinking {
+            self.sync_plate();
+        }
+        if self.motion.busy() {
+            crate::motion::want_frames(self.main);
+        }
+    }
+
+    /// How opaque the launcher is right now, from 0 to 1, as it fades in or out.
+    fn opacity_now(&self, now: Instant) -> f32 {
+        self.motion.fade.map_or(1.0, |fade| fade.at(now).0)
+    }
+
+    /// How far below its place the launcher is, in pixels, `below` of the way up its rise.
+    fn lift(&self, below: f32) -> i32 {
+        (below * crate::motion::SHOW_RISE_DIP * self.dpi as f32 / 96.0).round() as i32
+    }
+
+    /// Lets the launcher fade away, letting clicks through to what's behind it while it goes.
+    fn fade_out(&mut self) {
+        let now = Instant::now();
+        let from = self.opacity_now(now);
+        self.motion.fade = Some(Fade::Out { start: now, from });
+        set_click_through(self.main, true);
+        // Windows' own backdrop can't fade, so it goes at once. See `sync_plate`.
+        self.sync_plate();
+        crate::motion::want_frames(self.main);
+    }
+
+    /// Takes the launcher off the screen: once it's faded, or at once.
+    fn finish_hide(&mut self) {
+        self.motion.fade = None;
+        unsafe {
+            if let Some(plate) = self.plate {
+                let _ = ShowWindow(plate, SW_HIDE);
+            }
+            let _ = ShowWindow(self.main, SW_HIDE);
+        }
+        set_click_through(self.main, false);
+        if let Some(frost) = self.frost.as_mut() {
+            frost.set_opacity(1.0);
+        }
+    }
+
+    /// How much of the launcher, and the blur behind it, shows.
+    fn set_opacity(&mut self, opacity: f32) {
+        crate::gfx::set_window_opacity(self.main, opacity_byte(opacity));
+        if let Some(frost) = self.frost.as_mut() {
+            frost.set_opacity(opacity);
+        }
+    }
+
+    /// Moves the launcher, and the blur behind it with it, in one step.
+    fn place_at(&mut self, x: i32, y: i32) {
+        let mut rect = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(self.main, &mut rect);
+        }
+        if (rect.left, rect.top) == (x, y) {
+            return;
+        }
+        let plate = self.plate.filter(|&plate| unsafe { IsWindowVisible(plate) }.as_bool());
+        let offset = ui::frame_margin(self.dpi) + self.plate_inset();
+        let flags = SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE;
+        unsafe {
+            let Ok(batch) = BeginDeferWindowPos(2) else { return };
+            let Ok(batch) = DeferWindowPos(batch, self.main, None, x, y, 0, 0, flags) else { return };
+            let batch = match plate {
+                Some(plate) => match DeferWindowPos(batch, plate, None, x + offset, y + offset, 0, 0, flags) {
+                    Ok(batch) => batch,
+                    Err(_) => return,
+                },
+                None => batch,
+            };
+            let _ = EndDeferWindowPos(batch);
+        }
+    }
+
+    /// The next frame of whatever's moving. See `motion.rs`.
+    fn on_motion_tick(&mut self) {
+        let now = Instant::now();
+        if let Some(fade) = self.motion.fade {
+            let (opacity, below) = fade.at(now);
+            let done = fade.done(now);
+            match fade {
+                Fade::Out { .. } if done => self.finish_hide(),
+                Fade::Out { .. } => self.set_opacity(opacity),
+                Fade::In { x, y, .. } => {
+                    if done {
+                        self.motion.fade = None;
+                    }
+                    if self.visible {
+                        let top = y + self.lift(below);
+                        self.place_at(x, top);
+                        self.set_opacity(opacity);
+                        if done {
+                            // Windows' own backdrop, which can't fade, comes now. See `sync_plate`.
+                            self.sync_plate();
+                        }
+                    }
+                }
+            }
+        }
+        if !self.visible {
+            self.motion.unsettled = false;
+        } else if self.motion.unsettled && !input_waiting() {
+            // Keys and clicks waiting go first, and draw the next frame themselves.
+            self.redraw();
+        }
+        if !self.motion.busy() {
+            crate::motion::stop();
         }
     }
 
@@ -2041,11 +2281,7 @@ impl App {
             let _ = KillTimer(Some(self.main), id);
         }
         match id {
-            TIMER_TRIM => {
-                if !self.visible {
-                    self.trim_working_set();
-                }
-            }
+            TIMER_TRIM => self.trim_while_hidden(),
             TIMER_EXIT => unsafe { PostQuitMessage(0) },
             TIMER_CARET => {
                 if self.visible {
@@ -2100,6 +2336,38 @@ impl App {
             TIMER_UPDATE_SETUP => crate::update::on_setup_timer(),
             _ => {}
         }
+    }
+
+    /// For a preview: draws the launcher as it is, changes something, and draws it again `ms`
+    /// milliseconds later, partway through whatever that set moving.
+    fn preview_motion(&mut self, what: &str, ms: u64) {
+        self.motion_on = true;
+        let start = Instant::now();
+        self.motion_clock = Some(start);
+        ui::render(self);
+        match what {
+            // Three rows further down.
+            "select" => {
+                let to = (self.view.selected + 3).min(self.view.rows.len().saturating_sub(1));
+                self.view.select(to);
+            }
+            "menu" => self.open_action_menu(),
+            "menu-close" => self.close_menu(),
+            "page" => self.set_scope(Scope::Help, false),
+            // A search with other results, as "query:note", as typing it would.
+            other => {
+                if let Some(query) = other.strip_prefix("query:") {
+                    self.set_query_text(query);
+                    self.view.reset_position();
+                    self.refresh_results();
+                }
+            }
+        }
+        // As the launcher does, it's drawn the moment it changes, which is when the motion starts.
+        ui::render(self);
+        self.motion_clock = Some(start + std::time::Duration::from_millis(ms));
+        ui::render(self);
+        self.motion_clock = None;
     }
 
     /// Draws one frame to a file. The window stays hidden throughout, so nothing takes focus.
@@ -2215,7 +2483,12 @@ impl App {
             }
             _ => {
                 self.status = None;
-                ui::render(self);
+                // Drawn as it is, unless it's a moment partway through a motion that's wanted.
+                self.motion.settle();
+                match preview.motion.clone() {
+                    Some((what, ms)) => self.preview_motion(&what, ms),
+                    None => ui::render(self),
+                }
                 if let Some(frame) = &self.frame {
                     let _ = frame.write_raw(&preview.out);
                 }
@@ -2573,7 +2846,7 @@ impl App {
                 if let Some(hook) = &self.hook {
                     hook.reset();
                 }
-                self.hide(false);
+                self.hide_now(false);
                 self.vaults.clear();
                 self.clear_secret_now();
             }
@@ -5612,7 +5885,7 @@ impl App {
     /// Covers the screens to pick a colour. The launcher goes first, so it isn't in the picture.
     fn pick_colour(&mut self) {
         if self.visible {
-            self.hide(false);
+            self.hide_now(false);
             // Waits for the screen to be drawn without it.
             unsafe {
                 let _ = windows::Win32::Graphics::Dwm::DwmFlush();
@@ -6427,7 +6700,7 @@ impl App {
         self.exiting = true;
         self.speedtest.stop();
         self.runners.stop_all();
-        self.hide(false);
+        self.hide_now(false);
         self.clear_secret_now();
         crate::editor::close_all();
         self.hook = None;

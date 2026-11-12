@@ -2,82 +2,82 @@
   "environment": {
     "arch": "x86_64",
     "cpu": "AMD Ryzen 5 5600X 6-Core Processor",
-    "data drive": "C:\\ fixed, NTFS, 286 GB free of 930 GB",
+    "data drive": "C:\\ fixed, NTFS, 191 GB free of 930 GB",
     "display": "2560x1440 at 300 Hz (primary)",
     "logical processors": "12",
-    "orbit version": "0.1.0",
+    "orbit version": "1.4.0",
     "os": "windows",
     "power at end": "AC, no battery reading",
     "power at start": "AC, no battery reading",
     "profile": "release",
-    "ram": "15.9 GB total, 6.5 GB free at start, 59% load",
-    "ram at end": "6.7 GB free, 57% load",
+    "ram": "15.9 GB total, 10.9 GB free at start, 31% load",
+    "ram at end": "9.6 GB free, 39% load",
     "windows": "Microsoft Windows [Version 10.0.26200.9711]"
   },
   "metrics": [
     {
       "name": "notes: private memory after small notes closed",
-      "value": 4448.0,
+      "value": 5912.0,
       "unit": "KB",
       "gated": false
     },
     {
       "name": "notes: open a 5 MB note, Enter to text loaded",
-      "value": 574.1037,
+      "value": 571.7134000000001,
       "unit": "ms",
       "gated": false
     },
     {
       "name": "notes: 5 MB note, one edit plus autosave, wall clock including 400 ms debounce",
-      "value": 702.6999000000001,
+      "value": 702.6276,
       "unit": "ms",
       "gated": false
     },
     {
       "name": "notes: private memory before opening any note",
-      "value": 3104.0,
+      "value": 4756.0,
       "unit": "KB",
       "gated": false
     },
     {
       "name": "notes: private memory after editors closed",
-      "value": 17700.0,
+      "value": 18796.0,
       "unit": "KB",
       "gated": false
     },
     {
       "name": "snippets: 3099-unit snippet, trigger to text in place",
-      "value": 7382.1389,
+      "value": 7643.977900000001,
       "unit": "ms",
       "gated": false
     },
     {
       "name": "snippets: password check, first in the session",
-      "value": 18.7386,
+      "value": 39.1138,
       "unit": "ms",
       "gated": false
     },
     {
       "name": "snippets: password check, later ones p50",
-      "value": 3.0448,
+      "value": 2.8621,
       "unit": "ms",
       "gated": false
     },
     {
       "name": "snippets: password check, later ones p95",
-      "value": 12.3341,
+      "value": 169.0063,
       "unit": "ms",
       "gated": false
     },
     {
       "name": "snippets: password check, later ones p99",
-      "value": 12.3341,
+      "value": 169.0063,
       "unit": "ms",
       "gated": false
     },
     {
       "name": "snippets: password check, later ones max",
-      "value": 12.3341,
+      "value": 169.0063,
       "unit": "ms",
       "gated": false
     },
@@ -89,31 +89,31 @@
     },
     {
       "name": "snippets: private memory with the keyboard hook on",
-      "value": 5744.0,
+      "value": 7924.0,
       "unit": "KB",
       "gated": false
     },
     {
       "name": "hyper: chord key injected to launcher focused p50",
-      "value": 3.1531,
+      "value": 3.1513,
       "unit": "ms",
       "gated": true
     },
     {
       "name": "hyper: chord key injected to launcher focused p95",
-      "value": 4.7026,
+      "value": 10.0761,
       "unit": "ms",
       "gated": true
     },
     {
       "name": "hyper: chord key injected to launcher focused p99",
-      "value": 9.3098,
+      "value": 11.6188,
       "unit": "ms",
       "gated": false
     },
     {
       "name": "hyper: chord key injected to launcher focused max",
-      "value": 9.3098,
+      "value": 11.6188,
       "unit": "ms",
       "gated": false
     },
@@ -125,25 +125,25 @@
     },
     {
       "name": "hyper: hook callback to UI thread p50",
-      "value": 0.0128,
+      "value": 0.0159,
       "unit": "ms",
       "gated": true
     },
     {
       "name": "hyper: hook callback to UI thread p95",
-      "value": 0.0208,
+      "value": 0.0443,
       "unit": "ms",
       "gated": true
     },
     {
       "name": "hyper: hook callback to UI thread p99",
-      "value": 0.0464,
+      "value": 0.053,
       "unit": "ms",
       "gated": false
     },
     {
       "name": "hyper: hook callback to UI thread max",
-      "value": 0.0464,
+      "value": 0.053,
       "unit": "ms",
       "gated": false
     },
@@ -155,55 +155,55 @@
     },
     {
       "name": "settings: private memory after closing the window",
-      "value": 4664.0,
+      "value": 6564.0,
       "unit": "KB",
       "gated": false
     },
     {
       "name": "memory after 100 note opens: private",
-      "value": 4840.0,
+      "value": 7260.0,
       "unit": "KB",
       "gated": true
     },
     {
       "name": "memory after 100 note opens: working set",
-      "value": 28368.0,
+      "value": 38576.0,
       "unit": "KB",
       "gated": true
     },
     {
       "name": "memory before any note opens: private",
-      "value": 3116.0,
+      "value": 4720.0,
       "unit": "KB",
       "gated": false
     },
     {
       "name": "memory after the first note open: private",
-      "value": 4500.0,
+      "value": 6088.0,
       "unit": "KB",
       "gated": false
     },
     {
       "name": "100 note opens: private growth per open after the first",
-      "value": 3.4343434343434343,
+      "value": 11.83838383838384,
       "unit": "KB",
       "gated": false
     },
     {
       "name": "100 note opens: duration",
-      "value": 27443.4915,
+      "value": 25948.9829,
       "unit": "ms",
       "gated": false
     },
     {
       "name": "footprint, optional features off, 3 s idle: private",
-      "value": 3108.0,
+      "value": 4796.0,
       "unit": "KB",
       "gated": true
     },
     {
       "name": "footprint, optional features off, 3 s idle: working set",
-      "value": 17996.0,
+      "value": 24352.0,
       "unit": "KB",
       "gated": true
     },
@@ -215,13 +215,13 @@
     },
     {
       "name": "footprint, HyperKey, expansion and clipboard on, 3 s idle: private",
-      "value": 3212.0,
+      "value": 4956.0,
       "unit": "KB",
       "gated": true
     },
     {
       "name": "footprint, HyperKey, expansion and clipboard on, 3 s idle: working set",
-      "value": 18248.0,
+      "value": 24584.0,
       "unit": "KB",
       "gated": true
     },
@@ -233,13 +233,13 @@
     },
     {
       "name": "footprint: what the optional features add, private",
-      "value": 104.0,
+      "value": 160.0,
       "unit": "KB",
       "gated": false
     },
     {
       "name": "footprint: what the optional features add, working set",
-      "value": 252.0,
+      "value": 232.0,
       "unit": "KB",
       "gated": false
     }
@@ -501,12 +501,27 @@
       "total": 1
     },
     {
+      "name": "Enter leaves Settings open",
+      "passed": 1,
+      "total": 1
+    },
+    {
       "name": "saving settings unchanged keeps them identical",
       "passed": 1,
       "total": 1
     },
     {
-      "name": "Delete on the Hotkeys page removes that hotkey",
+      "name": "the first Delete on the Hotkeys page only asks",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Delete on the Hotkeys page removes that hotkey, and saves it with Settings still open",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Esc then closes Settings",
       "passed": 1,
       "total": 1
     },
@@ -536,12 +551,12 @@
       "total": 1
     },
     {
-      "name": "app picker: clicking a match adds it, and Enter then saves",
+      "name": "app picker: clicking a match adds it, and it saves",
       "passed": 1,
       "total": 1
     },
     {
-      "name": "app picker: clicking Remove removes that app, and Enter then saves",
+      "name": "app picker: clicking Remove removes that app, and it saves",
       "passed": 1,
       "total": 1
     },
@@ -551,22 +566,57 @@
       "total": 1
     },
     {
-      "name": "clicking Esc Close in the footer closes the launcher",
+      "name": "clicking the shadow around the launcher closes it",
       "passed": 1,
       "total": 1
     },
     {
-      "name": "clicking Ctrl+K Actions opens the menu, and Esc Back returns from it",
+      "name": "clicking Ctrl+K Actions opens the small menu, and clicking it again closes it",
       "passed": 1,
       "total": 1
     },
     {
-      "name": "clicking Esc Clear empties the search, and clicking it again closes",
+      "name": "clicking outside the small menu only closes it",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "clicking Esc Clear empties the search",
       "passed": 1,
       "total": 1
     },
     {
       "name": "clicking Enter in the footer runs the selected result",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "clicking Orbit in the footer opens its menu, and Enter opens Settings from it",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "the launcher's hotkey leaves an excluded app alone",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "it works again as soon as something else is in front",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "searching for it opens the emoji list",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Enter pastes the emoji where you were typing",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "a pasted emoji is remembered under Recently Used",
       "passed": 1,
       "total": 1
     },
@@ -1052,7 +1102,7 @@
     },
     {
       "name": "a copied password clears itself after about 30 seconds",
-      "passed": 0,
+      "passed": 1,
       "total": 1
     },
     {
@@ -1062,7 +1112,7 @@
     },
     {
       "name": "something copied afterwards isn't cleared",
-      "passed": 0,
+      "passed": 1,
       "total": 1
     },
     {
@@ -1111,7 +1161,12 @@
       "total": 1
     },
     {
-      "name": "Enter on a code copies it",
+      "name": "Enter on a code types it where you were",
+      "passed": 1,
+      "total": 1
+    },
+    {
+      "name": "Ctrl+Enter on a code copies it",
       "passed": 1,
       "total": 1
     },

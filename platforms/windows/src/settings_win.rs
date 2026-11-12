@@ -263,6 +263,7 @@ struct Controls {
     favorites_only: HWND,
     glass: HWND,
     fit_results: HWND,
+    animate: HWND,
     launcher_games: HWND,
     appearance: HWND,
     icon_style: HWND,
@@ -4848,6 +4849,7 @@ fn collect(state: &State) -> (Settings, Option<String>) {
     s.mac_feel.excluded_apps = state.pickers[PICKER_MAC].chosen.clone();
     s.launcher.glass = is_checked(c.glass);
     s.launcher.fit_results = is_checked(c.fit_results);
+    s.launcher.animate = is_checked(c.animate);
     s.launcher.pass_through_in_games = is_checked(c.launcher_games);
     s.launcher.excluded_apps = state.pickers[PICKER_LAUNCHER].chosen.clone();
     s.appearance = APPEARANCE[selected(c.appearance).min(APPEARANCE.len() - 1)].1;
@@ -4980,6 +4982,7 @@ const FIND_WORDS: &[(&str, &str)] = &[
     ("Command icons", "icon style symbols tiles squares colour color plain grey gray tinted"),
     ("See-through launcher", "transparent transparency glass blur acrylic mica"),
     ("Shrink to fit results", "height size"),
+    ("Animations", "motion fade glide transitions effects reduce reduced"),
     ("Open on", "monitor display screen"),
     ("Open Orbit with", "hotkey shortcut keybinding alt space"),
     ("Keyboard", "vim hjkl"),
@@ -6493,6 +6496,9 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         b.line();
         let fit_results = b.switch("Shrink to fit results", settings.launcher.fit_results, 0);
         b.note("Off keeps the launcher one height, so it doesn't move while you type.");
+        b.line();
+        let animate = b.switch("Animations", settings.launcher.animate, 0);
+        b.note("The launcher fades in and out, and the selection and menus glide into place. None of it makes you wait. Off when Windows' animation effects are off.");
         b.end_card();
 
         b.heading("Where the launcher opens");
@@ -6901,6 +6907,7 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
             favorites_only,
             glass,
             fit_results,
+            animate,
             launcher_games,
             appearance,
             icon_style,

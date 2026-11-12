@@ -134,6 +134,9 @@ pub struct LauncherSettings {
     pub glass: bool,
     /// The launcher is only as tall as its results, rather than always its full height.
     pub fit_results: bool,
+    /// The launcher fades in and out, and its selection, menus and height move rather than jump.
+    /// Windows' own "Animation effects" being off turns this off too.
+    pub animate: bool,
     /// Programs where the launcher's hotkey goes to the program instead, by file name.
     pub excluded_apps: Vec<String>,
     /// The same whenever a game is in front.
@@ -400,6 +403,7 @@ impl Default for LauncherSettings {
             copy_formatted: false,
             glass: true,
             fit_results: true,
+            animate: true,
             excluded_apps: Vec::new(),
             pass_through_in_games: true,
             screen: LauncherScreen::Active,

@@ -90,13 +90,42 @@ pub struct Backbuffer {
     _surface: Surface,
     bits: *mut u32,
     pub width: i32,
+    /// How many rows are in use. The bitmap can hold more, up to `room`.
     pub height: i32,
+    room: i32,
 }
 
 impl Backbuffer {
     pub fn new(width: i32, height: i32) -> Option<Backbuffer> {
-        let surface = Surface::new(width, height)?;
-        Some(Backbuffer { dc: surface.dc, bits: surface.bits, _surface: surface, width, height })
+        Backbuffer::with_room(width, height, height)
+    }
+
+    /// One that can grow to `room` rows without being made again, as the launcher's does while its
+    /// bottom edge moves.
+    pub fn with_room(width: i32, height: i32, room: i32) -> Option<Backbuffer> {
+        let room = room.max(height);
+        let surface = Surface::new(width, room)?;
+        Some(Backbuffer { dc: surface.dc, bits: surface.bits, _surface: surface, width, height, room })
+    }
+
+    /// Uses `height` rows of the bitmap, if it has that many. What's in them is left as it was.
+    pub fn set_height(&mut self, height: i32) -> bool {
+        if height < 1 || height > self.room {
+            return false;
+        }
+        self.height = height;
+        true
+    }
+
+    /// How many rows it can use without being made again.
+    pub fn room(&self) -> i32 {
+        self.room
+    }
+
+    /// A copy of every pixel in use, for laying over a later frame as it fades.
+    pub fn snapshot(&self) -> Vec<u32> {
+        let pixels = unsafe { std::slice::from_raw_parts(self.bits, (self.width * self.height) as usize) };
+        pixels.to_vec()
     }
 
     /// Where the pixels are, for drawing text with real alpha. See `text.rs`.
@@ -264,6 +293,64 @@ impl Backbuffer {
         }
     }
 
+    /// A rectangle of what's drawn so far, for [`Backbuffer::mix_back_area`].
+    pub fn save_area(&self, area: RECT) -> Vec<u32> {
+        let area = self.clamp(area);
+        let pixels = unsafe { std::slice::from_raw_parts(self.bits, (self.width * self.height) as usize) };
+        let mut out = Vec::with_capacity(((area.right - area.left) * (area.bottom - area.top)).max(0) as usize);
+        for y in area.top..area.bottom {
+            let start = (y * self.width) as usize;
+            out.extend_from_slice(&pixels[start + area.left as usize..start + area.right as usize]);
+        }
+        out
+    }
+
+    /// Lets what was drawn in `area` since [`Backbuffer::save_area`] show at only `keep` of its
+    /// strength, from 0 to 1, over what was there before. That fades a whole group of shapes as one,
+    /// such as a menu with its shadow, without overlaps inside it showing through.
+    pub fn mix_back_area(&mut self, area: RECT, saved: &[u32], keep: f32) {
+        let area = self.clamp(area);
+        let span = (area.right - area.left).max(0) as usize;
+        if keep >= 1.0 || span == 0 || saved.len() < span * (area.bottom - area.top).max(0) as usize {
+            return;
+        }
+        for (at, before) in saved.chunks_exact(span).enumerate() {
+            let row = &mut self.row(area.top + at as i32)[area.left as usize..area.right as usize];
+            if keep <= 0.0 {
+                row.copy_from_slice(before);
+                continue;
+            }
+            for (pixel, old) in row.iter_mut().zip(before) {
+                if *pixel != *old {
+                    *pixel = mix_premultiplied(*old, *pixel, keep);
+                }
+            }
+        }
+    }
+
+    /// Lays an earlier frame of the same width over this one, showing `amount` of it, from 0 to 1,
+    /// down to row `rows`: the last page fading out as the next comes in.
+    pub fn fade_over(&mut self, earlier: &[u32], width: i32, rows: i32, amount: f32) {
+        if width != self.width || amount <= 0.0 {
+            return;
+        }
+        let rows = rows.min(self.height).min(earlier.len() as i32 / width.max(1));
+        for y in 0..rows.max(0) {
+            let old = &earlier[(y * width) as usize..((y + 1) * width) as usize];
+            for (pixel, old) in self.row(y).iter_mut().zip(old) {
+                if *pixel != *old {
+                    *pixel = mix_premultiplied(*pixel, *old, amount);
+                }
+            }
+        }
+    }
+
+    fn clamp(&self, area: RECT) -> RECT {
+        let left = area.left.clamp(0, self.width);
+        let top = area.top.clamp(0, self.height);
+        RECT { left, top, right: area.right.clamp(left, self.width), bottom: area.bottom.clamp(top, self.height) }
+    }
+
     /// A one-pixel line just inside a rounded rectangle's edge, over what is already there.
     #[allow(clippy::too_many_arguments)]
     pub fn stroke_round_rect_alpha(&mut self, x: i32, y: i32, w: i32, h: i32, radius: f32, thickness: f32, color: Rgb, alpha: u8) {
@@ -271,15 +358,19 @@ impl Backbuffer {
         let (fw, fh) = (w as f32, h as f32);
         let inner_radius = (radius - thickness).max(0.0);
         let band = (thickness.ceil() as i32).max(radius.ceil() as i32);
+        let (left, right) = (x.max(0), (x + w).min(self.width));
         for py in y.max(0)..(y + h).min(self.height) {
             let ly = py - y;
             let cy = ly as f32 + 0.5;
             let near_end = ly < band || ly >= h - band;
-            for px in x.max(0)..(x + w).min(self.width) {
+            // Away from the top and bottom, only the two sides are near the line.
+            let (first, second) = if near_end {
+                (left..right, right..right)
+            } else {
+                (left..(x + band).min(right), (x + w - band).max(left).max((x + band).min(right))..right)
+            };
+            for px in first.chain(second) {
                 let lx = px - x;
-                if !near_end && lx >= band && lx < w - band {
-                    continue;
-                }
                 let cx = lx as f32 + 0.5;
                 let outer = corner_coverage(cx, cy, fw, fh, radius);
                 let inner = corner_coverage(cx - thickness, cy - thickness, fw - thickness * 2.0, fh - thickness * 2.0, inner_radius);
@@ -426,35 +517,94 @@ impl Backbuffer {
 
     /// Shows this frame as a window's whole picture, see-through wherever its alpha says so.
     /// With `at`, the window moves there as well. It needn't be on screen yet.
-    pub fn present(&self, hwnd: HWND, at: Option<(i32, i32)>) {
+    /// `opacity` is how much of the whole window shows, as it fades in or out.
+    pub fn present(&self, hwnd: HWND, at: Option<(i32, i32)>, opacity: u8) {
         let origin = at.map(|(x, y)| POINT { x, y });
         let size = SIZE { cx: self.width, cy: self.height };
         let source = POINT { x: 0, y: 0 };
-        let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
+        let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: opacity, AlphaFormat: AC_SRC_ALPHA as u8 };
         unsafe {
             let _ = UpdateLayeredWindow(hwnd, None, origin.as_ref().map(|p| p as *const POINT), Some(&size), Some(self.dc), Some(&source), COLORREF(0), Some(&blend), ULW_ALPHA);
         }
     }
 
     /// Lays a soft shadow around this rounded rectangle, outside and under it.
+    /// A cached copy is used for a size it has drawn before, as a menu's is on every frame it rises.
     /// Only for drawing inside the frame, such as a menu lifting off the list behind it.
     #[allow(clippy::too_many_arguments)]
     pub fn shadow_round_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: f32, blur: f32, color: Rgb, alpha: u8) {
         let reach = blur.ceil() as i32;
-        for py in (y - reach).max(0)..(y + h + reach).min(self.height) {
-            let inside_row = py >= y + radius as i32 && py < y + h - radius as i32;
-            for px in (x - reach).max(0)..(x + w + reach).min(self.width) {
-                if inside_row && px >= x && px < x + w {
-                    continue; // whatever casts this shadow is about to cover it
+        let key = (w, h, radius.to_bits(), blur.to_bits());
+        SHADOWS.with(|shadows| {
+            let mut shadows = shadows.borrow_mut();
+            if !shadows.iter().any(|(kept, _)| *kept == key) {
+                if shadows.len() >= 4 {
+                    shadows.remove(0);
                 }
-                let distance = round_rect_distance(px as f32 + 0.5 - x as f32, py as f32 + 0.5 - y as f32, w as f32, h as f32, radius);
-                let opacity = shadow_falloff(distance, blur) * alpha as f32 / 255.0;
-                if opacity > 0.002 {
+                shadows.push((key, shadow_mask(w, h, radius, blur)));
+            }
+            let Some((_, mask)) = shadows.iter().find(|(kept, _)| *kept == key) else { return };
+            let span = w + reach * 2;
+            let strength = alpha as f32 / 255.0 / 65535.0;
+            for py in (y - reach).max(0)..(y + h + reach).min(self.height) {
+                let line = &mask[((py - y + reach) * span) as usize..((py - y + reach + 1) * span) as usize];
+                for px in (x - reach).max(0)..(x + w + reach).min(self.width) {
+                    let amount = line[(px - x + reach) as usize];
+                    if amount == 0 {
+                        continue;
+                    }
                     let pixel = &mut self.row(py)[px as usize];
-                    *pixel = blend_alpha(*pixel, color, opacity);
+                    *pixel = blend_alpha(*pixel, color, amount as f32 * strength);
                 }
             }
+        });
+    }
+}
+
+/// A menu shadow's width, height, corner radius and blur, the last two as bits.
+type ShadowKey = (i32, i32, u32, u32);
+
+thread_local! {
+    /// The last few menu shadows, by size, as how dark each pixel is, in 65535ths.
+    static SHADOWS: std::cell::RefCell<Vec<(ShadowKey, Vec<u16>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Lets go of the shadows kept for redrawing, as when the launcher hides.
+pub fn forget_shadows() {
+    SHADOWS.with(|shadows| *shadows.borrow_mut() = Vec::new());
+}
+
+/// How dark a rounded rectangle's soft shadow is around it, `blur` beyond each edge, and nothing
+/// where whatever casts it is about to cover it.
+fn shadow_mask(w: i32, h: i32, radius: f32, blur: f32) -> Vec<u16> {
+    let reach = blur.ceil() as i32;
+    let (span, rows) = (w + reach * 2, h + reach * 2);
+    let mut mask = vec![0u16; (span * rows).max(0) as usize];
+    for row in 0..rows {
+        let py = row - reach;
+        let inside_row = py >= radius as i32 && py < h - radius as i32;
+        for column in 0..span {
+            let px = column - reach;
+            if inside_row && px >= 0 && px < w {
+                continue;
+            }
+            let distance = round_rect_distance(px as f32 + 0.5, py as f32 + 0.5, w as f32, h as f32, radius);
+            let falloff = shadow_falloff(distance, blur);
+            // Faint enough not to show at full strength is left out, as before.
+            if falloff > 0.002 {
+                mask[(row * span + column) as usize] = (falloff * 65535.0).round() as u16;
+            }
         }
+    }
+    mask
+}
+
+/// Changes how much of a layered window shows, without drawing it again: its picture stays as it
+/// was last given.
+pub fn set_window_opacity(hwnd: HWND, opacity: u8) {
+    let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: opacity, AlphaFormat: AC_SRC_ALPHA as u8 };
+    unsafe {
+        let _ = UpdateLayeredWindow(hwnd, None, None, None, None, None, COLORREF(0), Some(&blend), ULW_ALPHA);
     }
 }
 
@@ -503,15 +653,37 @@ impl Shadow {
 pub fn paint_shadow(frame: &mut Backbuffer, panel_w: i32, panel_h: i32, radius: f32, shadow: Shadow) {
     let (w, h) = (panel_w as f32, panel_h as f32);
     let m = shadow.margin;
+    let width = frame.width;
+    // Beside the panel's straight sides, the shadow is the same all the way down, so one row of it
+    // is worked out and copied: only the bands at the top and bottom need every pixel measured. It's
+    // painted whenever the height changes, which is every frame while the bottom edge moves.
+    let straight = |fy: i32| {
+        let py = fy as f32 + 0.5 - m as f32 - shadow.drop;
+        let inside = fy >= m && fy < m + panel_h;
+        inside && (py - h / 2.0).abs() <= h / 2.0 - radius
+    };
+    let mut sides: Option<Vec<u32>> = None;
     for fy in 0..frame.height {
         let inside = fy >= m && fy < m + panel_h;
-        let width = frame.width;
+        if straight(fy)
+            && let Some(kept) = &sides
+        {
+            let row = frame.row(fy);
+            let left = (m as usize).min(row.len());
+            row[..left].copy_from_slice(&kept[..left]);
+            let right = ((m + panel_w) as usize).min(row.len());
+            row[right..].copy_from_slice(&kept[right..]);
+            continue;
+        }
         let row = frame.row(fy);
         for fx in 0..width {
             if inside && fx >= m && fx < m + panel_w {
                 continue;
             }
             row[fx as usize] = shadow.pixel(fx, fy, w, h, radius);
+        }
+        if straight(fy) && sides.is_none() {
+            sides = Some(row.to_vec());
         }
     }
 }
@@ -1086,5 +1258,114 @@ mod tests {
         let brightness = |y| pixel(&buffer, 1, y) & 0xff;
         assert!(brightness(0) > brightness(5));
         assert!(brightness(5) > brightness(9));
+    }
+
+    #[test]
+    fn the_launchers_shadow_is_the_same_as_measuring_every_pixel() {
+        // Beside the straight sides, rows are copied rather than measured. They must come out the same.
+        for (panel_w, panel_h, radius) in [(300, 200, 22.0), (300, 61, 22.0), (120, 44, 30.0)] {
+            let shadow = Shadow { margin: 36, drop: 8.0, blur: 28.0, strength: 0.42 };
+            let (w, h) = (panel_w + 72, panel_h + 72);
+            let mut frame = Backbuffer::new(w, h).unwrap();
+            paint_shadow(&mut frame, panel_w, panel_h, radius, shadow);
+            for y in 0..h {
+                for x in 0..w {
+                    let inside = x >= 36 && x < 36 + panel_w && y >= 36 && y < 36 + panel_h;
+                    if !inside {
+                        let measured = shadow.pixel(x, y, panel_w as f32, panel_h as f32, radius);
+                        assert_eq!(pixel(&frame, x, y), measured, "{panel_w}x{panel_h} at {x},{y}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_buffer_grows_and_shrinks_inside_its_room() {
+        let mut buffer = Backbuffer::with_room(10, 5, 20).unwrap();
+        assert_eq!((buffer.height, buffer.room()), (5, 20));
+        assert!(buffer.set_height(15));
+        assert_eq!(buffer.snapshot().len(), 150);
+        buffer.fill(Rgb(10, 20, 30));
+        assert_eq!(pixel(&buffer, 9, 14) & 0xffffff, 0x0a141e, "every row in use can be drawn on");
+        assert!(!buffer.set_height(21), "past its room it needs making again");
+        assert!(!buffer.set_height(0));
+        assert_eq!(buffer.height, 15);
+    }
+
+    #[test]
+    fn a_group_of_shapes_fades_as_one() {
+        let mut buffer = Backbuffer::new(20, 20).unwrap();
+        buffer.clear(Rgb(40, 40, 40), 255);
+        let area = RECT { left: 2, top: 2, right: 18, bottom: 18 };
+        let before = buffer.snapshot();
+        let saved = buffer.save_area(area);
+        buffer.fill_rect(4, 4, 8, 8, Rgb(240, 240, 240));
+        buffer.fill_rect(8, 8, 8, 8, Rgb(200, 0, 0));
+        let drawn = buffer.snapshot();
+        buffer.mix_back_area(area, &saved, 1.0);
+        assert_eq!(buffer.snapshot(), drawn, "all of it");
+        let mut half = Backbuffer::new(20, 20).unwrap();
+        half.clear(Rgb(40, 40, 40), 255);
+        half.fill_rect(4, 4, 8, 8, Rgb(240, 240, 240));
+        half.fill_rect(8, 8, 8, 8, Rgb(200, 0, 0));
+        half.mix_back_area(area, &saved, 0.5);
+        // Where the shapes overlap, the one on top shows at half, without the other showing through.
+        let red = |buffer: &Backbuffer, x, y| (pixel(buffer, x, y) >> 16) & 0xff;
+        assert!((118..=122).contains(&red(&half, 10, 10)), "{}", red(&half, 10, 10));
+        assert_eq!(pixel(&half, 10, 10) & 0xff, 20, "blue: half of what was behind, none of the white");
+        buffer.mix_back_area(area, &saved, 0.0);
+        assert_eq!(buffer.snapshot(), before, "none of it");
+    }
+
+    #[test]
+    fn an_old_page_fades_out_over_a_new_one_above_the_footer() {
+        let mut old = Backbuffer::new(6, 10).unwrap();
+        old.clear(Rgb(200, 0, 0), 255);
+        let earlier = old.snapshot();
+        let mut new = Backbuffer::new(6, 10).unwrap();
+        new.clear(Rgb(0, 0, 200), 255);
+        new.fade_over(&earlier, 6, 7, 1.0);
+        assert_eq!(pixel(&new, 3, 6) & 0xffffff, 0xc80000, "still all of the old page");
+        assert_eq!(pixel(&new, 3, 7) & 0xffffff, 0x0000c8, "not over the footer");
+        let mut new = Backbuffer::new(6, 10).unwrap();
+        new.clear(Rgb(0, 0, 200), 255);
+        new.fade_over(&earlier, 6, 7, 0.25);
+        assert!((pixel(&new, 3, 3) >> 16) & 0xff < 60 && pixel(&new, 3, 3) & 0xff > 140, "mostly the new page");
+        let unchanged = new.snapshot();
+        new.fade_over(&earlier, 6, 7, 0.0);
+        new.fade_over(&earlier, 5, 7, 1.0);
+        assert_eq!(new.snapshot(), unchanged, "nothing left of it, or a frame of another width");
+    }
+
+    #[test]
+    fn a_menus_shadow_is_drawn_the_same_from_the_cache() {
+        let draw = |x: i32| {
+            let mut buffer = Backbuffer::new(140, 120).unwrap();
+            buffer.clear(Rgb(240, 240, 240), 255);
+            buffer.shadow_round_rect(x, 30, 60, 40, 12.0, 20.0, Rgb(0, 0, 0), 120);
+            buffer
+        };
+        forget_shadows();
+        let (first, again) = (draw(30), draw(30));
+        assert_eq!(first.snapshot(), again.snapshot());
+        // Measured directly, as it was before it was kept: within a step of rounding.
+        for y in 0..120 {
+            for x in 0..140 {
+                let (px, py) = (x - 30, y - 30);
+                let inside = (12..40 - 12).contains(&py) && (0..60).contains(&px);
+                let falloff = shadow_falloff(round_rect_distance(px as f32 + 0.5, py as f32 + 0.5, 60.0, 40.0, 12.0), 20.0);
+                let expected = if inside || falloff <= 0.002 { premultiplied(Rgb(240, 240, 240), 255) } else { blend_alpha(premultiplied(Rgb(240, 240, 240), 255), Rgb(0, 0, 0), falloff * 120.0 / 255.0) };
+                let got = pixel(&first, x, y);
+                for shift in [0, 8, 16, 24] {
+                    let (a, b) = ((got >> shift) & 0xff, (expected >> shift) & 0xff);
+                    assert!(a.abs_diff(b) <= 1, "at {x},{y}: {got:08x} against {expected:08x}");
+                }
+            }
+        }
+        // Moved across, it's the same shadow, moved.
+        let moved = draw(41);
+        assert_eq!(pixel(&moved, 41 + 70, 50), pixel(&first, 30 + 70, 50));
+        forget_shadows();
     }
 }

@@ -572,7 +572,7 @@ fn length(p: P, center: P) -> f32 {
 
 /// How much of the pixel at `p` a shape covers, with `half` the half width of a stroke and `unit`
 /// the size of one grid unit in pixels.
-fn coverage(shape: &Shape, p: P, half: f32, unit: f32) -> f32 {
+fn coverage_of(shape: &Shape, p: P, half: f32, unit: f32) -> f32 {
     let stroke = |distance: f32| ((half - distance) * unit + 0.5).clamp(0.0, 1.0);
     let fill = |signed: f32| (0.5 - signed * unit).clamp(0.0, 1.0);
     match shape {
@@ -608,7 +608,74 @@ pub fn draw(buffer: &Backbuffer, glyph: char, size: f32, heavy: bool, ink: Rgb, 
 /// chevron that turns as what it opens slides out.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_turned(buffer: &Backbuffer, glyph: char, size: f32, heavy: bool, degrees: f32, ink: Rgb, rect: RECT, align: crate::text::Align) -> bool {
-    let Some(shapes) = shapes(glyph) else { return false };
+    // The grid leaves room around each symbol, as the icon font does, but a little less.
+    let size = size * 1.12;
+    let left = match align {
+        crate::text::Align::Left => rect.left as f32,
+        crate::text::Align::Right => rect.right as f32 - size,
+        crate::text::Align::Center => (rect.left + rect.right) as f32 / 2.0 - size / 2.0,
+    };
+    let top = (rect.top + rect.bottom) as f32 / 2.0 - size / 2.0;
+    // Worked out once for each size, turn and place within a pixel, then only blended after that:
+    // measuring every pixel's distance from every stroke took most of a frame.
+    let (left_px, top_px) = (left.floor(), top.floor());
+    let key = MaskKey {
+        glyph,
+        size: size.to_bits(),
+        heavy,
+        degrees: degrees.to_bits(),
+        offset: (((left - left_px) * 64.0) as u8, ((top - top_px) * 64.0) as u8),
+    };
+    MASKS.with(|masks| {
+        let mut masks = masks.borrow_mut();
+        if !masks.contains_key(&key) {
+            let Some(mask) = rasterize(glyph, size, heavy, degrees, left - left_px, top - top_px) else { return false };
+            if masks.len() >= MASKS_MOST {
+                masks.clear();
+            }
+            masks.insert(key, mask);
+        }
+        let mask = &masks[&key];
+        blend_mask(buffer, mask, left_px as i32, top_px as i32, ink);
+        true
+    })
+}
+
+/// What makes one drawing of a symbol different from another.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct MaskKey {
+    glyph: char,
+    size: u32,
+    heavy: bool,
+    degrees: u32,
+    /// Where it starts within its first pixel, in 64ths.
+    offset: (u8, u8),
+}
+
+/// How much of each pixel a symbol covers, from `x`, `y` relative to the pixel it starts in.
+struct Mask {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    coverage: Vec<u8>,
+}
+
+/// Enough for every symbol on screen at a few sizes. A mask is a few hundred bytes.
+const MASKS_MOST: usize = 384;
+
+thread_local! {
+    static MASKS: std::cell::RefCell<std::collections::HashMap<MaskKey, Mask>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Lets go of the symbols worked out so far, as when memory is short.
+pub fn forget_masks() {
+    MASKS.with(|masks| *masks.borrow_mut() = std::collections::HashMap::new());
+}
+
+/// Measures how much of each pixel the symbol covers, starting `fx`, `fy` into its first pixel.
+fn rasterize(glyph: char, size: f32, heavy: bool, degrees: f32, fx: f32, fy: f32) -> Option<Mask> {
+    let shapes = shapes(glyph)?;
     // Each pixel is turned back the other way to find where it falls on the grid.
     let (sin, cos) = (-degrees).to_radians().sin_cos();
     let turn = |p: P| {
@@ -618,43 +685,54 @@ pub fn draw_turned(buffer: &Backbuffer, glyph: char, size: f32, heavy: bool, deg
         let (x, y) = (p.0 - 12.0, p.1 - 12.0);
         (12.0 + x * cos - y * sin, 12.0 + x * sin + y * cos)
     };
-    // The grid leaves room around each symbol, as the icon font does, but a little less.
-    let size = size * 1.12;
     let unit = size / 24.0;
     // Strokes 2 units wide, or 2.4 on a tile, but never under a pixel and a quarter, or a pixel and
     // a half on a tile, so that small ones don't go thin.
     let width = if heavy { (2.4f32).max(1.5 / unit) } else { (2.0f32).max(1.25 / unit) };
     let half = width / 2.0;
-    let left = match align {
-        crate::text::Align::Left => rect.left as f32,
-        crate::text::Align::Right => rect.right as f32 - size,
-        crate::text::Align::Center => (rect.left + rect.right) as f32 / 2.0 - size / 2.0,
-    };
-    let top = (rect.top + rect.bottom) as f32 / 2.0 - size / 2.0;
-    let (bits, width_px, height_px) = buffer.raw();
     let reach = half * unit + 1.0;
-    let (x0, x1) = (((left - reach).floor() as i32).max(0), ((left + size + reach).ceil() as i32).min(width_px));
-    let (y0, y1) = (((top - reach).floor() as i32).max(0), ((top + size + reach).ceil() as i32).min(height_px));
+    let (x0, x1) = ((fx - reach).floor() as i32, (fx + size + reach).ceil() as i32);
+    let (y0, y1) = ((fy - reach).floor() as i32, (fy + size + reach).ceil() as i32);
+    let (w, h) = ((x1 - x0).max(0), (y1 - y0).max(0));
+    let mut coverage = vec![0u8; (w * h) as usize];
     for py in y0..y1 {
         for px in x0..x1 {
-            let p = turn(((px as f32 + 0.5 - left) / unit, (py as f32 + 0.5 - top) / unit));
+            let p = turn(((px as f32 + 0.5 - fx) / unit, (py as f32 + 0.5 - fy) / unit));
             let mut amount = 0.0f32;
             for shape in &shapes {
-                amount = amount.max(coverage(shape, p, half, unit));
+                amount = amount.max(coverage_of(shape, p, half, unit));
                 if amount >= 1.0 {
                     break;
                 }
             }
-            if amount > 0.0 {
-                // Safety: (px, py) is inside the buffer, which `raw` describes.
-                unsafe {
-                    let pixel = bits.add((py * width_px + px) as usize);
-                    *pixel = blend_coverage(*pixel, ink, (amount * 255.0).round() as u8);
-                }
+            coverage[((py - y0) * w + (px - x0)) as usize] = (amount * 255.0).round() as u8;
+        }
+    }
+    Some(Mask { x: x0, y: y0, width: w, height: h, coverage })
+}
+
+/// Blends `ink` into the buffer by the mask, with its first pixel at `left`, `top`.
+fn blend_mask(buffer: &Backbuffer, mask: &Mask, left: i32, top: i32, ink: Rgb) {
+    let (bits, width_px, height_px) = buffer.raw();
+    let (x0, y0) = (left + mask.x, top + mask.y);
+    for row in 0..mask.height {
+        let py = y0 + row;
+        if py < 0 || py >= height_px {
+            continue;
+        }
+        let line = &mask.coverage[(row * mask.width) as usize..((row + 1) * mask.width) as usize];
+        for (column, &amount) in line.iter().enumerate() {
+            let px = x0 + column as i32;
+            if amount == 0 || px < 0 || px >= width_px {
+                continue;
+            }
+            // Safety: (px, py) is inside the buffer, which `raw` describes.
+            unsafe {
+                let pixel = bits.add((py * width_px + px) as usize);
+                *pixel = blend_coverage(*pixel, ink, amount);
             }
         }
     }
-    true
 }
 
 #[cfg(test)]
@@ -705,25 +783,50 @@ mod tests {
     #[test]
     fn strokes_are_solid_on_the_line_and_clear_away_from_it() {
         let shape = line((0.0, 12.0), (24.0, 12.0));
-        assert_eq!(coverage(&shape, (12.0, 12.0), 1.0, 1.0), 1.0);
-        assert_eq!(coverage(&shape, (12.0, 16.0), 1.0, 1.0), 0.0);
+        assert_eq!(coverage_of(&shape, (12.0, 12.0), 1.0, 1.0), 1.0);
+        assert_eq!(coverage_of(&shape, (12.0, 16.0), 1.0, 1.0), 0.0);
         let ring = Ring((12.0, 12.0), 9.0);
-        assert_eq!(coverage(&ring, (21.0, 12.0), 1.0, 1.0), 1.0);
-        assert_eq!(coverage(&ring, (12.0, 12.0), 1.0, 1.0), 0.0);
+        assert_eq!(coverage_of(&ring, (21.0, 12.0), 1.0, 1.0), 1.0);
+        assert_eq!(coverage_of(&ring, (12.0, 12.0), 1.0, 1.0), 0.0);
     }
 
     #[test]
     fn an_arc_covers_only_its_part_of_the_circle() {
         // The top half: from nine o'clock, clockwise, round to three.
         let arc = Arc((12.0, 12.0), 8.0, 180.0, 360.0);
-        assert_eq!(coverage(&arc, (12.0, 4.0), 1.0, 1.0), 1.0);
-        assert_eq!(coverage(&arc, (12.0, 20.0), 1.0, 1.0), 0.0);
+        assert_eq!(coverage_of(&arc, (12.0, 4.0), 1.0, 1.0), 1.0);
+        assert_eq!(coverage_of(&arc, (12.0, 20.0), 1.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn a_symbol_is_drawn_the_same_from_the_cache() {
+        let ink = crate::gfx::Rgb(230, 230, 236);
+        let draw_at = |x: i32, y: i32| {
+            let buffer = crate::gfx::Backbuffer::new(80, 60).unwrap();
+            let rect = RECT { left: x, top: y, right: x + 25, bottom: y + 25 };
+            assert!(draw(&buffer, '\u{E721}', 16.0, false, ink, rect, crate::text::Align::Center));
+            buffer
+        };
+        forget_masks();
+        let first = draw_at(10, 10);
+        let again = draw_at(10, 10);
+        assert_eq!(first.snapshot(), again.snapshot());
+        assert!(first.snapshot().iter().any(|&pixel| pixel != 0), "something was drawn");
+        // Somewhere else, it's the same picture, moved.
+        let moved = draw_at(40, 21).snapshot();
+        let first = first.snapshot();
+        for y in 0..35 {
+            for x in 0..35 {
+                assert_eq!(moved[((y + 11) * 80 + x + 30) as usize], first[(y * 80 + x) as usize], "at {x},{y}");
+            }
+        }
+        forget_masks();
     }
 
     #[test]
     fn a_fill_covers_its_inside() {
         let square = Fill(vec![(4.0, 4.0), (20.0, 4.0), (20.0, 20.0), (4.0, 20.0)]);
-        assert_eq!(coverage(&square, (12.0, 12.0), 1.0, 1.0), 1.0);
-        assert_eq!(coverage(&square, (2.0, 12.0), 1.0, 1.0), 0.0);
+        assert_eq!(coverage_of(&square, (12.0, 12.0), 1.0, 1.0), 1.0);
+        assert_eq!(coverage_of(&square, (2.0, 12.0), 1.0, 1.0), 0.0);
     }
 }
