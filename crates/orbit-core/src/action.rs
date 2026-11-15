@@ -56,6 +56,7 @@ pub enum Builtin {
     ResetShortcuts,
     DeleteLocalData,
     SpeedTest,
+    TypingTest,
     WindowLeft,
     WindowRight,
     WindowTop,
@@ -83,6 +84,7 @@ impl Builtin {
         matches!(
             self,
             Builtin::SpeedTest
+                | Builtin::TypingTest
                 | Builtin::WindowLeft
                 | Builtin::WindowRight
                 | Builtin::WindowTop
@@ -154,6 +156,7 @@ impl Builtin {
         (Builtin::OpenDownloads, "cmd:downloads", "Open Downloads", "Folder", "files"),
         (Builtin::OpenTerminal, "cmd:terminal", "Open Terminal", "System", "console shell cmd"),
         (Builtin::SpeedTest, "cmd:speedtest", "Speed Test", "Internet speed, by Speedtest.net", "internet bandwidth download upload ping ookla speedtest connection wifi broadband"),
+        (Builtin::TypingTest, "cmd:typing-test", "Typing Test", "How fast you type, with Monkeytype\u{2019}s words", "monkeytype type typing speed wpm words per minute keyboard practice accuracy race"),
         (Builtin::WindowLeft, "cmd:window-left", "Left Half", "Window layout", "snap window move side tile arrange split"),
         (Builtin::WindowRight, "cmd:window-right", "Right Half", "Window layout", "snap window move side tile arrange split"),
         (Builtin::WindowTop, "cmd:window-top", "Top Half", "Window layout", "snap window move upper tile arrange split"),

@@ -44,6 +44,12 @@ dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
 ```
 
+## Monkeytype
+
+The typing test's words and quotes are Monkeytype's (https://github.com/monkeytypegame/monkeytype), taken from its `frontend/static/languages/english.json`, `english_1k.json` and `frontend/static/quotes/english.json`. They are in `crates/orbit-core/data/monkeytype/`, changed only in form: one word to a line, and the quotes of up to 150 characters that are plain ASCII, one to a line with their source after a tab. The way results are scored follows Monkeytype's too. Monkeytype is licensed under the GNU General Public License version 3, as Orbit is (see `LICENSE`).
+
+Copyright Miodec and Monkeytype's contributors.
+
 ## Geist
 
 Orbit's typeface is Geist Sans, built into `orbit.exe` from `assets/fonts/GeistVariable.ttf`. It is modified: its `head.unitsPerEm` is lowered from 1000 to 971, which draws it 3% larger. Geist is licensed under the SIL Open Font License 1.1, and the licence is also shipped as `Geist-LICENSE.txt`.

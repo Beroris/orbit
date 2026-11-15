@@ -72,7 +72,7 @@ use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetDpiForSystem};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DELETE, VK_MENU, VK_OEM_COMMA,
     GetKeyState, RegisterHotKey, SetFocus, UnregisterHotKey, GetFocus, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT,
-    MOD_WIN, VK_BACK, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F4, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
+    MOD_WIN, VK_BACK, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{SHEmptyRecycleBinW, SHERB_NOSOUND};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -317,6 +317,12 @@ pub struct App {
     exchange_rates: crate::rates::ExchangeRates,
     pub weather: crate::weather::Weather,
     pub speedtest: crate::speedtest::SpeedTest,
+    /// The typing test on screen, or the last one.
+    pub typing: orbit_core::typing::Test,
+    /// The last typing test was the best yet of its kind.
+    pub typing_best: bool,
+    /// Where the typing test's bar was last drawn, part by part.
+    pub typing_chips: Vec<crate::ui::TypingChip>,
     /// The timer, once one has been set. It runs on with the launcher closed.
     pub countdown: Option<crate::clock::Countdown>,
     pub stopwatch: crate::clock::Stopwatch,
@@ -743,6 +749,11 @@ fn show_tray_menu(hwnd: HWND) {
     drain_deferred();
 }
 
+/// Milliseconds on a steady clock, for the typing test.
+pub fn typing_now() -> f64 {
+    qpc() as f64 * 1000.0 / crate::util::qpc_frequency() as f64
+}
+
 unsafe extern "system" fn edit_wndproc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         let call_original = || {
@@ -757,6 +768,22 @@ unsafe extern "system" fn edit_wndproc(hwnd: HWND, message: u32, wparam: WPARAM,
         {
             if let Ok(parent) = GetParent(hwnd) {
                 let _ = PostMessageW(Some(parent), WM_ORBIT_CARET, WPARAM(0), LPARAM(0));
+            }
+        }
+        // In the typing test, what's typed is the test's, and the box stays empty.
+        if matches!(message, WM_CHAR | WM_PASTE) {
+            let typed = char::from_u32(wparam.0 as u32);
+            let taken = APP.with(|cell| {
+                cell.try_borrow_mut().ok().and_then(|mut guard| {
+                    guard.as_mut().map(|app| match (message, typed) {
+                        (WM_CHAR, Some(c)) => app.on_typing_char(c),
+                        _ => app.typing_takes_keys(),
+                    })
+                })
+            });
+            drain_deferred();
+            if taken == Some(true) {
+                return LRESULT(0);
             }
         }
         match message {
@@ -990,6 +1017,9 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             exchange_rates: Default::default(),
             weather: Default::default(),
             speedtest: Default::default(),
+            typing: orbit_core::typing::Test::new(orbit_core::typing::TypingSettings::default().options(), 0),
+            typing_best: false,
+            typing_chips: Vec::new(),
             countdown: None,
             stopwatch: Default::default(),
             link_args: None,
@@ -2342,6 +2372,9 @@ impl App {
                 }
             }
             TIMER_CLOCK => {
+                if self.typing_shown() && self.typing.tick(typing_now()) {
+                    self.finish_typing();
+                }
                 if self.visible {
                     self.redraw();
                 }
@@ -2405,6 +2438,75 @@ impl App {
         self.motion_clock = Some(start + std::time::Duration::from_millis(ms));
         ui::render(self);
         self.motion_clock = None;
+    }
+
+    /// Types into a typing test for a preview, with made-up timing: "typing" just opened,
+    /// "typing-running" part of the way through a timed test, "typing-result" finished, and
+    /// "typing-quote" a quote. "-words" and "-punctuation" after it change the test.
+    fn preview_typing(&mut self, scope: &str) {
+        use orbit_core::typing::{Mode, QuoteLength};
+        let options = &mut self.settings.typing;
+        options.mode = if scope.contains("quote") {
+            Mode::Quote(QuoteLength::Short)
+        } else if scope.contains("result") || scope.contains("-words") {
+            Mode::Words(25)
+        } else {
+            Mode::Time(30)
+        };
+        options.punctuation = scope.contains("punctuation");
+        self.typing = orbit_core::typing::Test::new(self.settings.typing.options(), 20261115);
+        let running = scope.contains("running");
+        let result = scope.contains("result");
+        if !running && !result {
+            self.refresh_results();
+            return;
+        }
+        let words = self.typing.words.clone();
+        let upto = if result { words.len() } else { 17.min(words.len() - 1) };
+        let chars: usize = words[..upto].iter().map(|word| word.len() + 1).sum();
+        let span = if result { 21_000.0 } else { 11_400.0 };
+        let mut now = typing_now() - span;
+        let gap = span / chars as f64;
+        let mut at = 0usize;
+        for (index, word) in words[..upto].iter().enumerate() {
+            let mut typed = word.clone();
+            // A slip left in, one put right, and a letter too many, as anyone makes.
+            if index == 3 && word.len() > 1 {
+                typed.replace_range(1..2, if &word[1..2] == "x" { "y" } else { "x" });
+            }
+            if index == 9 {
+                typed.push('s');
+            }
+            for (n, c) in typed.chars().enumerate() {
+                if index == 6 && n == 1 {
+                    self.typing.type_char('q', now);
+                    self.typing.backspace(false, now + gap / 2.0);
+                }
+                // Slower in the middle, then quicker again, so the chart has a shape.
+                let pace = 1.0 + 0.35 * ((at as f64) / 9.0).sin();
+                self.typing.type_char(c, now);
+                now += gap * pace;
+                at += 1;
+            }
+            if running && index + 1 == upto {
+                // Part of the way into the word being typed.
+                self.typing.type_char(' ', now);
+                now += gap;
+                let next = &words[upto];
+                for c in next.chars().take(2) {
+                    self.typing.type_char(c, now);
+                    now += gap;
+                }
+                break;
+            }
+            self.typing.type_char(' ', now);
+            now += gap;
+        }
+        self.typing.tick(typing_now());
+        if result {
+            self.typing_best = true;
+        }
+        self.refresh_results();
     }
 
     /// Draws one frame to a file. The window stays hidden throughout, so nothing takes focus.
@@ -2477,6 +2579,11 @@ impl App {
                         self.enter_scope(Scope::Timer, qpc());
                     }
                     Some("timer-new") => self.enter_scope(Scope::Timer, qpc()),
+                    // A made-up test, as it starts, part of the way through, and finished.
+                    Some(typing) if typing.starts_with("typing") => {
+                        self.enter_scope(Scope::TypingTest, qpc());
+                        self.preview_typing(typing);
+                    }
                     Some("stopwatch") => {
                         self.stopwatch = crate::clock::Stopwatch::from_elapsed(83);
                         self.enter_scope(Scope::Stopwatch, qpc());
@@ -2936,6 +3043,9 @@ impl App {
             return true;
         }
         if let Some(handled) = self.on_form_key(vk, ctrl) {
+            return handled;
+        }
+        if let Some(handled) = self.on_typing_key(vk, ctrl) {
             return handled;
         }
         if self.settings.launcher.keyboard != KeyboardMode::Standard {
@@ -4090,6 +4200,16 @@ impl App {
             self.on_form_click(x, y);
             return;
         }
+        if self.view.scope == Scope::TypingTest && self.menu.is_none() && !right {
+            let chip = self.typing_chips.iter().find(|(b, _)| x >= b.left && x < b.right && y >= b.top && y < b.bottom).map(|(_, op)| op.clone());
+            if let Some(op) = chip {
+                self.execute(op);
+            }
+            unsafe {
+                let _ = SetFocus(Some(self.edit));
+            }
+            return;
+        }
         // A click on one of a quicklink's boxes types in that one.
         if matches!(self.view.scope, Scope::LinkArgs { .. }) && self.menu.is_none() {
             if let Some(index) = self.link_arg_boxes.iter().position(|b| x >= b.left && x < b.right && y >= b.top && y < b.bottom) {
@@ -4279,6 +4399,13 @@ impl App {
                 };
                 let finished = test.phase == orbit_core::speedtest::Phase::Done;
                 row.source = RowSource::SpeedTest { summary: finished.then(|| test.summary()), url: test.url.clone() };
+                self.view.rows = vec![row];
+            }
+            Scope::TypingTest => {
+                // Nothing is listed: the test is drawn instead. This row is what Enter does.
+                let mut row = Row::op("Typing Test", "", GLYPH_TYPING, Op::TypingRestart);
+                let summary = self.typing.result().map(|stats| stats.summary(&self.typing.options));
+                row.source = RowSource::TypingTest { summary, options: self.typing.options };
                 self.view.rows = vec![row];
             }
             Scope::Timer => self.view.rows = vec![self.timer_row(&query)],
@@ -4917,6 +5044,87 @@ impl App {
         row.source = RowSource::Answer { other, other_formatted: !formatted_first, reverse, card: Box::new(card) };
     }
 
+    // --- Typing test ------------------------------------------------------------------------
+
+    /// A new typing test, set up as Settings has it, with new words.
+    fn new_typing_test(&mut self) {
+        self.typing = orbit_core::typing::Test::new(self.settings.typing.options(), qpc() as u64);
+        self.typing_best = false;
+        self.motion.caret.reset();
+        if self.view.scope == Scope::TypingTest && self.menu.is_none() {
+            self.refresh_results();
+        }
+        self.tick_clock();
+        self.restart_caret();
+        self.redraw();
+    }
+
+    /// The test is set up another way: keep it, and start again with it.
+    fn typing_setup_changed(&mut self) {
+        self.save_settings();
+        self.leave_menu();
+        self.new_typing_test();
+    }
+
+    /// The typing test is on screen, on its own or behind its menu.
+    fn typing_shown(&self) -> bool {
+        self.menu.as_ref().map_or(&self.view.scope, |menu| &menu.behind.scope) == &Scope::TypingTest
+    }
+
+    /// Keys go to the test, rather than the box or a menu.
+    pub fn typing_takes_keys(&self) -> bool {
+        self.view.scope == Scope::TypingTest && self.menu.is_none() && self.recording.is_none()
+    }
+
+    /// A character typed. Says whether the test took it: in the test, all of them are, so none
+    /// reach the box.
+    pub fn on_typing_char(&mut self, c: char) -> bool {
+        if !self.typing_takes_keys() {
+            return false;
+        }
+        let was_running = self.typing.running();
+        if self.typing.type_char(c, typing_now()) {
+            if self.typing.finished() {
+                self.finish_typing();
+            } else if !was_running {
+                // The first key starts the clock.
+                self.tick_clock();
+            }
+            self.redraw();
+        }
+        true
+    }
+
+    /// The test's own keys: Tab and Enter for a new test, as Monkeytype has them, and Backspace.
+    /// Keys that would move about in the box do nothing.
+    fn on_typing_key(&mut self, vk: u16, ctrl: bool) -> Option<bool> {
+        if !self.typing_takes_keys() {
+            return None;
+        }
+        match vk {
+            v if (v == VK_TAB.0 || v == VK_RETURN.0) && !ctrl => self.new_typing_test(),
+            v if v == VK_BACK.0 => {
+                if self.typing.backspace(ctrl, typing_now()) {
+                    self.redraw();
+                }
+            }
+            v if [VK_LEFT.0, VK_RIGHT.0, VK_UP.0, VK_DOWN.0, VK_HOME.0, VK_END.0, VK_DELETE.0, VK_PRIOR.0, VK_NEXT.0].contains(&v) => {}
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    /// A test is over: keep it if it's the best yet, and offer to copy it.
+    fn finish_typing(&mut self) {
+        self.typing_best = self.settings.typing.record(&self.typing);
+        if self.typing_best {
+            self.save_settings();
+        }
+        if self.view.scope == Scope::TypingTest && self.menu.is_none() {
+            self.refresh_results();
+        }
+    }
+
     /// The speed test is on screen, on its own or behind its menu.
     fn speedtest_shown(&self) -> bool {
         self.menu.as_ref().map_or(&self.view.scope, |menu| &menu.behind.scope) == &Scope::SpeedTest
@@ -4930,7 +5138,7 @@ impl App {
             }),
             RowSource::Note { id, .. } => Some(Action::OpenNote { id: *id }),
             RowSource::Snippet { id } => Some(Action::InsertSnippet { id: *id }),
-            RowSource::Plain | RowSource::Header | RowSource::Clip { .. } | RowSource::Secret { .. } | RowSource::Emoji { .. } | RowSource::Answer { .. } | RowSource::SpeedTest { .. } | RowSource::Clock { .. } | RowSource::Colour(_) | RowSource::File { .. } | RowSource::Extension { .. } => None,
+            RowSource::Plain | RowSource::Header | RowSource::Clip { .. } | RowSource::Secret { .. } | RowSource::Emoji { .. } | RowSource::Answer { .. } | RowSource::SpeedTest { .. } | RowSource::TypingTest { .. } | RowSource::Clock { .. } | RowSource::Colour(_) | RowSource::File { .. } | RowSource::Extension { .. } => None,
         }
     }
 
@@ -5100,6 +5308,10 @@ impl App {
             self.view.filter_static(&behind.query);
         }
         self.refresh_if_data_scope();
+        // A test may have ended while the menu was up.
+        if self.view.scope == Scope::TypingTest {
+            self.refresh_results();
+        }
         self.after_selection_change();
         if let (Scope::Form { .. }, Some(at)) = (&self.view.scope, self.form.as_ref().map(|form| form.at)) {
             self.load_form_field(at);
@@ -5218,6 +5430,26 @@ impl App {
                 self.speedtest.stop();
                 self.refresh_results();
                 self.redraw();
+            }
+            Op::TypingRestart => {
+                self.leave_menu();
+                self.new_typing_test();
+            }
+            Op::TypingMode(mode) => {
+                self.settings.typing.mode = mode;
+                self.typing_setup_changed();
+            }
+            Op::TypingPunctuation => {
+                self.settings.typing.punctuation = !self.settings.typing.punctuation;
+                self.typing_setup_changed();
+            }
+            Op::TypingNumbers => {
+                self.settings.typing.numbers = !self.settings.typing.numbers;
+                self.typing_setup_changed();
+            }
+            Op::TypingWords(list) => {
+                self.settings.typing.words = list;
+                self.typing_setup_changed();
             }
             Op::TimerStart(seconds) => {
                 self.leave_menu();
@@ -6042,6 +6274,8 @@ impl App {
         let wait = match scope {
             Scope::Timer => self.countdown.as_ref().filter(|timer| timer.running()).map(|timer| timer.remaining().subsec_millis()),
             Scope::Stopwatch => self.stopwatch.running().then(|| 1000 - self.stopwatch.elapsed().subsec_millis()),
+            // Each second, for the counter, the chart and the end of a timed test.
+            Scope::TypingTest => self.typing.running().then(|| 1000 - ((self.typing.elapsed(typing_now()) * 1000.0) as u64 % 1000) as u32),
             _ => None,
         };
         if let Some(wait) = wait {
@@ -6117,6 +6351,10 @@ impl App {
                 }
                 self.refresh_results();
                 self.redraw();
+            }
+            Builtin::TypingTest => {
+                self.enter_scope(Scope::TypingTest, t0);
+                self.new_typing_test();
             }
             Builtin::NewSnippet => {
                 self.open_form(InlineForm::snippet(None));

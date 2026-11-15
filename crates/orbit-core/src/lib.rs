@@ -17,6 +17,7 @@ pub mod snippet;
 pub mod text;
 pub mod vim;
 pub mod speedtest;
+pub mod typing;
 pub mod weather;
 pub mod timer;
 pub mod colour;

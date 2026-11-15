@@ -58,6 +58,8 @@ pub const GLYPH_CHECK: char = '\u{E73E}';
 pub const GLYPH_IMAGE: char = '\u{EB9F}';
 pub const GLYPH_COMMAND: char = '\u{E756}';
 pub const GLYPH_KEYBOARD: char = '\u{E765}';
+/// A keyboard going fast, Orbit's own, for the typing test.
+pub const GLYPH_TYPING: char = '\u{F113}';
 pub const GLYPH_STAR: char = '\u{E734}';
 pub const GLYPH_STAR_FILLED: char = '\u{E735}';
 pub const GLYPH_DOWN: char = '\u{E70D}';
@@ -119,6 +121,7 @@ pub fn extension_glyph(ext: orbit_core::builtin_ext::BuiltinExt) -> char {
         BuiltinExt::EnteAuth => GLYPH_SHIELD,
         BuiltinExt::Weather => GLYPH_WEATHER,
         BuiltinExt::SpeedTest => GLYPH_SPEED,
+        BuiltinExt::TypingTest => GLYPH_TYPING,
         BuiltinExt::GitHub => GLYPH_GITHUB,
     }
 }
@@ -162,6 +165,7 @@ pub fn tile_colors(glyph: char) -> (Rgb, Rgb) {
         GLYPH_NOTE => YELLOW,
         GLYPH_SNIPPET | GLYPH_IMAGE => VIOLET,
         GLYPH_SPEED => PURPLE,
+        GLYPH_TYPING => YELLOW,
         GLYPH_CLIPBOARD => TEAL,
         GLYPH_CALC | GLYPH_COMMAND | GLYPH_KEYBOARD => INDIGO,
         GLYPH_EMOJI | GLYPH_PICKER => FUCHSIA,
@@ -242,6 +246,8 @@ pub enum RowSource {
     Answer { other: Option<String>, other_formatted: bool, reverse: Option<String>, card: Box<AnswerCard> },
     /// The speed test's one row. `summary` and `url` are there once a test has finished.
     SpeedTest { summary: Option<String>, url: Option<String> },
+    /// The typing test's one row: how it's set up, and the result once a test has finished.
+    TypingTest { summary: Option<String>, options: orbit_core::typing::Options },
     /// The timer or the stopwatch, and whether it has been started and is running, for its menu.
     Clock { stopwatch: bool, running: bool, started: bool },
     /// A colour picked from the screen.
@@ -393,6 +399,12 @@ pub enum Op {
     SpeedTestInstall,
     SpeedTestStart,
     SpeedTestStop,
+    /// A new typing test, with new words.
+    TypingRestart,
+    TypingMode(orbit_core::typing::Mode),
+    TypingPunctuation,
+    TypingNumbers,
+    TypingWords(orbit_core::typing::WordList),
     TimerStart(u64),
     TimerPause,
     TimerResume,
@@ -470,6 +482,9 @@ pub fn primary_label(op: &Op) -> &'static str {
         Op::SpeedTestInstall => "Install",
         Op::SpeedTestStart => "Start test",
         Op::SpeedTestStop => "Stop",
+        Op::TypingRestart => "New test",
+        Op::TypingMode(_) | Op::TypingWords(_) => "Choose",
+        Op::TypingPunctuation | Op::TypingNumbers => "Switch",
         Op::TimerStart(_) | Op::StopwatchStart => "Start",
         Op::TimerPause | Op::StopwatchPause => "Pause",
         Op::TimerResume => "Resume",
@@ -525,7 +540,7 @@ pub fn op_glyph(op: &Op) -> char {
         Op::SpeedTestStop | Op::TimerCancel => GLYPH_END_TASK,
         Op::TimerPause | Op::StopwatchPause => GLYPH_PAUSE,
         Op::TimerAdd(_) => GLYPH_ADD,
-        Op::StopwatchReset => GLYPH_RESET,
+        Op::StopwatchReset | Op::TypingRestart => GLYPH_RESET,
         Op::PickColour => GLYPH_PICKER,
         Op::RevealFile(_) => GLYPH_FOLDER,
         Op::OpenExtensionsSettings => GLYPH_SETTINGS,
@@ -590,6 +605,38 @@ pub fn is_program(path: &str) -> bool {
     [".exe", ".lnk", ".bat", ".cmd", ".msi", ".ps1"].iter().any(|ext| lower.ends_with(ext))
 }
 
+/// The typing test's menu: its result, then every way to set it up, as Monkeytype's bar has them.
+fn typing_rows(out: &mut Vec<Row>, summary: Option<&str>, options: &orbit_core::typing::Options) {
+    use orbit_core::typing::{Mode, QuoteLength, TIMES, WORD_COUNTS, WordList};
+    if let Some(summary) = summary {
+        out.push(Row::op("Copy result", "", GLYPH_COPY, Op::Copy(summary.to_string())).with_keys("Ctrl+Enter"));
+    }
+    let chosen = |row: Row, on: bool| if on { Row { subtitle: "Chosen".into(), icon: RowIcon::Glyph(GLYPH_CHECK), ..row } } else { row };
+    for seconds in TIMES {
+        let mode = Mode::Time(seconds);
+        out.push(chosen(Row::op(format!("Time: {seconds} seconds"), "", GLYPH_TIMER, Op::TypingMode(mode)), options.mode == mode));
+    }
+    for count in WORD_COUNTS {
+        let mode = Mode::Words(count);
+        out.push(chosen(Row::op(format!("Words: {count}"), "", GLYPH_TEXT, Op::TypingMode(mode)), options.mode == mode));
+    }
+    for (length, name) in [(QuoteLength::Short, "Quote: short"), (QuoteLength::Medium, "Quote: medium")] {
+        let mode = Mode::Quote(length);
+        out.push(chosen(Row::op(name, "", GLYPH_SNIPPET, Op::TypingMode(mode)), options.mode == mode));
+    }
+    let switch = |on: bool| if on { "On" } else { "Off" };
+    out.push(Row::op("Punctuation", switch(options.punctuation), GLYPH_EDIT, Op::TypingPunctuation).with_keys("Ctrl+Shift+P"));
+    out.push(Row::op("Numbers", switch(options.numbers), GLYPH_HASH, Op::TypingNumbers).with_keys("Ctrl+Shift+N"));
+    for list in WordList::ALL {
+        let title = match list {
+            WordList::English => "Word list: English 200",
+            WordList::English1k => "Word list: English 1k",
+        };
+        out.push(chosen(Row::op(title, "", GLYPH_TYPING, Op::TypingWords(list)), options.words == list));
+    }
+    out.push(Row::op("Open Monkeytype", "monkeytype.com", GLYPH_WEB, Op::OpenUrl("https://monkeytype.com".into())).with_keys("Ctrl+O"));
+}
+
 /// The Ctrl+Enter action, if the row has one.
 pub fn secondary_for(row: &Row, app_item_id: Option<&str>) -> Option<(&'static str, Op)> {
     match &row.source {
@@ -604,6 +651,8 @@ pub fn secondary_for(row: &Row, app_item_id: Option<&str>) -> Option<(&'static s
         },
         RowSource::SpeedTest { summary: Some(summary), .. } => Some(("Copy results", Op::Copy(summary.clone()))),
         RowSource::SpeedTest { .. } => None,
+        RowSource::TypingTest { summary: Some(summary), .. } => Some(("Copy result", Op::Copy(summary.clone()))),
+        RowSource::TypingTest { .. } => None,
         RowSource::Clock { .. } => None,
         RowSource::Colour(colour) => Some(("Copy RGB", Op::Copy(colour.rgb()))),
         RowSource::File { path, .. } => Some(("Show in folder", Op::RevealFile(path.clone()))),
@@ -742,6 +791,7 @@ pub fn menu_for(row: &Row, app_item_id: Option<&str>, is_pinned: bool, hotkey: O
             out.push(Row::op("Ookla\u{2019}s Terms of Use", "", GLYPH_FILE, Op::OpenUrl(crate::speedtest::TERMS.into())));
             out.push(Row::op("Ookla\u{2019}s Privacy Policy", "", GLYPH_SHIELD, Op::OpenUrl(crate::speedtest::PRIVACY.into())));
         }
+        RowSource::TypingTest { summary, options } => typing_rows(&mut out, summary.as_deref(), options),
         RowSource::Clock { stopwatch: false, started, .. } => {
             if *started {
                 out.push(Row::op("Add 1 minute", "", GLYPH_ADD, Op::TimerAdd(60)));

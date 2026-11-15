@@ -305,6 +305,7 @@ pub fn glyph_for_builtin(command: Builtin) -> char {
         Builtin::OpenTerminal => '\u{E756}',
         Builtin::ShowHelp => '\u{E897}',
         Builtin::SpeedTest => crate::rows::GLYPH_SPEED,
+        Builtin::TypingTest => crate::rows::GLYPH_TYPING,
         Builtin::Weather => crate::rows::GLYPH_WEATHER,
         Builtin::WindowLeft => crate::rows::GLYPH_WIN_LEFT,
         Builtin::WindowRight => crate::rows::GLYPH_WIN_RIGHT,
@@ -435,10 +436,14 @@ mod tests {
         assert!(titles(&catalog, "speed test").contains(&"Speed Test".to_string()), "on by default");
         assert_eq!(titles(&catalog, "weather").first().map(String::as_str), Some("Weather"));
         assert_eq!(titles(&catalog, "everything").first().map(String::as_str), Some("Everything"), "file search is found by its name");
+        assert_eq!(titles(&catalog, "monkeytype").first().map(String::as_str), Some("Typing Test"), "found by Monkeytype's name");
+        assert_eq!(titles(&catalog, "wpm").first().map(String::as_str), Some("Typing Test"));
         settings.extensions.speed_test = false;
+        settings.extensions.typing_test = false;
         settings.fetch_weather = false;
         let catalog = Catalog::new(apps(), &settings);
         assert!(!titles(&catalog, "speed test").contains(&"Speed Test".to_string()));
+        assert!(!titles(&catalog, "typing test").contains(&"Typing Test".to_string()));
         assert!(!titles(&catalog, "weather").contains(&"Weather".to_string()));
         let ente = (0..catalog.index.len() as u32).find(|&item| catalog.index.title(item) == "Ente Auth");
         assert!(ente.is_none(), "Ente Auth starts off");

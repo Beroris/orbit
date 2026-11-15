@@ -31,6 +31,8 @@ pub enum Scope {
     Weather,
     /// An internet speed test, drawn in place of the list.
     SpeedTest,
+    /// A typing test, drawn in place of the list. What's typed goes to the test, not the box.
+    TypingTest,
     /// The timer, drawn in place of the list. Typing a time sets it.
     Timer,
     Stopwatch,
@@ -63,6 +65,7 @@ impl Scope {
             Scope::Form { .. } => GLYPH_SNIPPET,
             Scope::Weather => GLYPH_WEATHER,
             Scope::SpeedTest => GLYPH_SPEED,
+            Scope::TypingTest => GLYPH_TYPING,
             Scope::Timer => GLYPH_TIMER,
             Scope::Stopwatch => GLYPH_STOPWATCH,
             Scope::Colour(_) => GLYPH_PICKER,
@@ -90,6 +93,7 @@ impl Scope {
             Scope::Form { .. } => String::new(),
             Scope::Weather => "Look up another place\u{2026}".into(),
             Scope::SpeedTest => "Speed Test".into(),
+            Scope::TypingTest => "Typing Test".into(),
             Scope::Timer => "Type a time, such as 5m or 1h 30m\u{2026}".into(),
             Scope::Stopwatch => "Stopwatch".into(),
             Scope::Colour(_) => "Colour".into(),
@@ -120,6 +124,8 @@ impl Scope {
             // Open-Meteo's data asks to be credited where it's shown.
             Scope::Weather => "Weather by Open-Meteo.com",
             Scope::SpeedTest => "Speedtest by Ookla",
+            // The words and quotes are Monkeytype's, and it's credited where they're shown.
+            Scope::TypingTest => "Typing Test, words by Monkeytype",
             Scope::Timer => "Timer",
             Scope::Stopwatch => "Stopwatch",
             Scope::Colour(_) => "Colour",

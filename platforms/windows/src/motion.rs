@@ -239,6 +239,8 @@ impl Fade {
 pub struct Motion {
     pub selection: Glide,
     pub menu_selection: Glide,
+    /// The typing test's caret, from letter to letter.
+    pub caret: Glide,
     /// Which menu is showing, and when it began to appear, if it's still coming.
     pub menu_open: Option<(u64, Option<Instant>)>,
     /// The launcher's height, in pixels.
@@ -256,6 +258,7 @@ impl Motion {
     pub fn moving(&self, now: Instant) -> bool {
         self.selection.moving(now)
             || self.menu_selection.moving(now)
+            || self.caret.moving(now)
             || self.menu_open.is_some_and(|(_, start)| start.is_some_and(|start| progress(start, MENU, now) < 1.0))
             || self.height.moving(RESIZE, now)
             || self.crossfade.as_ref().is_some_and(|fade| fade.remaining(now) > 0.0)
@@ -278,6 +281,7 @@ impl Motion {
     pub fn settle(&mut self) {
         self.selection.reset();
         self.menu_selection.reset();
+        self.caret.reset();
         self.menu_open = None;
         self.height.reset();
         self.crossfade = None;

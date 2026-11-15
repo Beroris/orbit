@@ -13,16 +13,18 @@ Settings → Extensions lists every extension in one table, these first. Each ha
 | **Ente Auth** | Off | Search Ente Auth | |
 | **Weather** | On | Weather | |
 | **Speed Test** | On | Speed Test | |
+| **Typing Test** | On | Typing Test | |
 | **GitHub** | Off | My Issues, My Pull Requests, GitHub Notifications, Starred Repositories | `ghi`, `ghp`, `ghn`, `ghs` |
 
 - **Everything** is described at the end.
+- **Typing Test** draws a test where the list would be, with Monkeytype's English word lists (the 200 or 1,000 most common words) and its short and medium quotes, which are built into Orbit. What you type goes to the test, not the search box. The bar at the top, or Ctrl+K, chooses a timed test of 15, 30, 60 or 120 seconds, 10, 25, 50 or 100 words, or a quote, and turns punctuation and numbers on. The test starts on the first key, Backspace goes back into a word left with a mistake in it, and Tab or Enter starts again with new words. Scores are worked out as Monkeytype does: wpm counts the words typed right, raw counts every key, and consistency is how steady raw speed was. The best wpm for each kind of test is kept in `settings.json`, if accuracy was at least 75%. Ctrl+Enter copies a result.
 - **GitHub** asks GitHub's own command-line tool, `gh`, so it uses `gh`'s sign-in and Orbit never sees a token. Its card in Settings installs `gh` with Windows Package Manager if it's missing, then opens `gh auth login` in a window of its own. A list is kept for a minute. Enter opens an item in the browser. In Notifications, Ctrl+Enter marks one as read.
   - **My Pull Requests** lists the open ones that involve you, then under **Recently closed** those closed or merged in the last 14 days. Each says where it stands in up to two coloured pills, the most pressing first: Review requested (from you), Conflicts, Checks failing, Changes requested, Draft, Approved and Checks running; one with nothing to say is just Open, and closed ones say Merged or Closed. Its symbol is coloured as GitHub colours it: green while open, grey for a draft, purple once merged and red if closed.
   - **My Issues** does the same for issues: Open, then Completed, Not planned or Closed.
   - **Filters.** The drop-down at the right of the search box, or Ctrl+P, narrows a list: open ones only, leaving out what was merged or closed; pull requests you created, ones waiting for your review, ones that need attention (conflicts, failing checks or changes requested) and drafts; issues you created or are assigned; and, when a list spans more than one, a single repository. Only filters with something in them are offered, each with how many. The choice is kept for each list until Orbit quits.
   - The action menu also copies an item's link, its reference such as `acme/web#482`, and a pull request's branch name.
 
-Their ids (`files`, `1password`, `ente-auth`, `weather`, `speed-test`, `github`) are taken: a folder extension with one of them is listed as broken and never runs.
+Their ids (`files`, `1password`, `ente-auth`, `weather`, `speed-test`, `typing-test`, `github`) are taken: a folder extension with one of them is listed as broken and never runs.
 
 ## Aliases and hotkeys
 
