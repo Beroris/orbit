@@ -137,6 +137,11 @@ mod tests {
         assert!(found("multiply").contains(&"\u{00D7}"));
         assert!(found("option").contains(&"\u{2325}"));
         assert!(found("euro").contains(&"\u{20AC}"));
+        assert!(found("hashtag").contains(&"#"), "a lone # is a symbol, not a group title");
+        assert_eq!(found("grave")[0], "`");
+        assert_eq!(found("backtick")[0], "`");
+        assert!(found("percent").contains(&"%"));
+        assert!(found("backslash").contains(&"\\"));
     }
 
     #[test]

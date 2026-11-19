@@ -1637,6 +1637,35 @@
 ↘	end	mac key
 ⌨	keyboard	keys typing
 ⊞	windows key	win super start key
+%	percent sign	percentage per cent modulo
+#	number sign	hashtag hash pound sharp octothorpe
+`	grave accent	backtick backquote tick
+~	tilde	squiggle approximately
+!	exclamation mark	bang exclamation point
+@	at sign	at email commercial
+&	ampersand	and
+*	asterisk	star times
+^	caret	hat circumflex power
+_	underscore	low line underline
+-	hyphen	dash minus
++	plus sign	add plus
+=	equals sign	equal
+|	vertical bar	pipe or
+\	backslash	reverse solidus
+/	slash	forward slash solidus divide
+?	question mark	question
+:	colon	
+;	semicolon	
+'	apostrophe	single quote straight quote
+"	quotation mark	double quote straight quote
+(	left parenthesis	open bracket paren
+)	right parenthesis	close bracket paren
+[	left square bracket	open bracket
+]	right square bracket	close bracket
+{	left curly bracket	open brace
+}	right curly bracket	close brace
+<	less-than sign	left angle bracket
+>	greater-than sign	right angle bracket
 #Maths
 ×	multiplication sign	multiply times x product
 ÷	division sign	divide obelus
