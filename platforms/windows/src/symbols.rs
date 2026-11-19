@@ -262,6 +262,17 @@ fn shapes(glyph: char) -> Option<Vec<Shape>> {
             Dot((17.25, 9.75), 1.1),
             line((8.0, 14.5), (16.0, 14.5)),
         ],
+        // Typing test: a keyboard rushing along, with lines streaming off behind it.
+        '\u{F113}' => vec![
+            Frame(6.5, 6.0, 15.0, 12.0, 3.2),
+            Dot((10.25, 10.0), 1.1),
+            Dot((14.0, 10.0), 1.1),
+            Dot((17.75, 10.0), 1.1),
+            line((11.0, 14.25), (17.0, 14.25)),
+            line((1.75, 8.5), (3.75, 8.5)),
+            line((0.75, 12.0), (3.75, 12.0)),
+            line((1.75, 15.5), (3.75, 15.5)),
+        ],
         // Star, and filled
         '\u{E734}' => vec![Path(soften(&star(), 2.0, true), true)],
         '\u{E735}' => vec![Path(soften(&star(), 2.0, true), true), Fill(soften(&star(), 2.0, true))],

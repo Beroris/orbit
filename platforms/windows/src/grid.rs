@@ -49,7 +49,7 @@ impl Grid {
         Grid { lines, room }
     }
 
-    fn line_of(&self, row: usize) -> Option<usize> {
+    pub fn line_of(&self, row: usize) -> Option<usize> {
         self.lines.iter().position(|line| match *line {
             Line::Title(at) => at == row,
             Line::Cells { start, count } => row >= start && row < start + count,

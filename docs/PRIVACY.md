@@ -23,6 +23,7 @@ Related: [SHORTCUT_SEMANTICS.md](SHORTCUT_SEMANTICS.md), [DATA_PORTABILITY.md](D
 | Currency conversion | On | No | The European Central Bank's public file of daily rates, when you convert (see below) | The bank's file, in `exchange-rates.xml` |
 | Weather | On | No | The place you look up, sent to Open-Meteo, and that place's forecast (see below) | The last place found, in `settings.json`. The forecast in memory for 15 minutes |
 | Speed test | Runs only when opened, after Ookla's terms are accepted | No | What Ookla's Speedtest CLI prints about the test (see below) | That the terms were accepted, in `settings.json`. The last result in memory only |
+| Typing test | Runs only when opened | No | What you type while it's open, which goes to the test and nowhere else | Your best wpm for each kind of test, and how the test is set up, in `settings.json`. The test itself in memory only |
 | GitHub | Off | No | Your open issues and pull requests and those closed in the last two weeks, notifications and starred repositories, through GitHub's `gh` tool (see below) | Nothing written. Each list in memory for a minute, and the filter chosen for it until Orbit quits |
 | Pick Colour | Runs only when chosen | No | One still picture of every display, while you pick (see below) | Nothing written. The picked colour in memory while it's shown |
 | Toggles, window layouts, End task | Run only when chosen | No | The window in front (layouts), the app you chose (End task) | Nothing. They change the Windows setting, window or app you chose |

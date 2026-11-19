@@ -623,6 +623,10 @@ impl App {
 
     /// The filter drop-down's choices for the list showing, the one chosen ticked.
     pub(super) fn open_filter_menu(&mut self) {
+        if self.emoji_list_showing() {
+            self.open_emoji_filter_menu();
+            return;
+        }
         let Some((ext, command, _)) = self.open_extension_list() else { return };
         if self.ext_filters.len() < 2 {
             return;
@@ -665,6 +669,9 @@ impl App {
     /// What the filter drop-down says: the title of the filter in force, and whether it narrows the
     /// list, which is any but the first.
     pub fn filter_label(&self) -> Option<(String, bool)> {
+        if self.emoji_list_showing() {
+            return Some((emoji_filter_title(self.emoji_filter), self.emoji_filter != EmojiFilter::All));
+        }
         let Scope::Extension { ext, command, .. } = self.menu.as_ref().map_or(&self.view.scope, |menu| &menu.behind.scope) else { return None };
         if self.ext_filters.len() < 2 {
             return None;
@@ -893,5 +900,57 @@ impl App {
         if self.visible {
             self.refresh_results();
         }
+    }
+}
+
+/// What the Emoji & Symbols filter drop-down calls each choice.
+fn emoji_filter_title(filter: EmojiFilter) -> String {
+    match filter {
+        EmojiFilter::All => "All".into(),
+        EmojiFilter::Emoji => "All Emoji".into(),
+        EmojiFilter::Symbols => "All Symbols".into(),
+        EmojiFilter::Group(group) => orbit_core::emoji::groups().get(group as usize).copied().unwrap_or("All").into(),
+    }
+}
+
+impl App {
+    /// Whether the Emoji & Symbols list is showing, behind a menu or not.
+    fn emoji_list_showing(&self) -> bool {
+        matches!(self.menu.as_ref().map_or(&self.view.scope, |menu| &menu.behind.scope), Scope::Emoji)
+    }
+
+    /// The Emoji & Symbols filter drop-down: everything, all emoji, each emoji group, all
+    /// symbols, then each symbol group, the one chosen ticked.
+    fn open_emoji_filter_menu(&mut self) {
+        let groups = orbit_core::emoji::groups();
+        let first_symbol = orbit_core::emoji::first_symbol_group();
+        let mut choices = vec![EmojiFilter::All, EmojiFilter::Emoji];
+        choices.extend((0..first_symbol).map(|group| EmojiFilter::Group(group as u8)));
+        choices.push(EmojiFilter::Symbols);
+        choices.extend((first_symbol..groups.len()).map(|group| EmojiFilter::Group(group as u8)));
+        let rows: Vec<Row> = choices
+            .into_iter()
+            .map(|choice| {
+                let mine = choice == self.emoji_filter;
+                let mut row = Row::op(emoji_filter_title(choice), "", if mine { GLYPH_CHECK } else { ' ' }, Op::EmojiFilter(choice));
+                row.accent = mine;
+                row
+            })
+            .collect();
+        let at = rows.iter().position(|row| row.accent).unwrap_or(0);
+        self.leave_menu();
+        self.open_menu(MenuSide::Drop, ui::FILTER_MENU_TITLE.to_string(), rows);
+        self.view.select(at);
+        self.after_selection_change();
+        self.redraw();
+    }
+
+    /// Narrows the Emoji & Symbols list to a filter.
+    pub(super) fn choose_emoji_filter(&mut self, filter: EmojiFilter) {
+        self.leave_menu();
+        self.emoji_filter = filter;
+        self.view.reset_position();
+        self.refresh_results();
+        self.redraw();
     }
 }

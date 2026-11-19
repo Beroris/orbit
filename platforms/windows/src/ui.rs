@@ -483,6 +483,9 @@ pub struct Fonts {
     pub answer: Face,
     /// The timer's and stopwatch's time.
     pub clock: Face,
+    /// The typing test's words, and the counter over them.
+    pub typing: Face,
+    pub typing_strong: Face,
 }
 
 impl Fonts {
@@ -508,6 +511,8 @@ impl Fonts {
             heading: ui(16.0, 560)?,
             answer: ui(30.0, 560)?,
             clock: ui(56.0, 300)?,
+            typing: ui(22.0, 400)?,
+            typing_strong: ui(22.0, 560)?,
         })
     }
 }
@@ -551,7 +556,7 @@ const POPOVER_MIN_ROWS: usize = 3;
 /// for a small menu, so opening one never makes the launcher jump taller and back.
 pub fn launcher_height(dpi: u32, scope: &Scope, rows: &[Row], grid: bool, fit: bool, visible_rows: i32) -> i32 {
     // The weather and the speed test are drawn rather than listed, so they always get the room.
-    let drawn = matches!(scope, Scope::Form { .. } | Scope::Weather | Scope::SpeedTest | Scope::Timer | Scope::Stopwatch | Scope::Colour(_));
+    let drawn = matches!(scope, Scope::Form { .. } | Scope::Weather | Scope::SpeedTest | Scope::TypingTest | Scope::Timer | Scope::Stopwatch | Scope::Colour(_));
     let height = if grid || !fit || is_split(scope, rows) || drawn { window_size(dpi, visible_rows).1 } else { fitted_height(dpi, rows, visible_rows) };
     height.max(popover_needs_height(POPOVER_MIN_ROWS, dpi, MenuSide::Right))
 }
@@ -1140,7 +1145,8 @@ pub fn render(app: &mut App) {
     // The row under the pointer, in the menu if one is open, else in the list.
     let hover = app.pointed_row();
     app.hovered_row = hover;
-    let caret_on = app.caret_on && !matches!(app.view.scope, Scope::SetHotkey { .. } | Scope::Confirm(_));
+    // The typing test has its own caret, among its words.
+    let caret_on = app.caret_on && !matches!(app.view.scope, Scope::SetHotkey { .. } | Scope::Confirm(_) | Scope::TypingTest);
 
     let surface = if hc { theme.background } else if dark { SURFACE_DARK } else { SURFACE_LIGHT };
     let tint = if !glass { 255 } else if dark { GLASS_ALPHA_DARK } else { GLASS_ALPHA_LIGHT };
@@ -1263,6 +1269,10 @@ pub fn render(app: &mut App) {
             draw_weather(buffer, &paint, &mut app.weather, width, height);
         } else if *list.scope == Scope::SpeedTest {
             draw_speedtest(buffer, &paint, &app.speedtest, app.settings.speedtest_accepted, width, height);
+        } else if *list.scope == Scope::TypingTest {
+            let best = app.settings.typing.best(&app.typing.options);
+            let chips = draw_typing(buffer, &paint, &app.typing, best, app.typing_best, &mut app.motion.caret, app.caret_on && app.menu.is_none(), now, animate, width, height);
+            app.typing_chips = if app.menu.is_none() { chips } else { Vec::new() };
         } else if matches!(list.scope, Scope::Timer | Scope::Stopwatch) {
             let stopwatch = *list.scope == Scope::Stopwatch;
             draw_clock(buffer, &paint, app.countdown.as_ref(), &app.stopwatch, stopwatch, list.query, width, height);
@@ -1321,7 +1331,19 @@ pub fn render(app: &mut App) {
             (Some(status), _) => status.as_str().into(),
             // The name of what's selected, since tiles have nowhere else to show it.
             (None, true) => match list.rows.get(list.selected) {
-                Some(row) if !row.is_header() => format!("{} · {}", list.scope.label(), row.title).into(),
+                // An emoji or symbol shows its code point, such as U+2318, in place of the list's
+                // name, so a long name still fits. Not for a long sequence, such as a family.
+                Some(row) if !row.is_header() => match row.icon {
+                    RowIcon::Emoji(at) => {
+                        let code = app.emoji_table.get(at as usize).map(|entry| orbit_core::emoji::code_points(entry.glyph)).unwrap_or_default();
+                        if code.is_empty() || code.matches(' ').count() > 1 {
+                            format!("{} · {}", list.scope.label(), row.title).into()
+                        } else {
+                            format!("{} · {code}", row.title).into()
+                        }
+                    }
+                    _ => format!("{} · {}", list.scope.label(), row.title).into(),
+                },
                 _ => list.scope.label().into(),
             },
             (None, false) => list.scope.label().into(),
@@ -2660,10 +2682,15 @@ fn draw_grid(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, grid: &Gr
     }
     for cell in cells {
         if cache.len() >= EMOJI_CACHE_MAX && !cache.contains_key(&cell.at) {
-            cache.clear();
+            // Room is made from tiles off screen, so the ones already drawn this frame stay.
+            cache.retain(|at, _| cells.iter().any(|cell| cell.at == *at));
         }
         let Some(entry) = emoji.get(cell.at as usize) else { continue };
-        let pixels = cache.entry(cell.at).or_insert_with(|| text::emoji_pixels(entry.glyph, size).unwrap_or_default());
+        let pixels = cache.entry(cell.at).or_insert_with(|| {
+            let symbol = if entry.symbol { text::symbol_pixels(entry.glyph, size, theme.text) } else { None };
+            let fallback = || if entry.symbol { text::emoji_pixels_in(entry.glyph, size, theme.text) } else { text::emoji_pixels(entry.glyph, size) };
+            symbol.or_else(fallback).unwrap_or_default()
+        });
         let RECT { left, top, right, bottom } = cell.rect;
         buffer.blit_premultiplied(left + (right - left - size) / 2, top + (bottom - top - size) / 2, size, pixels);
     }
@@ -3190,5 +3217,301 @@ mod accent_tests {
         assert!(theme.accent.2 > theme.accent.0);
         let theme = with_accent(LIGHT, false, None);
         assert!(theme.accent.2 > theme.accent.0);
+    }
+}
+
+/// What a click on the typing test's bar does, and where it was drawn.
+pub type TypingChip = (RECT, Op);
+
+/// The typing test's own colour, the yellow of its symbol, as Monkeytype's is: a light shade on
+/// dark, a deep one on light. High contrast keeps Windows' own colours.
+fn typing_accent(paint: &Paint) -> Rgb {
+    if paint.hc {
+        return paint.theme.text;
+    }
+    let (light, deep) = tile_colors(GLYPH_TYPING);
+    if paint.dark { light } else { deep }
+}
+
+/// The typing test, where the list would be, laid out as Monkeytype lays it out: the bar to set it
+/// up, three lines of words with a caret that glides along them, and then the result with a chart.
+#[allow(clippy::too_many_arguments)]
+fn draw_typing(buffer: &mut Backbuffer, paint: &Paint, test: &orbit_core::typing::Test, best: Option<f32>, new_best: bool, caret: &mut motion::Glide, caret_on: bool, now: Instant, animate: bool, width: i32, height: i32) -> Vec<TypingChip> {
+    let (theme, fonts, dpi) = (paint.theme, paint.fonts, paint.dpi);
+    let px = |dip: i32| scale(dip, dpi);
+    let top = px(INPUT_HEIGHT + PADDING) + px(6);
+    let bottom = height - px(FOOTER_HEIGHT + PADDING);
+    let (left, right) = (px(ROW_INSET + 26), width - px(ROW_INSET + 26));
+    let clock = crate::app::typing_now();
+    let mut chips = Vec::new();
+
+    if test.finished() {
+        draw_typing_result(buffer, paint, test, best, new_best, RECT { left, top, right, bottom });
+        caret.reset();
+        return chips;
+    }
+
+    // The bar, or once typing has started, how far it's got.
+    let bar_h = px(30);
+    if test.running() {
+        let counter = match (test.remaining(clock), test.word_goal()) {
+            (Some(left), _) => format!("{}", left.ceil() as u32),
+            (None, Some(goal)) => format!("{}/{goal}", test.at()),
+            _ => String::new(),
+        };
+        text::draw(buffer, &counter, &fonts.typing_strong, typing_accent(paint), RECT { left, top, right, bottom: top + bar_h + px(4) }, Align::Left);
+        let stats = test.stats(clock);
+        let live = format!("{:.0} wpm  \u{00B7}  {:.0}%", stats.wpm, stats.accuracy);
+        text::draw(buffer, &live, &fonts.small, theme.tertiary, RECT { left, top: top + px(6), right, bottom: top + bar_h }, Align::Right);
+    } else {
+        chips = draw_typing_bar(buffer, paint, &test.options, width / 2, top, bar_h);
+    }
+
+    // Three lines of words, the one being typed in the middle once the first is done.
+    let face = &fonts.typing;
+    let line_h = px(38);
+    let lines_top = top + bar_h + ((bottom - top - bar_h - px(28)) - line_h * 3) / 2;
+    let space = text::width(" ", face);
+    let char_w = |c: char| text::width(c.encode_utf8(&mut [0; 4]), face);
+    // Every word's place, line by line, from the start.
+    let mut placed: Vec<(usize, i32, i32)> = Vec::with_capacity(test.words.len());
+    let (mut x, mut line) = (left, 0);
+    let last = if test.word_goal().is_some() { test.words.len() } else { (test.at() + 40).min(test.words.len()) };
+    for word in 0..last {
+        let w: i32 = test.marks(word).iter().map(|&(c, _)| char_w(c)).sum();
+        if x > left && x + w > right {
+            x = left;
+            line += 1;
+        }
+        placed.push((word, x, line));
+        x += w + space;
+    }
+    let current_line = placed.get(test.at()).map_or(0, |&(_, _, line)| line);
+    let first_line = (current_line - 1).max(0);
+    let colour_of = |mark: orbit_core::typing::Mark| {
+        use orbit_core::typing::Mark;
+        match mark {
+            Mark::Untyped => theme.tertiary,
+            Mark::Correct => theme.text,
+            Mark::Incorrect | Mark::Extra if paint.hc => theme.accent,
+            Mark::Incorrect => theme.danger,
+            Mark::Extra => theme.danger.mix(theme.tertiary, 0.45),
+        }
+    };
+    let mut caret_at: Option<(i32, i32)> = None;
+    for &(word, x, line) in &placed {
+        if line < first_line || line >= first_line + 3 {
+            continue;
+        }
+        let y = lines_top + (line - first_line) * line_h;
+        let marks = test.marks(word);
+        let typed = test.typed.get(word).map_or(0, |typed| typed.chars().count());
+        let mut at = x;
+        for (index, &(c, mark)) in marks.iter().enumerate() {
+            if word == test.at() && index == typed {
+                caret_at = Some((at, y));
+            }
+            let w = char_w(c);
+            text::draw(buffer, c.encode_utf8(&mut [0; 4]), face, colour_of(mark), RECT { left: at, top: y, right: at + w * 2 + px(6), bottom: y + line_h }, Align::Left);
+            at += w;
+        }
+        if word == test.at() && typed >= marks.len() {
+            caret_at = Some((at, y));
+        }
+        // A word left with a mistake in it is underlined, as on Monkeytype.
+        if test.word_wrong(word) && !paint.hc {
+            buffer.fill_round_rect_alpha(x, y + line_h - px(7), at - x, px(2), 1.0, theme.danger, 200);
+        }
+    }
+
+    // The caret, gliding from letter to letter. It blinks until the test starts.
+    if let Some((x, y)) = caret_at {
+        let target = RECT { left: x - px(1), top: y + px(7), right: x + px(1), bottom: y + line_h - px(7) };
+        let key = motion::key((test.words.first(), test.options.best_key(), width, first_line));
+        let at = caret.aim(key, target, now, animate).to_rect();
+        if test.running() || caret_on {
+            buffer.fill_round_rect(at.left, at.top, (at.right - at.left).max(px(2)), at.bottom - at.top, px(1) as f32, typing_accent(paint));
+        }
+    }
+
+    // Under the words: where a quote is from, or the keys.
+    let foot = RECT { left, top: bottom - px(22), right, bottom };
+    match test.source {
+        Some(source) => text::draw(buffer, &format!("\u{2014} {source}"), &fonts.small, theme.tertiary, foot, Align::Center),
+        None if !test.started() => text::draw(buffer, "Start typing to begin  \u{00B7}  Tab for new words  \u{00B7}  Ctrl+K for more", &fonts.small, theme.tertiary, foot, Align::Center),
+        None => text::draw(buffer, "Tab or Enter for a new test  \u{00B7}  Esc to leave", &fonts.small, theme.tertiary, foot, Align::Center),
+    }
+    chips
+}
+
+/// Monkeytype's bar: punctuation and numbers, then the kind of test, then how long, then the word
+/// list, each lit when chosen. Says where each part is, for clicks.
+fn draw_typing_bar(buffer: &mut Backbuffer, paint: &Paint, options: &orbit_core::typing::Options, middle: i32, top: i32, height: i32) -> Vec<TypingChip> {
+    use orbit_core::typing::{Mode, QuoteLength, TIMES, WORD_COUNTS, WordList};
+    let (theme, fonts, dpi) = (paint.theme, paint.fonts, paint.dpi);
+    let px = |dip: i32| scale(dip, dpi);
+    let quote = matches!(options.mode, Mode::Quote(_));
+    let mut groups: Vec<Vec<(String, bool, Op)>> = Vec::new();
+    if !quote {
+        groups.push(vec![("punctuation".into(), options.punctuation, Op::TypingPunctuation), ("numbers".into(), options.numbers, Op::TypingNumbers)]);
+    }
+    groups.push(vec![
+        ("time".into(), matches!(options.mode, Mode::Time(_)), Op::TypingMode(Mode::Time(30))),
+        ("words".into(), matches!(options.mode, Mode::Words(_)), Op::TypingMode(Mode::Words(25))),
+        ("quote".into(), quote, Op::TypingMode(Mode::Quote(QuoteLength::Short))),
+    ]);
+    groups.push(match options.mode {
+        Mode::Time(_) => TIMES.iter().map(|&s| (s.to_string(), options.mode == Mode::Time(s), Op::TypingMode(Mode::Time(s)))).collect(),
+        Mode::Words(_) => WORD_COUNTS.iter().map(|&n| (n.to_string(), options.mode == Mode::Words(n), Op::TypingMode(Mode::Words(n)))).collect(),
+        Mode::Quote(_) => [(QuoteLength::Short, "short"), (QuoteLength::Medium, "medium")]
+            .into_iter()
+            .map(|(length, name)| (name.to_string(), options.mode == Mode::Quote(length), Op::TypingMode(Mode::Quote(length))))
+            .collect(),
+    });
+    if !quote {
+        let other = match options.words {
+            WordList::English => WordList::English1k,
+            WordList::English1k => WordList::English,
+        };
+        groups.push(vec![(options.words.name().to_string(), false, Op::TypingWords(other))]);
+    }
+    let face = &fonts.hint_strong;
+    let (pad, gap) = (px(9), px(12));
+    let total: i32 = groups.iter().map(|group| group.iter().map(|(label, _, _)| text::width(label, face) + pad * 2).sum::<i32>()).sum::<i32>() + gap * (groups.len() as i32 - 1) + px(12);
+    let mut x = middle - total / 2;
+    buffer.fill_round_rect_alpha(x, top, total, height, px(9) as f32, paint.keycap.0, paint.keycap.1);
+    x += px(6);
+    let mut chips = Vec::new();
+    for (at, group) in groups.iter().enumerate() {
+        if at > 0 {
+            let line_x = x + gap / 2;
+            buffer.fill_rect_alpha(line_x, top + px(8), paint.thin.max(1), height - px(16), paint.divider.0, paint.divider.1.saturating_mul(3));
+            x += gap;
+        }
+        for (label, on, op) in group {
+            let w = text::width(label, face) + pad * 2;
+            let rect = RECT { left: x, top, right: x + w, bottom: top + height };
+            let ink = if *on { typing_accent(paint) } else { theme.tertiary };
+            text::draw(buffer, label, face, ink, RECT { top: top + px(1), ..rect }, Align::Center);
+            chips.push((rect, op.clone()));
+            x += w;
+        }
+    }
+    chips
+}
+
+/// The result: wpm and accuracy large on the left, the chart of the test beside them, and the rest
+/// in a row underneath.
+fn draw_typing_result(buffer: &mut Backbuffer, paint: &Paint, test: &orbit_core::typing::Test, best: Option<f32>, new_best: bool, area: RECT) {
+    let (theme, fonts, dpi) = (paint.theme, paint.fonts, paint.dpi);
+    let px = |dip: i32| scale(dip, dpi);
+    let Some(stats) = test.result() else { return };
+    let accent = typing_accent(paint);
+    // The whole result, centred in the room above the line of keys.
+    let block = px(256);
+    let top = area.top + ((area.bottom - area.top - px(26) - block) / 2).max(px(4));
+    let (left, right) = (area.left, area.right);
+    let column = |y: i32, h: i32| RECT { left, top: y, right: left + px(160), bottom: y + h };
+
+    text::draw(buffer, "wpm", &fonts.heading, theme.tertiary, column(top, px(22)), Align::Left);
+    text::draw(buffer, &format!("{:.0}", stats.wpm), &fonts.display, accent, column(top + px(18), px(60)), Align::Left);
+    text::draw(buffer, "acc", &fonts.heading, theme.tertiary, column(top + px(86), px(22)), Align::Left);
+    text::draw(buffer, &format!("{:.0}%", stats.accuracy), &fonts.display, accent, column(top + px(104), px(60)), Align::Left);
+    let badge_y = top + px(172);
+    if new_best {
+        let label = "New best";
+        let w = text::width(label, &fonts.hint_strong) + px(18);
+        buffer.fill_round_rect_alpha(left, badge_y, w, px(22), px(11) as f32, accent, if paint.hc { 255 } else { 46 });
+        text::draw(buffer, label, &fonts.hint_strong, if paint.hc { theme.background } else { accent }, RECT { left, top: badge_y, right: left + w, bottom: badge_y + px(22) }, Align::Center);
+    } else if let Some(best) = best {
+        text::draw(buffer, &format!("Best {best:.0} wpm"), &fonts.small, theme.tertiary, column(badge_y, px(22)), Align::Left);
+    }
+
+    let chart = RECT { left: left + px(178), top: top + px(4), right, bottom: top + px(194) };
+    draw_typing_chart(buffer, paint, &test.history, chart);
+
+    // The rest, as Monkeytype lists it under its chart.
+    let row_top = top + px(212);
+    let span = right - left;
+    let columns = [
+        ("test type", test.options.describe(), 0.34),
+        ("raw", format!("{:.0}", stats.raw), 0.12),
+        ("characters", format!("{}/{}/{}/{}", stats.correct, stats.incorrect, stats.extra, stats.missed), 0.22),
+        ("consistency", format!("{:.0}%", stats.consistency), 0.17),
+        ("time", format!("{:.0}s", stats.seconds.round()), 0.15),
+    ];
+    let mut x = left;
+    for (label, value, share) in columns {
+        let w = (span as f32 * share) as i32;
+        let cell = |y: i32, h: i32| RECT { left: x, top: y, right: x + w - px(10), bottom: y + h };
+        text::draw(buffer, label, &fonts.hint, theme.tertiary, cell(row_top, px(16)), Align::Left);
+        let face = if label == "test type" { &fonts.small } else { &fonts.heading };
+        text::draw(buffer, &value, face, theme.text, cell(row_top + px(19), px(24)), Align::Left);
+        x += w;
+    }
+
+    let foot = RECT { left, top: area.bottom - px(22), right, bottom: area.bottom };
+    match test.source {
+        Some(source) => {
+            text::draw(buffer, &format!("\u{2014} {source}"), &fonts.small, theme.tertiary, RECT { right: right - px(200), ..foot }, Align::Left);
+            text::draw(buffer, "Enter for the next test", &fonts.small, theme.tertiary, foot, Align::Right);
+        }
+        None => text::draw(buffer, "Enter or Tab for the next test  \u{00B7}  Ctrl+K to change it", &fonts.small, theme.tertiary, foot, Align::Center),
+    }
+}
+
+/// wpm over the test in the accent colour, raw speed as a quiet line behind it, and a red dot for
+/// each second with mistakes in it, over light guide lines.
+fn draw_typing_chart(buffer: &mut Backbuffer, paint: &Paint, seconds: &[orbit_core::typing::Second], area: RECT) {
+    let (theme, fonts, dpi) = (paint.theme, paint.fonts, paint.dpi);
+    let px = |dip: i32| scale(dip, dpi);
+    buffer.fill_round_rect_alpha(area.left, area.top, area.right - area.left, area.bottom - area.top, px(14) as f32, paint.divider.0, paint.divider.1);
+    let label_w = px(26);
+    let plot = RECT { left: area.left + px(14) + label_w, top: area.top + px(18), right: area.right - px(18), bottom: area.bottom - px(18) };
+    let most = seconds.iter().map(|second| second.wpm.max(second.raw)).fold(0.0f32, f32::max);
+    let step = if most > 150.0 { 50.0 } else if most > 60.0 { 25.0 } else { 10.0 };
+    // A whole number of steps each side of the middle line, so its label is round too.
+    let ceiling = (most / (step * 2.0)).ceil().max(1.0) * step * 2.0;
+    let (w, h) = ((plot.right - plot.left) as f32, (plot.bottom - plot.top) as f32);
+    for at in 0..=2 {
+        let value = ceiling * at as f32 / 2.0;
+        let y = plot.bottom - (h * at as f32 / 2.0) as i32;
+        buffer.fill_rect_alpha(plot.left, y, plot.right - plot.left, paint.thin.max(1), paint.divider.0, paint.divider.1.saturating_mul(2));
+        text::draw(buffer, &format!("{value:.0}"), &fonts.hint, theme.tertiary, RECT { left: area.left + px(8), top: y - px(8), right: plot.left - px(8), bottom: y + px(8) }, Align::Right);
+    }
+    if seconds.is_empty() {
+        return;
+    }
+    let x_of = |at: usize| plot.left as f32 + if seconds.len() < 2 { w / 2.0 } else { w * at as f32 / (seconds.len() - 1) as f32 };
+    let y_of = |value: f32| plot.bottom as f32 - h * (value / ceiling).clamp(0.0, 1.0);
+    let band = |buffer: &mut Backbuffer, points: &[(f32, f32)], thick: f32, ink: Rgb, alpha: u8| {
+        if points.len() < 2 {
+            let (x, y) = points[0];
+            let size = px(6);
+            buffer.fill_round_rect_alpha(x as i32 - size / 2, y as i32 - size / 2, size, size, size as f32 / 2.0, ink, alpha);
+            return;
+        }
+        let mut shape = Vec::with_capacity(points.len() * 2);
+        shape.extend(points.iter().map(|&(x, y)| (x, y - thick / 2.0)));
+        shape.extend(points.iter().rev().map(|&(x, y)| (x, y + thick / 2.0)));
+        buffer.fill_polygon_alpha(&shape, ink, alpha);
+    };
+    let raw: Vec<(f32, f32)> = seconds.iter().enumerate().map(|(at, second)| (x_of(at), y_of(second.raw))).collect();
+    band(buffer, &raw, px(2) as f32, theme.tertiary, 150);
+    let wpm: Vec<(f32, f32)> = seconds.iter().enumerate().map(|(at, second)| (x_of(at), y_of(second.wpm))).collect();
+    let accent = typing_accent(paint);
+    if !paint.hc && wpm.len() > 1 {
+        let mut fill = wpm.clone();
+        fill.push((wpm[wpm.len() - 1].0, plot.bottom as f32));
+        fill.push((wpm[0].0, plot.bottom as f32));
+        buffer.fill_polygon_alpha(&fill, accent, if paint.dark { 40 } else { 32 });
+    }
+    band(buffer, &wpm, px(2) as f32 + 0.5, accent, 255);
+    for (at, second) in seconds.iter().enumerate() {
+        if second.errors > 0 {
+            let size = px(4) + px(2) * second.errors.min(3) as i32;
+            let (x, y) = (x_of(at) as i32, y_of(second.raw) as i32);
+            buffer.fill_round_rect_alpha(x - size / 2, y - size / 2, size, size, size as f32 / 2.0, theme.danger, 230);
+        }
     }
 }

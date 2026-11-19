@@ -31,6 +31,8 @@ pub enum Scope {
     Weather,
     /// An internet speed test, drawn in place of the list.
     SpeedTest,
+    /// A typing test, drawn in place of the list. What's typed goes to the test, not the box.
+    TypingTest,
     /// The timer, drawn in place of the list. Typing a time sets it.
     Timer,
     Stopwatch,
@@ -63,6 +65,7 @@ impl Scope {
             Scope::Form { .. } => GLYPH_SNIPPET,
             Scope::Weather => GLYPH_WEATHER,
             Scope::SpeedTest => GLYPH_SPEED,
+            Scope::TypingTest => GLYPH_TYPING,
             Scope::Timer => GLYPH_TIMER,
             Scope::Stopwatch => GLYPH_STOPWATCH,
             Scope::Colour(_) => GLYPH_PICKER,
@@ -90,6 +93,7 @@ impl Scope {
             Scope::Form { .. } => String::new(),
             Scope::Weather => "Look up another place\u{2026}".into(),
             Scope::SpeedTest => "Speed Test".into(),
+            Scope::TypingTest => "Typing Test".into(),
             Scope::Timer => "Type a time, such as 5m or 1h 30m\u{2026}".into(),
             Scope::Stopwatch => "Stopwatch".into(),
             Scope::Colour(_) => "Colour".into(),
@@ -120,6 +124,8 @@ impl Scope {
             // Open-Meteo's data asks to be credited where it's shown.
             Scope::Weather => "Weather by Open-Meteo.com",
             Scope::SpeedTest => "Speedtest by Ookla",
+            // The words and quotes are Monkeytype's, and it's credited where they're shown.
+            Scope::TypingTest => "Typing Test, words by Monkeytype",
             Scope::Timer => "Timer",
             Scope::Stopwatch => "Stopwatch",
             Scope::Colour(_) => "Colour",
@@ -255,6 +261,27 @@ impl View {
         let forward = (index..self.rows.len()).find(|&i| !self.rows[i].is_header());
         let back = (0..index).rev().find(|&i| !self.rows[i].is_header());
         forward.or(back).unwrap_or(index)
+    }
+
+    /// Ctrl+Up and Ctrl+Down in a grid: to the first tile of the section before or after, with
+    /// its title at the top. Up from inside a section goes to that section's start first.
+    pub fn move_section(&mut self, delta: i32) {
+        let titles: Vec<usize> = self.rows.iter().enumerate().filter(|(_, row)| row.is_header()).map(|(at, _)| at).collect();
+        let current = titles.iter().rposition(|&title| title < self.selected);
+        let to = match (delta > 0, current) {
+            (true, Some(current)) => titles.get(current + 1),
+            (true, None) => titles.first(),
+            (false, Some(current)) if self.selected > titles[current] + 1 => titles.get(current),
+            (false, Some(current)) => current.checked_sub(1).and_then(|before| titles.get(before)),
+            (false, None) => None,
+        };
+        let Some(&title) = to else { return };
+        self.select(title + 1);
+        if let Some(grid) = &self.grid
+            && let Some(line) = grid.line_of(title)
+        {
+            self.scroll = line.min(grid.last_first());
+        }
     }
 
     /// Left and right in a grid: along the rows, stepping over section titles.
@@ -657,6 +684,23 @@ mod tests {
         assert_eq!(v.scroll, 0, "with the title back in view");
         v.select(3);
         assert_eq!(v.selected, 4);
+    }
+
+    #[test]
+    fn ctrl_up_and_down_jump_a_section() {
+        let mut v = with_sections();
+        v.select(1);
+        v.move_section(1);
+        assert_eq!(v.selected, 4, "the next section's first row");
+        v.move_section(1);
+        assert_eq!(v.selected, 4, "nothing after the last section");
+        v.select(5);
+        v.move_section(-1);
+        assert_eq!(v.selected, 4, "this section's start first");
+        v.move_section(-1);
+        assert_eq!(v.selected, 1, "then the section before");
+        v.move_section(-1);
+        assert_eq!(v.selected, 1, "nothing before the first");
     }
 
     #[test]

@@ -6,7 +6,7 @@ A small, keyboard-first launcher for Windows and macOS. Press a shortcut, type, 
 
 ## What it does
 
-- **Launcher.** Fast ranked search over apps and commands, with a calculator that knows percentages ("90% of 429", "429 + 10%"), unit and currency conversion ("123 euro in pounds", "123 pound to kilo"), the weather ("weather London"), a speed test by Speedtest.net, and quick links. On Windows it forgives typing mistakes, keeps favourites at the top, and can open on favourites alone.
+- **Launcher.** Fast ranked search over apps and commands, with a calculator that knows percentages ("90% of 429", "429 + 10%") and takes x for times ("18 x 23"), unit and currency conversion ("123 euro in pounds", "123 pound to kilo"), the weather ("weather London"), a speed test by Speedtest.net, and quick links. On Windows it forgives typing mistakes, keeps favourites at the top, and can open on favourites alone.
 - **Action menu.** Ctrl+K (Cmd+K on macOS) shows what you can do with the selected item. On Windows it's a small menu above the footer, and the list stays where it was behind it. A running app's menu has End task.
 - **Motion (Windows).** The launcher fades in and out, and its selection, menus, pages and height glide into place instead of jumping. None of it makes you wait: keys and clicks work from the first frame. Switch it off with Animations in Settings → General. It's off whenever Windows' own animation effects are.
 - **Window layouts (Windows).** Left, right, top and bottom half, maximise, almost maximise, centre, and move to the next display, for the window you opened Orbit over. Give any of them a hotkey to use it straight from the keyboard.
@@ -14,10 +14,11 @@ A small, keyboard-first launcher for Windows and macOS. Press a shortcut, type, 
 - **Timer and stopwatch (Windows).** Type "timer 5m", or open Timer and type how long. Both keep going with the launcher closed, and Windows says when a timer ends.
 - **Pick Colour (Windows).** Pick any pixel on screen, with a magnifier, and copy it as hex, RGB or HSL.
 - **Orbit menu (Windows).** The Orbit logo in the footer opens a short menu of Orbit's own: Settings, Check for Updates, Help, Suspend Shortcuts, Restart and Quit.
-- **Emoji list (Windows).** Search "emoji" for a grid of 1,609 colour emoji with keyword search, pins and recently used. Enter pastes one where you were typing. There are no skin tone variants or country flags yet.
+- **Emoji & Symbols (Windows).** Search "emoji" for a grid of 1,609 colour emoji and 171 symbols: Mac keys like ⌘ and ⌥, maths, arrows, currency and punctuation. Search by name or keyword, or by how a symbol is typed in plain text ("->" finds →, "!=" finds ≠), narrow it to one group, and keep pins and recently used. Ctrl+Up and Ctrl+Down jump between groups, and the footer shows each one's code point. Enter pastes one where you were typing. There are no skin tone variants or country flags yet.
 - **Quicklinks.** Open a site or a search by name or alias. On Windows, make one from the launcher with Create Quicklink, or type an address and choose Save as Quicklink.
 - **File search (Windows).** Type "everything" and press Enter to search every file on your PC, through [Everything](https://www.voidtools.com) by voidtools. Give it an alias, and the alias and a space search straight away. Orbit can install Everything for you. Files can also show under other results.
-- **Extensions (Windows).** Files, 1Password, Ente Auth, Weather, Speed Test and GitHub come with Orbit, each with a switch: one you don't use is gone from the launcher and never runs. Every command can have its own alias, keyword and hotkey, even while its extension is off, and giving it one turns the extension on. Other programs can add commands too, with a folder holding a small manifest and a program that answers in JSON. See [docs/EXTENSIONS.md](docs/EXTENSIONS.md).
+- **Typing Test (Windows).** How fast you type, with Monkeytype's words and quotes, scored the way Monkeytype scores it. Pick a timed test (15 to 120 seconds), a word count or a quote from the bar at the top, with punctuation and numbers if you like. Letters light up as you type, mistakes go red, and the caret glides along. The result has your wpm and accuracy, a chart of the whole test, raw speed, consistency and characters, and Orbit keeps your best for each kind of test. Tab starts again.
+- **Extensions (Windows).** Files, 1Password, Ente Auth, Weather, Speed Test, Typing Test and GitHub come with Orbit, each with a switch: one you don't use is gone from the launcher and never runs. Every command can have its own alias, keyword and hotkey, even while its extension is off, and giving it one turns the extension on. Other programs can add commands too, with a folder holding a small manifest and a program that answers in JSON. See [docs/EXTENSIONS.md](docs/EXTENSIONS.md).
 - **GitHub (opt-in, Windows).** Your issues, pull requests, notifications and stars in the launcher: `ghi`, `ghp`, `ghn` and `ghs`. Each pull request says where it stands in coloured pills (conflicts, checks failing, changes requested, review requested, draft, approved), with the ones closed in the last two weeks under Recently closed. A drop-down beside the search narrows the list to open ones only, yours, ones waiting for your review, ones that need attention, drafts, or one repository. It goes through GitHub's own `gh` tool. Orbit can install it, then opens its sign-in for you.
 - **Import (Windows).** Bring quicklinks, web searches, snippets and notes over from Raycast, Flow Launcher, Wox, Command Palette and Keypirinha, or from an Orbit export. Raycast's exports open with their passphrase.
 - **Hotkeys.** On Windows, choose **Set hotkey** in the action menu and press the keys. Pressing an app's hotkey again minimizes it.
@@ -49,7 +50,7 @@ Orbit keeps itself up to date: once a day it looks for a new release, downloads 
 
 Or take **`Orbit-<version>-Portable.exe`**: the same app without installing. It keeps its settings in an `Orbit settings` folder beside itself, so it can live on a USB stick.
 
-See [THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md) for the emoji data's and the Geist font's licences.
+See [THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md) for the licences of the emoji data, the Geist font and Monkeytype's word lists.
 
 ## Build
 

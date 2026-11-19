@@ -44,6 +44,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 static CARET_PENDING: AtomicBool = AtomicBool::new(false);
+/// Where the search box is about to type a × for an x or *, picked up by `on_query_changed`, -1 if
+/// none, and which of the two was typed.
+static PENDING_TIMES: AtomicIsize = AtomicIsize::new(-1);
+static PENDING_TIMES_KEY: AtomicIsize = AtomicIsize::new(0);
 /// The snippet's box in a form, which wants Enter for new lines.
 static AREA_HWND: AtomicIsize = AtomicIsize::new(0);
 /// A form left open when the launcher hid comes back if it's shown again this soon.
@@ -72,7 +76,7 @@ use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetDpiForSystem};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DELETE, VK_MENU, VK_OEM_COMMA,
     GetKeyState, RegisterHotKey, SetFocus, UnregisterHotKey, GetFocus, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT,
-    MOD_WIN, VK_BACK, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_F4, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
+    MOD_WIN, VK_BACK, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{SHEmptyRecycleBinW, SHERB_NOSOUND};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -306,6 +310,10 @@ pub struct App {
     /// Read when the emoji list opens and let go when it closes.
     pub emoji_table: Vec<orbit_core::emoji::Emoji>,
     pub emoji_cache: HashMap<u16, Vec<u8>>,
+    /// Where in the search box Orbit typed a × for an x, in UTF-16 units. Only these go back to x.
+    typed_times: TypedTimes,
+    /// Which emoji and symbols the Emoji & Symbols list shows. Kept while Orbit runs.
+    emoji_filter: crate::rows::EmojiFilter,
     pub icons: IconCache,
     /// What the clipboard's side panel shows, for the clip last asked for.
     pub clip_preview: Option<Box<ClipPreview>>,
@@ -317,6 +325,12 @@ pub struct App {
     exchange_rates: crate::rates::ExchangeRates,
     pub weather: crate::weather::Weather,
     pub speedtest: crate::speedtest::SpeedTest,
+    /// The typing test on screen, or the last one.
+    pub typing: orbit_core::typing::Test,
+    /// The last typing test was the best yet of its kind.
+    pub typing_best: bool,
+    /// Where the typing test's bar was last drawn, part by part.
+    pub typing_chips: Vec<crate::ui::TypingChip>,
     /// The timer, once one has been set. It runs on with the launcher closed.
     pub countdown: Option<crate::clock::Countdown>,
     pub stopwatch: crate::clock::Stopwatch,
@@ -743,6 +757,11 @@ fn show_tray_menu(hwnd: HWND) {
     drain_deferred();
 }
 
+/// Milliseconds on a steady clock, for the typing test.
+pub fn typing_now() -> f64 {
+    qpc() as f64 * 1000.0 / crate::util::qpc_frequency() as f64
+}
+
 unsafe extern "system" fn edit_wndproc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         let call_original = || {
@@ -757,6 +776,22 @@ unsafe extern "system" fn edit_wndproc(hwnd: HWND, message: u32, wparam: WPARAM,
         {
             if let Ok(parent) = GetParent(hwnd) {
                 let _ = PostMessageW(Some(parent), WM_ORBIT_CARET, WPARAM(0), LPARAM(0));
+            }
+        }
+        // In the typing test, what's typed is the test's, and the box stays empty.
+        if matches!(message, WM_CHAR | WM_PASTE) {
+            let typed = char::from_u32(wparam.0 as u32);
+            let taken = APP.with(|cell| {
+                cell.try_borrow_mut().ok().and_then(|mut guard| {
+                    guard.as_mut().map(|app| match (message, typed) {
+                        (WM_CHAR, Some(c)) => app.on_typing_char(c),
+                        _ => app.typing_takes_keys(),
+                    })
+                })
+            });
+            drain_deferred();
+            if taken == Some(true) {
+                return LRESULT(0);
             }
         }
         match message {
@@ -806,11 +841,47 @@ unsafe extern "system" fn edit_wndproc(hwnd: HWND, message: u32, wparam: WPARAM,
                 if !new_line && (c == 0x0D || c == 0x0A || c == 0x1B || c == 0x09 || c == 0x0B || c == 0x7F || c == 0x01) {
                     return LRESULT(0);
                 }
+                if hwnd.0 as isize != AREA_HWND.load(Ordering::Relaxed)
+                    && let Some(times) = times_sign_for(hwnd, c)
+                {
+                    return CallWindowProcW(std::mem::transmute::<isize, WNDPROC>(EDIT_ORIGINAL_PROC.load(Ordering::Relaxed)), hwnd, message, WPARAM(times as usize), lparam);
+                }
             }
             _ => {}
         }
         call_original()
     }
+}
+
+/// In the search box, an x or * typed after a number in a sum goes in as ×, which is returned for the
+/// box to type instead. `on_query_changed` keeps track of it, and turns it back into an x if the
+/// text stops being a sum.
+unsafe fn times_sign_for(edit: HWND, c: u32) -> Option<u32> {
+    // Only a lowercase x, or a *: a capital X is kept as typed, so it can't come back changed.
+    if c != u32::from(b'x') && c != u32::from(b'*') {
+        return None;
+    }
+    let at_root = APP.with(|cell| cell.try_borrow().ok().is_some_and(|guard| guard.as_ref().is_some_and(|app| app.view.scope == Scope::Root)));
+    if !at_root {
+        return None;
+    }
+    unsafe {
+        let len = GetWindowTextLengthW(edit).max(0) as usize;
+        let mut units = vec![0u16; len + 1];
+        let copied = GetWindowTextW(edit, &mut units) as usize;
+        units.truncate(copied);
+        let (mut start, mut end) = (0u32, 0u32);
+        SendMessageW(edit, EM_GETSEL, Some(WPARAM(&mut start as *mut u32 as usize)), Some(LPARAM(&mut end as *mut u32 as isize)));
+        let (start, end) = ((start as usize).min(units.len()), (end as usize).min(units.len()));
+        let before = String::from_utf16_lossy(&units[..start]);
+        let after = String::from_utf16_lossy(&units[end..]);
+        if orbit_core::calc::x_types_times(&before, &after) {
+            PENDING_TIMES_KEY.store(c as isize, Ordering::Relaxed);
+            PENDING_TIMES.store(start as isize, Ordering::Relaxed);
+            return Some(0xD7);
+        }
+    }
+    None
 }
 
 fn load_settings(dir: &std::path::Path) -> (Settings, bool, Option<String>) {
@@ -982,6 +1053,8 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             known_games_at: None,
             emoji_table: Vec::new(),
             emoji_cache: HashMap::new(),
+            typed_times: TypedTimes::default(),
+            emoji_filter: Default::default(),
             icons: IconCache::new(icon_capacity),
             clip_preview: None,
             clip_preview_wanted: None,
@@ -990,6 +1063,9 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             exchange_rates: Default::default(),
             weather: Default::default(),
             speedtest: Default::default(),
+            typing: orbit_core::typing::Test::new(orbit_core::typing::TypingSettings::default().options(), 0),
+            typing_best: false,
+            typing_chips: Vec::new(),
             countdown: None,
             stopwatch: Default::default(),
             link_args: None,
@@ -1897,6 +1973,9 @@ impl App {
         self.apply_glass();
         if changed {
             ui::publish_edit_colors(&theme);
+            // Symbols in the emoji grid are drawn in the text colour. Colour emoji look the same.
+            let table = &self.emoji_table;
+            self.emoji_cache.retain(|at, _| table.get(*at as usize).is_some_and(|entry| !entry.symbol));
         }
         if self.visible {
             self.redraw();
@@ -2342,6 +2421,9 @@ impl App {
                 }
             }
             TIMER_CLOCK => {
+                if self.typing_shown() && self.typing.tick(typing_now()) {
+                    self.finish_typing();
+                }
                 if self.visible {
                     self.redraw();
                 }
@@ -2405,6 +2487,75 @@ impl App {
         self.motion_clock = Some(start + std::time::Duration::from_millis(ms));
         ui::render(self);
         self.motion_clock = None;
+    }
+
+    /// Types into a typing test for a preview, with made-up timing: "typing" just opened,
+    /// "typing-running" part of the way through a timed test, "typing-result" finished, and
+    /// "typing-quote" a quote. "-words" and "-punctuation" after it change the test.
+    fn preview_typing(&mut self, scope: &str) {
+        use orbit_core::typing::{Mode, QuoteLength};
+        let options = &mut self.settings.typing;
+        options.mode = if scope.contains("quote") {
+            Mode::Quote(QuoteLength::Short)
+        } else if scope.contains("result") || scope.contains("-words") {
+            Mode::Words(25)
+        } else {
+            Mode::Time(30)
+        };
+        options.punctuation = scope.contains("punctuation");
+        self.typing = orbit_core::typing::Test::new(self.settings.typing.options(), 20261115);
+        let running = scope.contains("running");
+        let result = scope.contains("result");
+        if !running && !result {
+            self.refresh_results();
+            return;
+        }
+        let words = self.typing.words.clone();
+        let upto = if result { words.len() } else { 17.min(words.len() - 1) };
+        let chars: usize = words[..upto].iter().map(|word| word.len() + 1).sum();
+        let span = if result { 21_000.0 } else { 11_400.0 };
+        let mut now = typing_now() - span;
+        let gap = span / chars as f64;
+        let mut at = 0usize;
+        for (index, word) in words[..upto].iter().enumerate() {
+            let mut typed = word.clone();
+            // A slip left in, one put right, and a letter too many, as anyone makes.
+            if index == 3 && word.len() > 1 {
+                typed.replace_range(1..2, if &word[1..2] == "x" { "y" } else { "x" });
+            }
+            if index == 9 {
+                typed.push('s');
+            }
+            for (n, c) in typed.chars().enumerate() {
+                if index == 6 && n == 1 {
+                    self.typing.type_char('q', now);
+                    self.typing.backspace(false, now + gap / 2.0);
+                }
+                // Slower in the middle, then quicker again, so the chart has a shape.
+                let pace = 1.0 + 0.35 * ((at as f64) / 9.0).sin();
+                self.typing.type_char(c, now);
+                now += gap * pace;
+                at += 1;
+            }
+            if running && index + 1 == upto {
+                // Part of the way into the word being typed.
+                self.typing.type_char(' ', now);
+                now += gap;
+                let next = &words[upto];
+                for c in next.chars().take(2) {
+                    self.typing.type_char(c, now);
+                    now += gap;
+                }
+                break;
+            }
+            self.typing.type_char(' ', now);
+            now += gap;
+        }
+        self.typing.tick(typing_now());
+        if result {
+            self.typing_best = true;
+        }
+        self.refresh_results();
     }
 
     /// Draws one frame to a file. The window stays hidden throughout, so nothing takes focus.
@@ -2477,6 +2628,11 @@ impl App {
                         self.enter_scope(Scope::Timer, qpc());
                     }
                     Some("timer-new") => self.enter_scope(Scope::Timer, qpc()),
+                    // A made-up test, as it starts, part of the way through, and finished.
+                    Some(typing) if typing.starts_with("typing") => {
+                        self.enter_scope(Scope::TypingTest, qpc());
+                        self.preview_typing(typing);
+                    }
                     Some("stopwatch") => {
                         self.stopwatch = crate::clock::Stopwatch::from_elapsed(83);
                         self.enter_scope(Scope::Stopwatch, qpc());
@@ -2938,6 +3094,9 @@ impl App {
         if let Some(handled) = self.on_form_key(vk, ctrl) {
             return handled;
         }
+        if let Some(handled) = self.on_typing_key(vk, ctrl) {
+            return handled;
+        }
         if self.settings.launcher.keyboard != KeyboardMode::Standard {
             if let Some(handled) = self.on_vim_key(vk, ctrl, t_key) {
                 return handled;
@@ -2949,6 +3108,13 @@ impl App {
         // Ctrl+P opens a list's filter drop-down, even when the filter left nothing to choose.
         if ctrl && vk == 0x50 && self.filter_label().is_some() && unsafe { GetKeyState(0x10) } >= 0 {
             self.toggle_filter_menu();
+            return true;
+        }
+        // Ctrl+Up and Ctrl+Down in a grid jump a whole section, such as from Smileys to Animals.
+        if ctrl && self.view.grid.is_some() && (vk == VK_UP.0 || vk == VK_DOWN.0) && unsafe { GetKeyState(0x10) } >= 0 {
+            self.view.move_section(if vk == VK_UP.0 { -1 } else { 1 });
+            self.after_selection_change();
+            self.redraw();
             return true;
         }
         // The keys an action menu shows next to its entries work without opening it.
@@ -4090,6 +4256,16 @@ impl App {
             self.on_form_click(x, y);
             return;
         }
+        if self.view.scope == Scope::TypingTest && self.menu.is_none() && !right {
+            let chip = self.typing_chips.iter().find(|(b, _)| x >= b.left && x < b.right && y >= b.top && y < b.bottom).map(|(_, op)| op.clone());
+            if let Some(op) = chip {
+                self.execute(op);
+            }
+            unsafe {
+                let _ = SetFocus(Some(self.edit));
+            }
+            return;
+        }
         // A click on one of a quicklink's boxes types in that one.
         if matches!(self.view.scope, Scope::LinkArgs { .. }) && self.menu.is_none() {
             if let Some(index) = self.link_arg_boxes.iter().position(|b| x >= b.left && x < b.right && y >= b.top && y < b.bottom) {
@@ -4220,7 +4396,43 @@ impl App {
         }
     }
 
+    /// Keeps track of the × signs typed for an x or *, and turns them all back in one step,
+    /// one undo, once the text can't be a sum, as when a letter makes "4×4" into "4×4 truck".
+    /// The swap happens before the text is searched, so the search only runs once, on the result.
+    fn untype_times(&mut self) {
+        let key = PENDING_TIMES_KEY.load(Ordering::Relaxed) as u16;
+        let typed = usize::try_from(PENDING_TIMES.swap(-1, Ordering::Relaxed)).ok().map(|at| (at, key));
+        if self.view.scope != Scope::Root {
+            self.typed_times = TypedTimes::default();
+            return;
+        }
+        let mut units = wide(&self.read_query());
+        units.pop(); // the terminating nul
+        self.typed_times.follow(&units, typed);
+        let (Some(&(first, _)), Some(&(last, _))) = (self.typed_times.at.first(), self.typed_times.at.last()) else { return };
+        if !orbit_core::calc::times_no_longer_fits(&String::from_utf16_lossy(&units)) {
+            return;
+        }
+        let mut span = units[first..=last].to_vec();
+        for &(at, key) in &self.typed_times.at {
+            span[at - first] = key;
+        }
+        span.push(0);
+        unsafe {
+            let (mut start, mut end) = (0u32, 0u32);
+            SendMessageW(self.edit, EM_GETSEL, Some(WPARAM(&mut start as *mut u32 as usize)), Some(LPARAM(&mut end as *mut u32 as isize)));
+            SendMessageW(self.edit, EM_SETSEL, Some(WPARAM(first)), Some(LPARAM(last as isize + 1)));
+            SendMessageW(self.edit, EM_REPLACESEL, Some(WPARAM(1)), Some(LPARAM(span.as_ptr() as isize)));
+            SendMessageW(self.edit, EM_SETSEL, Some(WPARAM(start as usize)), Some(LPARAM(end as isize)));
+        }
+        self.typed_times = TypedTimes::default();
+        let mut units = wide(&self.read_query());
+        units.pop();
+        self.typed_times.text = units;
+    }
+
     fn on_query_changed(&mut self) {
+        self.untype_times();
         let query = self.read_query();
         if self.view.last_query.as_deref() == Some(query.as_str()) {
             return; // our own SetWindowText, already handled
@@ -4279,6 +4491,13 @@ impl App {
                 };
                 let finished = test.phase == orbit_core::speedtest::Phase::Done;
                 row.source = RowSource::SpeedTest { summary: finished.then(|| test.summary()), url: test.url.clone() };
+                self.view.rows = vec![row];
+            }
+            Scope::TypingTest => {
+                // Nothing is listed: the test is drawn instead. This row is what Enter does.
+                let mut row = Row::op("Typing Test", "", GLYPH_TYPING, Op::TypingRestart);
+                let summary = self.typing.result().map(|stats| stats.summary(&self.typing.options));
+                row.source = RowSource::TypingTest { summary, options: self.typing.options };
                 self.view.rows = vec![row];
             }
             Scope::Timer => self.view.rows = vec![self.timer_row(&query)],
@@ -4343,11 +4562,22 @@ impl App {
                 accessory: None,
             }
         };
+        // The filter drop-down's choice, such as only Arrows, applies to everything below.
+        let filter = self.emoji_filter;
+        let shown = |at: u16| {
+            let entry = &table[at as usize];
+            match filter {
+                EmojiFilter::All => true,
+                EmojiFilter::Emoji => !entry.symbol,
+                EmojiFilter::Symbols => entry.symbol,
+                EmojiFilter::Group(group) => entry.group as usize == group as usize,
+            }
+        };
         let place_of = |glyph: &str| table.iter().position(|entry| entry.glyph == glyph).map(|at| at as u16);
         let mut rows = Vec::with_capacity(table.len() + 16);
         if query.trim().is_empty() {
             let mut section = |title: &str, glyphs: &[String]| {
-                let places: Vec<u16> = glyphs.iter().filter_map(|glyph| place_of(glyph)).collect();
+                let places: Vec<u16> = glyphs.iter().filter_map(|glyph| place_of(glyph)).filter(|&at| shown(at)).collect();
                 if !places.is_empty() {
                     rows.push(Row::header(title));
                     rows.extend(places.into_iter().map(tile));
@@ -4357,7 +4587,7 @@ impl App {
             section("Recently Used", &self.settings.emoji.recent);
             let groups = emoji::groups();
             let mut group = None;
-            for (at, entry) in table.iter().enumerate() {
+            for (at, entry) in table.iter().enumerate().filter(|&(at, _)| shown(at as u16)) {
                 if group != Some(entry.group) {
                     group = Some(entry.group);
                     rows.push(Row::header(groups.get(entry.group as usize).copied().unwrap_or("")));
@@ -4365,7 +4595,7 @@ impl App {
                 rows.push(tile(at as u16));
             }
         } else {
-            rows.extend(emoji::search(&table, query).into_iter().map(tile));
+            rows.extend(emoji::search(&table, query).into_iter().filter(|&at| shown(at)).map(tile));
         }
         self.emoji_table = table;
         let room = ui::ROW_HEIGHT * self.full_rows() as i32;
@@ -4917,6 +5147,87 @@ impl App {
         row.source = RowSource::Answer { other, other_formatted: !formatted_first, reverse, card: Box::new(card) };
     }
 
+    // --- Typing test ------------------------------------------------------------------------
+
+    /// A new typing test, set up as Settings has it, with new words.
+    fn new_typing_test(&mut self) {
+        self.typing = orbit_core::typing::Test::new(self.settings.typing.options(), qpc() as u64);
+        self.typing_best = false;
+        self.motion.caret.reset();
+        if self.view.scope == Scope::TypingTest && self.menu.is_none() {
+            self.refresh_results();
+        }
+        self.tick_clock();
+        self.restart_caret();
+        self.redraw();
+    }
+
+    /// The test is set up another way: keep it, and start again with it.
+    fn typing_setup_changed(&mut self) {
+        self.save_settings();
+        self.leave_menu();
+        self.new_typing_test();
+    }
+
+    /// The typing test is on screen, on its own or behind its menu.
+    fn typing_shown(&self) -> bool {
+        self.menu.as_ref().map_or(&self.view.scope, |menu| &menu.behind.scope) == &Scope::TypingTest
+    }
+
+    /// Keys go to the test, rather than the box or a menu.
+    pub fn typing_takes_keys(&self) -> bool {
+        self.view.scope == Scope::TypingTest && self.menu.is_none() && self.recording.is_none()
+    }
+
+    /// A character typed. Says whether the test took it: in the test, all of them are, so none
+    /// reach the box.
+    pub fn on_typing_char(&mut self, c: char) -> bool {
+        if !self.typing_takes_keys() {
+            return false;
+        }
+        let was_running = self.typing.running();
+        if self.typing.type_char(c, typing_now()) {
+            if self.typing.finished() {
+                self.finish_typing();
+            } else if !was_running {
+                // The first key starts the clock.
+                self.tick_clock();
+            }
+            self.redraw();
+        }
+        true
+    }
+
+    /// The test's own keys: Tab and Enter for a new test, as Monkeytype has them, and Backspace.
+    /// Keys that would move about in the box do nothing.
+    fn on_typing_key(&mut self, vk: u16, ctrl: bool) -> Option<bool> {
+        if !self.typing_takes_keys() {
+            return None;
+        }
+        match vk {
+            v if (v == VK_TAB.0 || v == VK_RETURN.0) && !ctrl => self.new_typing_test(),
+            v if v == VK_BACK.0 => {
+                if self.typing.backspace(ctrl, typing_now()) {
+                    self.redraw();
+                }
+            }
+            v if [VK_LEFT.0, VK_RIGHT.0, VK_UP.0, VK_DOWN.0, VK_HOME.0, VK_END.0, VK_DELETE.0, VK_PRIOR.0, VK_NEXT.0].contains(&v) => {}
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    /// A test is over: keep it if it's the best yet, and offer to copy it.
+    fn finish_typing(&mut self) {
+        self.typing_best = self.settings.typing.record(&self.typing);
+        if self.typing_best {
+            self.save_settings();
+        }
+        if self.view.scope == Scope::TypingTest && self.menu.is_none() {
+            self.refresh_results();
+        }
+    }
+
     /// The speed test is on screen, on its own or behind its menu.
     fn speedtest_shown(&self) -> bool {
         self.menu.as_ref().map_or(&self.view.scope, |menu| &menu.behind.scope) == &Scope::SpeedTest
@@ -4930,7 +5241,7 @@ impl App {
             }),
             RowSource::Note { id, .. } => Some(Action::OpenNote { id: *id }),
             RowSource::Snippet { id } => Some(Action::InsertSnippet { id: *id }),
-            RowSource::Plain | RowSource::Header | RowSource::Clip { .. } | RowSource::Secret { .. } | RowSource::Emoji { .. } | RowSource::Answer { .. } | RowSource::SpeedTest { .. } | RowSource::Clock { .. } | RowSource::Colour(_) | RowSource::File { .. } | RowSource::Extension { .. } => None,
+            RowSource::Plain | RowSource::Header | RowSource::Clip { .. } | RowSource::Secret { .. } | RowSource::Emoji { .. } | RowSource::Answer { .. } | RowSource::SpeedTest { .. } | RowSource::TypingTest { .. } | RowSource::Clock { .. } | RowSource::Colour(_) | RowSource::File { .. } | RowSource::Extension { .. } => None,
         }
     }
 
@@ -5100,6 +5411,10 @@ impl App {
             self.view.filter_static(&behind.query);
         }
         self.refresh_if_data_scope();
+        // A test may have ended while the menu was up.
+        if self.view.scope == Scope::TypingTest {
+            self.refresh_results();
+        }
         self.after_selection_change();
         if let (Scope::Form { .. }, Some(at)) = (&self.view.scope, self.form.as_ref().map(|form| form.at)) {
             self.load_form_field(at);
@@ -5218,6 +5533,26 @@ impl App {
                 self.speedtest.stop();
                 self.refresh_results();
                 self.redraw();
+            }
+            Op::TypingRestart => {
+                self.leave_menu();
+                self.new_typing_test();
+            }
+            Op::TypingMode(mode) => {
+                self.settings.typing.mode = mode;
+                self.typing_setup_changed();
+            }
+            Op::TypingPunctuation => {
+                self.settings.typing.punctuation = !self.settings.typing.punctuation;
+                self.typing_setup_changed();
+            }
+            Op::TypingNumbers => {
+                self.settings.typing.numbers = !self.settings.typing.numbers;
+                self.typing_setup_changed();
+            }
+            Op::TypingWords(list) => {
+                self.settings.typing.words = list;
+                self.typing_setup_changed();
             }
             Op::TimerStart(seconds) => {
                 self.leave_menu();
@@ -5425,6 +5760,14 @@ impl App {
                     self.report("Couldn't reach the clipboard");
                 }
             }
+            Op::EmojiCopyCode(at) => {
+                let Some(code) = self.emoji_table.get(at as usize).map(|entry| orbit_core::emoji::code_points(entry.glyph)) else { return };
+                self.hide(true);
+                if !clipboard::write_text(&code) {
+                    self.report("Couldn't reach the clipboard");
+                }
+            }
+            Op::EmojiFilter(filter) => self.choose_emoji_filter(filter),
             Op::EmojiPin(at, pinned) => {
                 let Some(glyph) = self.emoji_table.get(at as usize).map(|entry| entry.glyph) else { return };
                 self.settings.emoji.pinned.retain(|other| other != glyph);
@@ -6042,6 +6385,8 @@ impl App {
         let wait = match scope {
             Scope::Timer => self.countdown.as_ref().filter(|timer| timer.running()).map(|timer| timer.remaining().subsec_millis()),
             Scope::Stopwatch => self.stopwatch.running().then(|| 1000 - self.stopwatch.elapsed().subsec_millis()),
+            // Each second, for the counter, the chart and the end of a timed test.
+            Scope::TypingTest => self.typing.running().then(|| 1000 - ((self.typing.elapsed(typing_now()) * 1000.0) as u64 % 1000) as u32),
             _ => None,
         };
         if let Some(wait) = wait {
@@ -6117,6 +6462,10 @@ impl App {
                 }
                 self.refresh_results();
                 self.redraw();
+            }
+            Builtin::TypingTest => {
+                self.enter_scope(Scope::TypingTest, t0);
+                self.new_typing_test();
             }
             Builtin::NewSnippet => {
                 self.open_form(InlineForm::snippet(None));
@@ -7288,5 +7637,37 @@ mod frost_tests {
         unsafe {
             let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(plate);
         }
+    }
+}
+
+/// The × signs Orbit typed for an x or * in the search box, kept in step as the text changes, so
+/// only those go back to what was typed, and a × that was pasted or picked from the grid stays.
+#[derive(Default)]
+struct TypedTimes {
+    /// The text as last seen, in UTF-16 units.
+    text: Vec<u16>,
+    /// Where each typed × is in `text`, and the x or * it was typed as.
+    at: Vec<(usize, u16)>,
+}
+
+impl TypedTimes {
+    /// Moves the positions along for the change from the last text to `text`, adds a × that was
+    /// just typed at `typed`, and drops any that were deleted or typed over.
+    fn follow(&mut self, text: &[u16], typed: Option<(usize, u16)>) {
+        let old = &self.text;
+        let prefix = old.iter().zip(text).take_while(|(a, b)| a == b).count();
+        let room = old.len().min(text.len()) - prefix;
+        let suffix = old.iter().rev().zip(text.iter().rev()).take(room).take_while(|(a, b)| a == b).count();
+        let (old_end, new_end) = (old.len() - suffix, text.len() - suffix);
+        self.at = self
+            .at
+            .iter()
+            .filter_map(|&(at, key)| if at < prefix { Some((at, key)) } else if at >= old_end { Some((at - old_end + new_end, key)) } else { None })
+            .chain(typed)
+            .filter(|&(at, _)| text.get(at) == Some(&0xD7))
+            .collect();
+        self.at.sort_unstable();
+        self.at.dedup_by_key(|&mut (at, _)| at);
+        self.text = text.to_vec();
     }
 }

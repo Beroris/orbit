@@ -45,6 +45,8 @@ pub struct Settings {
     pub weather_place: Option<crate::weather::Place>,
     /// Ookla's terms for Speedtest CLI were accepted in the launcher, so a speed test can run.
     pub speedtest_accepted: bool,
+    /// How the typing test is set up, and the best result for each kind of test.
+    pub typing: crate::typing::TypingSettings,
     pub launch_at_login: bool,
     /// Look for a new version on GitHub, once a day.
     pub check_updates: bool,
@@ -62,6 +64,8 @@ pub struct ExtensionSettings {
     pub everything: EverythingSettings,
     /// Speed Test, which comes with Orbit. On unless turned off.
     pub speed_test: bool,
+    /// Typing Test, which comes with Orbit. On unless turned off.
+    pub typing_test: bool,
     /// GitHub, through GitHub's `gh` command-line tool. Off until turned on.
     pub github: bool,
     /// Extensions from folders that the user turned on, by id.
@@ -76,6 +80,7 @@ impl Default for ExtensionSettings {
         ExtensionSettings {
             everything: EverythingSettings::default(),
             speed_test: true,
+            typing_test: true,
             github: false,
             enabled: Vec::new(),
             keywords: BTreeMap::new(),
@@ -382,6 +387,7 @@ impl Default for Settings {
             fetch_weather: true,
             weather_place: None,
             speedtest_accepted: false,
+            typing: Default::default(),
             launch_at_login: false,
             check_updates: true,
             onboarded: false,

@@ -1,7 +1,7 @@
 //! The extensions that come with Orbit. Each can be turned off, and then it's gone from the
 //! launcher: its commands aren't listed or searched, and nothing of it runs.
 //!
-//! Some are features with views of their own (Files, Weather, Speed Test), whose commands are
+//! Some are features with views of their own (Files, Weather, Speed Test, Typing Test), whose commands are
 //! [`Builtin`]s. Others answer the way an extension from a folder does, with a list of items
 //! (GitHub), but from Orbit's own code instead of a program. Folder extensions can't use these
 //! ids.
@@ -17,6 +17,7 @@ pub enum BuiltinExt {
     EnteAuth,
     Weather,
     SpeedTest,
+    TypingTest,
     GitHub,
 }
 
@@ -82,12 +83,13 @@ const GITHUB: &[ListCommand] = &[
 
 impl BuiltinExt {
     /// In the order Settings lists them.
-    pub const ALL: [BuiltinExt; 6] = [
+    pub const ALL: [BuiltinExt; 7] = [
         BuiltinExt::Files,
         BuiltinExt::OnePassword,
         BuiltinExt::EnteAuth,
         BuiltinExt::Weather,
         BuiltinExt::SpeedTest,
+        BuiltinExt::TypingTest,
         BuiltinExt::GitHub,
     ];
 
@@ -98,6 +100,7 @@ impl BuiltinExt {
             BuiltinExt::EnteAuth => "ente-auth",
             BuiltinExt::Weather => "weather",
             BuiltinExt::SpeedTest => "speed-test",
+            BuiltinExt::TypingTest => "typing-test",
             BuiltinExt::GitHub => "github",
         }
     }
@@ -113,6 +116,7 @@ impl BuiltinExt {
             BuiltinExt::EnteAuth => "Ente Auth",
             BuiltinExt::Weather => "Weather",
             BuiltinExt::SpeedTest => "Speed Test",
+            BuiltinExt::TypingTest => "Typing Test",
             BuiltinExt::GitHub => "GitHub",
         }
     }
@@ -125,6 +129,7 @@ impl BuiltinExt {
             BuiltinExt::EnteAuth => "Copy two-factor codes",
             BuiltinExt::Weather => "The forecast for any place",
             BuiltinExt::SpeedTest => "Your internet speed, by Ookla",
+            BuiltinExt::TypingTest => "How fast you type, with Monkeytype\u{2019}s words",
             BuiltinExt::GitHub => "Your issues, pull requests and stars",
         }
     }
@@ -136,6 +141,7 @@ impl BuiltinExt {
             BuiltinExt::EnteAuth => settings.integrations.ente_auth,
             BuiltinExt::Weather => settings.fetch_weather,
             BuiltinExt::SpeedTest => settings.extensions.speed_test,
+            BuiltinExt::TypingTest => settings.extensions.typing_test,
             BuiltinExt::GitHub => settings.extensions.github,
         }
     }
@@ -152,6 +158,7 @@ impl BuiltinExt {
                 }
             }
             BuiltinExt::SpeedTest => settings.extensions.speed_test = on,
+            BuiltinExt::TypingTest => settings.extensions.typing_test = on,
             BuiltinExt::GitHub => settings.extensions.github = on,
         }
     }
@@ -162,6 +169,7 @@ impl BuiltinExt {
             BuiltinExt::Files => &[Builtin::SearchFiles],
             BuiltinExt::Weather => &[Builtin::Weather],
             BuiltinExt::SpeedTest => &[Builtin::SpeedTest],
+            BuiltinExt::TypingTest => &[Builtin::TypingTest],
             _ => &[],
         }
     }

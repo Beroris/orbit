@@ -4971,7 +4971,7 @@ const PAGE_WORDS: [&str; 10] = [
     "copy paste history",
     "text expansion",
     "quicklinks bookmarks websites programs",
-    "plugins integrations files everything 1password ente passwords two-factor 2fa otp weather forecast speed test github pull requests issues",
+    "plugins integrations files everything 1password ente passwords two-factor 2fa otp weather forecast speed test typing test monkeytype wpm github pull requests issues",
     "backup export import folder reset",
 ];
 
@@ -4995,6 +4995,7 @@ const FIND_WORDS: &[(&str, &str)] = &[
     ("1Password", "passwords vault"),
     ("Ente Auth", "two-factor 2fa otp codes authenticator"),
     ("Speed Test", "internet bandwidth ookla"),
+    ("Typing Test", "monkeytype wpm words per minute keyboard practice"),
     ("GitHub", "issues pull requests notifications stars gh"),
     ("Everything", "files file search find voidtools"),
     ("Export", "backup"),
@@ -6806,6 +6807,11 @@ pub fn open(context: EditorContext, settings: Settings, dir: std::path::PathBuf,
         b.begin_card();
         card_title(&mut b, BuiltinExt::SpeedTest);
         b.note("The first test asks you to accept Ookla's terms, then installs it.");
+        b.end_card();
+
+        b.begin_card();
+        card_title(&mut b, BuiltinExt::TypingTest);
+        b.note("Monkeytype's English word lists and quotes come built into Orbit, so a test sends nothing anywhere. Your best result for each kind of test is kept in settings.json.");
         b.end_card();
 
         b.begin_card();

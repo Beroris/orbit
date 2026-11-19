@@ -18,6 +18,7 @@ const VARIABLE_UI: PCWSTR = w!("Segoe UI Variable");
 const VARIABLE_UI_TEXT: PCWSTR = w!("Segoe UI Variable Text");
 const OLDER_UI: PCWSTR = w!("Segoe UI");
 const EMOJI_FONT: PCWSTR = w!("Segoe UI Emoji");
+const SYMBOL_FONT: PCWSTR = w!("Segoe UI Symbol");
 const LOCALE: PCWSTR = w!("en-us");
 
 /// Where a line of text sits in its box, across. It's always centred down.
@@ -221,6 +222,9 @@ struct Target {
     /// Keep how much of each pixel the letters cover, in `clip`, rather than drawing them: the
     /// first plane for the ink, the second for the marked ink.
     capture: Option<(Vec<u8>, Vec<u8>)>,
+    /// Draw exactly where asked, without snapping lines or stems to whole pixels, for a symbol
+    /// drawn several times nudged a fraction of a pixel each way.
+    exact: bool,
 }
 
 /// A line of text as it was last drawn: how much of each pixel its letters cover, relative to the
@@ -348,6 +352,7 @@ fn capture_line(text: &str, face: &Face, box_width: i32, box_height: i32, align:
         coverage: Vec::new(),
         in_colour: false,
         capture: Some((vec![0; area], if spans.is_empty() { Vec::new() } else { vec![0; area] })),
+        exact: false,
     };
     let context = &mut target as *mut Target as *const core::ffi::c_void;
     // The box's own corner is a whole pixel, so letters land the same wherever it's drawn.
@@ -584,6 +589,7 @@ fn render(engine: &Engine, buffer: &Backbuffer, line: &IDWriteTextLayout, ink: R
         coverage: Vec::new(),
         in_colour: false,
         capture: None,
+        exact: false,
     };
     let context = &mut target as *mut Target as *const core::ffi::c_void;
     let _ = unsafe { line.Draw(Some(context), &engine.renderer, x, y) };
@@ -592,10 +598,388 @@ fn render(engine: &Engine, buffer: &Backbuffer, line: &IDWriteTextLayout, ink: R
 /// One emoji in its own colours, as premultiplied BGRA in a `size` by `size` square. Kept apart from
 /// the frame so that each one is only worked out once, however often the list is drawn.
 pub fn emoji_pixels(glyph: &str, size: i32) -> Option<Vec<u8>> {
+    emoji_pixels_in(glyph, size, Rgb(128, 128, 136))
+}
+
+/// The same, with any part that has no colour of its own in `ink`.
+pub fn emoji_pixels_in(glyph: &str, size: i32, ink: Rgb) -> Option<Vec<u8>> {
+    glyph_pixels(glyph, size, EMOJI_FONT, 0.76, ink)
+}
+
+/// A plain symbol such as ⌘ or ×, in `ink`, drawn as type rather than as a colour emoji, the same
+/// way as [emoji_pixels].
+///
+/// Symbols from different fonts sit at different heights, sizes and weights, so each is measured
+/// and brought into line: its font's capitals are matched to Geist's, its strokes to the weight of
+/// Geist's, and it's centred in the square by its ink, on whole pixels so its edges stay sharp.
+/// Marks that belong high or low, such as `'`, `^`, `²` and `_`, keep their height against the
+/// capitals, so they still read as what they are.
+pub fn symbol_pixels(glyph: &str, size: i32, ink: Rgb) -> Option<Vec<u8>> {
+    let engine = engine()?;
+    let fonts = [SymbolFont::Geist, SymbolFont::Text, SymbolFont::Symbol];
+    // Keys and arrows come from one font for the whole set, so a row of them is one design.
+    let set = [KEY_SYMBOLS, ARROW_SYMBOLS].into_iter().find(|set| glyph.chars().all(|c| set.contains(c)));
+    if let Some(set) = set
+        && let Some(font) = fonts.into_iter().find(|font| font.has(engine, set))
+        && let Some(pixels) = symbol_in(engine, font, glyph, true, size, ink)
+    {
+        return Some(pixels);
+    }
+    // Anything else, or a key or arrow when no one font has the whole set, from the first font
+    // that has it.
+    fonts.into_iter().filter(|font| font.has(engine, glyph)).find_map(|font| symbol_in(engine, font, glyph, false, size, ink))
+}
+
+/// The keyboard's symbols, drawn from one font.
+const KEY_SYMBOLS: &str = "⌘⌥⇧⌃⇪⎋⏎↩⌫⌦⇥⇤␣⏏⏻⇞⇟↖↘⌨⊞";
+/// The arrows, drawn from one font.
+const ARROW_SYMBOLS: &str = "→←↑↓↔↕⇒⇐⇔↗↙↻↺⟶↦⤴⤵➜";
+
+/// `in_set` is a key or an arrow, drawn as one of a set.
+fn symbol_in(engine: &Engine, font: SymbolFont, glyph: &str, in_set: bool, size: i32, ink: Rgb) -> Option<Vec<u8>> {
+    let square = size as f32;
+    let start = square * SYMBOL_EM;
+    // Each font's capitals are brought to Geist's height, so symbols from different fonts match.
+    let geist_caps = Ink::caps(engine, SymbolFont::Geist, start, size)?;
+    let font_caps = Ink::caps(engine, font, start, size)?;
+    let mut px = start * geist_caps.height() / font_caps.height();
+    // Strokes as thick as Geist's capitals, as near as the font allows. A set is all one weight,
+    // so it reads as one design: Segoe UI Symbol made bolder, which comes nearest Geist's.
+    let mut weight = font.weight();
+    let mut ink_box = Ink::of(engine, font, glyph, px, weight, size)?;
+    let heavier = if in_set && font == SymbolFont::Symbol { Some(SET_WEIGHT) } else { font.weight_for(weight, ink_box.stroke, geist_caps.stroke) };
+    if let Some(heavier) = heavier {
+        weight = heavier;
+        ink_box = Ink::of(engine, font, glyph, px, weight, size)?;
+    }
+    // A key or arrow that's heavy by design, such as ↩ or ➜, stays at the regular weight, so it
+    // doesn't stand out from the rest of its set.
+    if in_set && font == SymbolFont::Symbol && ink_box.stroke > geist_caps.stroke * SET_STROKE * TOO_HEAVY {
+        weight = font.weight();
+        ink_box = Ink::of(engine, font, glyph, px, weight, size)?;
+    }
+    // A key or arrow drawn in hairlines, such as ⇧ ⇪ ⏎, even made bolder, is thickened by up to
+    // three quarters of a pixel each side so it sits with the rest of its set.
+    let target = geist_caps.stroke * SET_STROKE;
+    let grow_for = |ink: &Ink| if in_set { ((target - ink.stroke) / 2.0).clamp(0.0, MOST_GROW) } else { 0.0 };
+    let mut grow = grow_for(&ink_box);
+    // Wide symbols, such as ⌫ and ⟶, and tall ones, such as brackets, each have their own limit,
+    // with room kept for that thickening, and the pixel of soft edge it adds. A key or arrow made
+    // smaller to fit has thinner strokes, so it keeps room for the most, and is thickened back.
+    let widest = if LONG_SYMBOLS.contains(glyph) { LONG_WIDEST } else { SYMBOL_WIDEST };
+    let limit = |room: f32| ((square * widest - room) / ink_box.width()).min((square * SYMBOL_TALLEST - room) / ink_box.height());
+    let room = if grow >= MIN_GROW || (in_set && limit(0.0) < 1.0) { 2.0 * MOST_GROW + 1.0 } else { 0.0 };
+    let fit = limit(room);
+    if fit < 1.0 {
+        px *= fit;
+        ink_box = Ink::of(engine, font, glyph, px, weight, size)?;
+        grow = grow_for(&ink_box);
+    }
+    let caps = Ink::caps(engine, font, px, size)?;
+    let centre = square / 2.0;
+    // A mark whose middle is high or low on the capitals, such as ' ” ^ ² or _ , ., or one that's
+    // short, keeps its height against them, with them centred. Anything else, and every key and
+    // arrow, which are pictures rather than marks, is centred by its ink.
+    let high = ink_box.mid_y() <= caps.top + caps.height() * 0.3;
+    let low = ink_box.mid_y() >= caps.bottom - caps.height() * 0.2;
+    let keep = !in_set && (ink_box.height() < caps.height() * SHORT_MARK || high || low);
+    let x = (centre - ink_box.mid_x()).round();
+    let y = (centre - if keep { caps.mid_y() } else { ink_box.mid_y() }).round();
+    let line = Ink::layout(engine, font, glyph, px, weight)?;
+    let mut plane = Ink::draw(engine, font, &line, size, size, x, y)?;
+    // The thickening: drawn again nudged that far each way, and the copies laid together, so its
+    // edges stay sharp.
+    if grow >= MIN_GROW {
+        let slant = grow * std::f32::consts::FRAC_1_SQRT_2;
+        for (dx, dy) in [(grow, 0.0), (-grow, 0.0), (0.0, grow), (0.0, -grow), (slant, slant), (-slant, slant), (slant, -slant), (-slant, -slant)] {
+            let nudged = Ink::draw(engine, font, &line, size, size, x + dx, y + dy)?;
+            for (pixel, more) in plane.iter_mut().zip(nudged) {
+                *pixel = (*pixel).max(more);
+            }
+        }
+    }
+    let curve = weights(ink);
+    Some(
+        plane
+            .iter()
+            .flat_map(|&amount| {
+                let alpha = curve[amount as usize] as u32;
+                let channel = |value: u8| ((value as u32 * alpha + 127) / 255) as u8;
+                [channel(ink.2), channel(ink.1), channel(ink.0), alpha as u8]
+            })
+            .collect(),
+    )
+}
+
+/// How thick a glyph's strokes are, in pixels: for each well-inked pixel, the ink across the
+/// narrowest run through it, along a row, a column or either diagonal, and of those the middle
+/// one. A shaft is measured as a shaft, rather than thickened by its arrowhead, as an average
+/// over the whole shape would be.
+fn stroke_of(plane: &[u8], room: i32, (left, top, right, bottom): (i32, i32, i32, i32)) -> f32 {
+    let at = |x: i32, y: i32| if x < 0 || y < 0 || x >= room || y >= room { 0.0 } else { plane[(y * room + x) as usize] as f32 / 255.0 };
+    // The ink along a run from (x, y) in one direction and back, until it runs out.
+    let run = |x: i32, y: i32, dx: i32, dy: i32| {
+        let mut total = at(x, y);
+        for sign in [1, -1] {
+            let (mut px, mut py) = (x + dx * sign, y + dy * sign);
+            while at(px, py) > 0.0 {
+                total += at(px, py);
+                px += dx * sign;
+                py += dy * sign;
+            }
+        }
+        total
+    };
+    let mut local: Vec<f32> = Vec::new();
+    for y in top..=bottom {
+        for x in left..=right {
+            if at(x, y) >= 0.5 {
+                let diagonal = run(x, y, 1, 1).min(run(x, y, 1, -1)) * std::f32::consts::SQRT_2;
+                local.push(run(x, y, 1, 0).min(run(x, y, 0, 1)).min(diagonal));
+            }
+        }
+    }
+    if local.is_empty() {
+        return 0.0;
+    }
+    let middle = local.len() / 2;
+    *local.select_nth_unstable_by(middle, f32::total_cmp).1
+}
+
+/// A symbol's em, against the square it's drawn in. Geist's capitals come to about 55% of it.
+const SYMBOL_EM: f32 = 0.78;
+/// The most of the square a symbol's ink may take across, and up and down, before it's smaller.
+const SYMBOL_WIDEST: f32 = 0.66;
+/// A long arrow may be wider, so it reads as longer than an ordinary one beside it.
+const LONG_WIDEST: f32 = 0.75;
+const LONG_SYMBOLS: &str = "⟶";
+const SYMBOL_TALLEST: f32 = 0.7;
+/// A mark shorter than this, against a capital, is a short mark.
+const SHORT_MARK: f32 = 0.4;
+/// The weight of symbols in Geist and Segoe UI: a little heavier than text, as a symbol stands
+/// alone.
+const SYMBOL_WEIGHT: f32 = 500.0;
+/// Segoe UI Symbol made bolder by Windows, its one weight above regular.
+const SET_WEIGHT: f32 = 600.0;
+/// A key or arrow's strokes, against Geist's capitals: a little lighter, as they're pictures with
+/// more lines in them than a letter.
+const SET_STROKE: f32 = 0.8;
+/// The most a key or arrow is thickened by on each side, in pixels.
+const MOST_GROW: f32 = 0.75;
+/// A key or arrow heavier than its set's strokes by this much, made bolder, is left at regular.
+const TOO_HEAVY: f32 = 1.25;
+/// Less than this isn't worth drawing nine times.
+const MIN_GROW: f32 = 0.1;
+
+/// Where a symbol comes from: Orbit's own font, then Windows' text font, then Windows' symbol
+/// font for the rest, such as ⌘ and ⌥. One font for each symbol, rather than whichever Windows
+/// falls back to, some thin and some heavy.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum SymbolFont {
+    Geist,
+    Text,
+    Symbol,
+}
+
+impl SymbolFont {
+    /// Whether the face this draws with has every character of `text`.
+    fn has(self, engine: &Engine, text: &str) -> bool {
+        match self {
+            SymbolFont::Geist => engine.geist.as_ref().is_some_and(|(_, fonts)| fonts.cast().is_ok_and(|fonts| family_has(&fonts, GEIST, text))),
+            SymbolFont::Text => match &engine.variable {
+                Some((_, fonts)) => fonts.cast().is_ok_and(|fonts| family_has(&fonts, VARIABLE_UI, text)),
+                None => system_fonts(engine).is_some_and(|fonts| family_has(&fonts, OLDER_UI, text)),
+            },
+            SymbolFont::Symbol => system_fonts(engine).is_some_and(|fonts| family_has(&fonts, SYMBOL_FONT, text)),
+        }
+    }
+
+    fn weight(self) -> f32 {
+        match self {
+            SymbolFont::Symbol => 400.0,
+            _ => SYMBOL_WEIGHT,
+        }
+    }
+
+    /// A weight that brings strokes `stroke` thick nearer to `target`, if it's worth drawing again.
+    /// Geist and Segoe UI Variable have any weight. Segoe UI Symbol has one, which Windows can
+    /// make bolder, so that's used only for a symbol well short of the target.
+    fn weight_for(self, weight: f32, stroke: f32, target: f32) -> Option<f32> {
+        if stroke <= 0.0 {
+            return None;
+        }
+        let ratio = target / stroke;
+        match self {
+            // Geist's symbols are drawn to match its letters already.
+            SymbolFont::Geist => None,
+            SymbolFont::Text => (!(0.88..=1.14).contains(&ratio)).then(|| (weight * ratio).clamp(400.0, 620.0)).filter(|&new| (new - weight).abs() >= 20.0),
+            SymbolFont::Symbol => (ratio > 1.3).then_some(SET_WEIGHT),
+        }
+    }
+
+    fn format(self, engine: &Engine, px: f32, weight: f32) -> Option<IDWriteTextFormat> {
+        let system = || system_fonts(engine);
+        let fixed = DWRITE_FONT_WEIGHT(if weight >= 550.0 { 600 } else if weight >= 450.0 { 500 } else { 400 });
+        let format: IDWriteTextFormat = match (self, &engine.geist, &engine.variable) {
+            (SymbolFont::Geist, Some((factory, fonts)), _) => {
+                let axes = [DWRITE_FONT_AXIS_VALUE { axisTag: DWRITE_FONT_AXIS_TAG_WEIGHT, value: weight }];
+                let format: IDWriteTextFormat3 = unsafe { factory.CreateTextFormat(GEIST, fonts, &axes, px, LOCALE) }.ok()?;
+                format.cast().ok()?
+            }
+            (SymbolFont::Text, _, Some((factory, fonts))) => {
+                let axes = [
+                    DWRITE_FONT_AXIS_VALUE { axisTag: DWRITE_FONT_AXIS_TAG_WEIGHT, value: weight },
+                    DWRITE_FONT_AXIS_VALUE { axisTag: DWRITE_FONT_AXIS_TAG_OPTICAL_SIZE, value: 24.0 },
+                ];
+                let format: IDWriteTextFormat3 = unsafe { factory.CreateTextFormat(VARIABLE_UI, fonts, &axes, px, LOCALE) }.ok()?;
+                format.cast().ok()?
+            }
+            (SymbolFont::Geist | SymbolFont::Text, _, _) => unsafe {
+                engine.factory.CreateTextFormat(OLDER_UI, &system()?, fixed, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px, LOCALE)
+            }
+            .ok()?,
+            (SymbolFont::Symbol, _, _) => unsafe {
+                let weight = if weight >= 550.0 { DWRITE_FONT_WEIGHT_SEMI_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL };
+                engine.factory.CreateTextFormat(SYMBOL_FONT, &system()?, weight, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px, LOCALE)
+            }
+            .ok()?,
+        };
+        unsafe { format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP) }.ok()?;
+        Some(format)
+    }
+}
+
+/// Where a glyph's ink falls, in pixels, drawn with its line box at the origin, and how thick its
+/// strokes are.
+#[derive(Clone, Copy)]
+struct Ink {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+    stroke: f32,
+}
+
+impl Ink {
+    fn of(engine: &Engine, font: SymbolFont, glyph: &str, px: f32, weight: f32, size: i32) -> Option<Ink> {
+        // Room on every side, so a glyph that reaches outside its line box is still all measured.
+        let room = size * 3;
+        let plane = Ink::plane(engine, font, glyph, px, weight, room, room, size as f32, size as f32)?;
+        let (mut left, mut top, mut right, mut bottom) = (room, room, -1, -1);
+        let at = |x: i32, y: i32| plane[(y * room + x) as usize] as f32 / 255.0;
+        for y in 0..room {
+            for x in 0..room {
+                let amount = at(x, y);
+                if amount > 40.0 / 255.0 {
+                    left = left.min(x);
+                    right = right.max(x);
+                    top = top.min(y);
+                    bottom = bottom.max(y);
+                }
+            }
+        }
+        if right < 0 {
+            return None;
+        }
+        let at = size as f32;
+        let stroke = stroke_of(&plane, room, (left, top, right, bottom));
+        Some(Ink { left: left as f32 - at, top: top as f32 - at, right: (right + 1) as f32 - at, bottom: (bottom + 1) as f32 - at, stroke })
+    }
+
+    /// A font's capital H at a size, measured once and kept, as every symbol needs it.
+    fn caps(engine: &Engine, font: SymbolFont, px: f32, size: i32) -> Option<Ink> {
+        thread_local! {
+            static KEPT: std::cell::RefCell<std::collections::HashMap<(SymbolFont, u32, i32), Ink>> = Default::default();
+        }
+        let key = (font, px.to_bits(), size);
+        if let Some(ink) = KEPT.with(|kept| kept.borrow().get(&key).copied()) {
+            return Some(ink);
+        }
+        let ink = Ink::of(engine, font, "H", px, font.weight(), size)?;
+        KEPT.with(|kept| {
+            let mut kept = kept.borrow_mut();
+            if kept.len() >= 512 {
+                kept.clear();
+            }
+            kept.insert(key, ink);
+        });
+        Some(ink)
+    }
+
+    fn width(&self) -> f32 {
+        self.right - self.left
+    }
+
+    fn height(&self) -> f32 {
+        self.bottom - self.top
+    }
+
+    fn mid_x(&self) -> f32 {
+        (self.left + self.right) / 2.0
+    }
+
+    fn mid_y(&self) -> f32 {
+        (self.top + self.bottom) / 2.0
+    }
+
+    /// How much of each pixel of a `width` by `height` square the glyph covers, drawn at `x`, `y`.
+    /// In one colour, even where the glyph comes from a colour emoji font.
+    #[allow(clippy::too_many_arguments)]
+    fn plane(engine: &Engine, font: SymbolFont, glyph: &str, px: f32, weight: f32, width: i32, height: i32, x: f32, y: f32) -> Option<Vec<u8>> {
+        let line = Ink::layout(engine, font, glyph, px, weight)?;
+        Ink::draw(engine, font, &line, width, height, x, y)
+    }
+
+    /// The glyph laid out once, to be drawn as many times as needed.
+    fn layout(engine: &Engine, font: SymbolFont, glyph: &str, px: f32, weight: f32) -> Option<IDWriteTextLayout> {
+        let format = font.format(engine, px, weight)?;
+        let units: Vec<u16> = glyph.encode_utf16().collect();
+        unsafe { engine.factory.CreateTextLayout(&units, &format, px * 4.0, px * 2.0) }.ok()
+    }
+
+    /// [Ink::plane] for a glyph already laid out.
+    fn draw(engine: &Engine, font: SymbolFont, line: &IDWriteTextLayout, width: i32, height: i32, x: f32, y: f32) -> Option<Vec<u8>> {
+        let mut unused = 0u32;
+        let ink = Rgb(255, 255, 255);
+        let mut target = Target {
+            factory: engine.factory.clone(),
+            bits: &mut unused,
+            width,
+            clip: RECT { left: 0, top: 0, right: width, bottom: height },
+            ink,
+            marked_ink: ink,
+            weights: weights(ink),
+            coverage: Vec::new(),
+            in_colour: false,
+            capture: Some((vec![0; (width * height) as usize], Vec::new())),
+            // Keys and arrows, from Segoe UI Symbol, are thickened by drawing them nudged.
+            exact: font == SymbolFont::Symbol,
+        };
+        let context = &mut target as *mut Target as *const core::ffi::c_void;
+        unsafe { line.Draw(Some(context), &engine.renderer, x, y) }.ok()?;
+        target.capture.map(|(plain, _)| plain)
+    }
+}
+
+/// Whether a family in `fonts` has every character of `text`.
+fn family_has(fonts: &IDWriteFontCollection, family: PCWSTR, text: &str) -> bool {
+    let (mut index, mut found) = (0u32, BOOL(0));
+    unsafe {
+        if fonts.FindFamilyName(family, &mut index, &mut found).is_err() || !found.as_bool() {
+            return false;
+        }
+        let Ok(font) = fonts.GetFontFamily(index).and_then(|family| family.GetFirstMatchingFont(DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL)) else {
+            return false;
+        };
+        text.chars().filter(|c| !matches!(c, '\u{FE0E}' | '\u{FE0F}')).all(|c| font.HasCharacter(c as u32).is_ok_and(|has| has.as_bool()))
+    }
+}
+
+fn glyph_pixels(glyph: &str, size: i32, font: PCWSTR, scale: f32, ink: Rgb) -> Option<Vec<u8>> {
     let engine = engine()?;
     let system = system_fonts(engine)?;
-    let px = size as f32 * 0.76;
-    let format = unsafe { engine.factory.CreateTextFormat(EMOJI_FONT, &system, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px, LOCALE) }.ok()?;
+    let px = size as f32 * scale;
+    let format = unsafe { engine.factory.CreateTextFormat(font, &system, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px, LOCALE) }.ok()?;
     unsafe {
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP).ok()?;
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER).ok()?;
@@ -604,7 +988,6 @@ pub fn emoji_pixels(glyph: &str, size: i32) -> Option<Vec<u8>> {
     let units: Vec<u16> = glyph.encode_utf16().collect();
     let line = unsafe { engine.factory.CreateTextLayout(&units, &format, size as f32, size as f32) }.ok()?;
     let mut pixels = vec![0u32; (size * size) as usize];
-    let ink = Rgb(128, 128, 136);
     let mut target = Target {
         factory: engine.factory.clone(),
         bits: pixels.as_mut_ptr(),
@@ -616,6 +999,7 @@ pub fn emoji_pixels(glyph: &str, size: i32) -> Option<Vec<u8>> {
         coverage: Vec::new(),
         in_colour: true,
         capture: None,
+        exact: false,
     };
     let context = &mut target as *mut Target as *const core::ffi::c_void;
     unsafe { line.Draw(Some(context), &engine.renderer, 0.0, 0.0) }.ok()?;
@@ -625,7 +1009,7 @@ pub fn emoji_pixels(glyph: &str, size: i32) -> Option<Vec<u8>> {
 /// Adds one layer of letters, each pixel by how much of it they cover.
 #[allow(clippy::too_many_arguments)]
 fn blend_run(target: &mut Target, run: *const DWRITE_GLYPH_RUN, measuring: DWRITE_MEASURING_MODE, x: f32, y: f32, ink: Rgb, opacity: f32, curve: Option<[u8; 256]>, marked_run: bool) -> Result<()> {
-    let (mode, fit) = if curve.is_some() {
+    let (mode, fit) = if curve.is_some() && !target.exact {
         (DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, DWRITE_GRID_FIT_MODE_ENABLED)
     } else {
         (DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, DWRITE_GRID_FIT_MODE_DISABLED)
@@ -707,9 +1091,11 @@ struct Sink;
 
 #[allow(non_snake_case)]
 impl IDWritePixelSnapping_Impl for Sink_Impl {
-    fn IsPixelSnappingDisabled(&self, _context: *const core::ffi::c_void) -> Result<BOOL> {
-        // Keeps each line's baseline on a whole pixel, which keeps its flat edges sharp.
-        Ok(BOOL(0))
+    fn IsPixelSnappingDisabled(&self, context: *const core::ffi::c_void) -> Result<BOOL> {
+        // Keeps each line's baseline on a whole pixel, which keeps its flat edges sharp, unless
+        // it's to be drawn exactly where asked.
+        let exact = !context.is_null() && unsafe { &*(context as *const Target) }.exact;
+        Ok(BOOL(exact as i32))
     }
 
     fn GetCurrentTransform(&self, _context: *const core::ffi::c_void, transform: *mut DWRITE_MATRIX) -> Result<()> {
