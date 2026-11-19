@@ -44,6 +44,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 static CARET_PENDING: AtomicBool = AtomicBool::new(false);
+/// Where the search box is about to type a × for an x, picked up by `on_query_changed`. -1 if none.
+static PENDING_TIMES: AtomicIsize = AtomicIsize::new(-1);
 /// The snippet's box in a form, which wants Enter for new lines.
 static AREA_HWND: AtomicIsize = AtomicIsize::new(0);
 /// A form left open when the launcher hid comes back if it's shown again this soon.
@@ -306,6 +308,8 @@ pub struct App {
     /// Read when the emoji list opens and let go when it closes.
     pub emoji_table: Vec<orbit_core::emoji::Emoji>,
     pub emoji_cache: HashMap<u16, Vec<u8>>,
+    /// Where in the search box Orbit typed a × for an x, in UTF-16 units. Only these go back to x.
+    typed_times: TypedTimes,
     pub icons: IconCache,
     /// What the clipboard's side panel shows, for the clip last asked for.
     pub clip_preview: Option<Box<ClipPreview>>,
@@ -846,12 +850,15 @@ unsafe extern "system" fn edit_wndproc(hwnd: HWND, message: u32, wparam: WPARAM,
 }
 
 /// In the search box, an x typed after a number in a sum goes in as ×, which is returned for the
-/// box to type instead. A letter typed after that turns each × back into an x first, as the text
-/// wasn't a sum after all.
+/// box to type instead. `on_query_changed` keeps track of it, and turns it back into an x if the
+/// text stops being a sum.
 unsafe fn times_sign_for(edit: HWND, c: u32) -> Option<u32> {
+    // Only a lowercase x: a capital X is kept as typed, so it can't come back changed.
+    if c != u32::from(b'x') {
+        return None;
+    }
     let at_root = APP.with(|cell| cell.try_borrow().ok().is_some_and(|guard| guard.as_ref().is_some_and(|app| app.view.scope == Scope::Root)));
-    let typed = char::from_u32(c)?;
-    if !at_root || !(typed.is_alphabetic()) {
+    if !at_root {
         return None;
     }
     unsafe {
@@ -864,17 +871,9 @@ unsafe fn times_sign_for(edit: HWND, c: u32) -> Option<u32> {
         let (start, end) = ((start as usize).min(units.len()), (end as usize).min(units.len()));
         let before = String::from_utf16_lossy(&units[..start]);
         let after = String::from_utf16_lossy(&units[end..]);
-        if matches!(typed, 'x' | 'X') && orbit_core::calc::x_types_times(&before, &after) {
+        if orbit_core::calc::x_types_times(&before, &after) {
+            PENDING_TIMES.store(start as isize, Ordering::Relaxed);
             return Some(0xD7);
-        }
-        let kept = format!("{before}{after}");
-        if orbit_core::calc::typed_letter_undoes_times(&kept, typed) {
-            let x = [u16::from(b'x'), 0];
-            for at in (0..units.len()).filter(|&at| units[at] == 0xD7 && (at < start || at >= end)) {
-                SendMessageW(edit, EM_SETSEL, Some(WPARAM(at)), Some(LPARAM(at as isize + 1)));
-                SendMessageW(edit, EM_REPLACESEL, Some(WPARAM(1)), Some(LPARAM(x.as_ptr() as isize)));
-            }
-            SendMessageW(edit, EM_SETSEL, Some(WPARAM(start)), Some(LPARAM(end as isize)));
         }
     }
     None
@@ -1049,6 +1048,7 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             known_games_at: None,
             emoji_table: Vec::new(),
             emoji_cache: HashMap::new(),
+            typed_times: TypedTimes::default(),
             icons: IconCache::new(icon_capacity),
             clip_preview: None,
             clip_preview_wanted: None,
@@ -1967,8 +1967,9 @@ impl App {
         self.apply_glass();
         if changed {
             ui::publish_edit_colors(&theme);
-            // Symbols in the emoji grid are drawn in the text colour.
-            self.emoji_cache.clear();
+            // Symbols in the emoji grid are drawn in the text colour. Colour emoji look the same.
+            let table = &self.emoji_table;
+            self.emoji_cache.retain(|at, _| table.get(*at as usize).is_some_and(|entry| !entry.symbol));
         }
         if self.visible {
             self.redraw();
@@ -4382,7 +4383,42 @@ impl App {
         }
     }
 
+    /// Keeps track of the × signs typed for an x, and turns them all back into x in one step,
+    /// one undo, once the text can't be a sum, as when a letter makes "4×4" into "4×4 truck".
+    /// The swap happens before the text is searched, so the search only runs once, on the result.
+    fn untype_times(&mut self) {
+        let typed = usize::try_from(PENDING_TIMES.swap(-1, Ordering::Relaxed)).ok();
+        if self.view.scope != Scope::Root {
+            self.typed_times = TypedTimes::default();
+            return;
+        }
+        let mut units = wide(&self.read_query());
+        units.pop(); // the terminating nul
+        self.typed_times.follow(&units, typed);
+        let (Some(&first), Some(&last)) = (self.typed_times.at.first(), self.typed_times.at.last()) else { return };
+        if !orbit_core::calc::times_no_longer_fits(&String::from_utf16_lossy(&units)) {
+            return;
+        }
+        let mut span = units[first..=last].to_vec();
+        for &at in &self.typed_times.at {
+            span[at - first] = u16::from(b'x');
+        }
+        span.push(0);
+        unsafe {
+            let (mut start, mut end) = (0u32, 0u32);
+            SendMessageW(self.edit, EM_GETSEL, Some(WPARAM(&mut start as *mut u32 as usize)), Some(LPARAM(&mut end as *mut u32 as isize)));
+            SendMessageW(self.edit, EM_SETSEL, Some(WPARAM(first)), Some(LPARAM(last as isize + 1)));
+            SendMessageW(self.edit, EM_REPLACESEL, Some(WPARAM(1)), Some(LPARAM(span.as_ptr() as isize)));
+            SendMessageW(self.edit, EM_SETSEL, Some(WPARAM(start as usize)), Some(LPARAM(end as isize)));
+        }
+        self.typed_times = TypedTimes::default();
+        let mut units = wide(&self.read_query());
+        units.pop();
+        self.typed_times.text = units;
+    }
+
     fn on_query_changed(&mut self) {
+        self.untype_times();
         let query = self.read_query();
         if self.view.last_query.as_deref() == Some(query.as_str()) {
             return; // our own SetWindowText, already handled
@@ -7568,5 +7604,37 @@ mod frost_tests {
         unsafe {
             let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(plate);
         }
+    }
+}
+
+/// The × signs Orbit typed for an x in the search box, kept in step as the text changes, so
+/// only those go back to x and a × that was pasted or picked from the grid stays.
+#[derive(Default)]
+struct TypedTimes {
+    /// The text as last seen, in UTF-16 units.
+    text: Vec<u16>,
+    /// Where each typed × is in `text`.
+    at: Vec<usize>,
+}
+
+impl TypedTimes {
+    /// Moves the positions along for the change from the last text to `text`, adds a × that was
+    /// just typed at `typed`, and drops any that were deleted or typed over.
+    fn follow(&mut self, text: &[u16], typed: Option<usize>) {
+        let old = &self.text;
+        let prefix = old.iter().zip(text).take_while(|(a, b)| a == b).count();
+        let room = old.len().min(text.len()) - prefix;
+        let suffix = old.iter().rev().zip(text.iter().rev()).take(room).take_while(|(a, b)| a == b).count();
+        let (old_end, new_end) = (old.len() - suffix, text.len() - suffix);
+        self.at = self
+            .at
+            .iter()
+            .filter_map(|&at| if at < prefix { Some(at) } else if at >= old_end { Some(at - old_end + new_end) } else { None })
+            .chain(typed)
+            .filter(|&at| text.get(at) == Some(&0xD7))
+            .collect();
+        self.at.sort_unstable();
+        self.at.dedup();
+        self.text = text.to_vec();
     }
 }

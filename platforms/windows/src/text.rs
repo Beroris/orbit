@@ -616,12 +616,18 @@ pub fn emoji_pixels_in(glyph: &str, size: i32, ink: Rgb) -> Option<Vec<u8>> {
 /// capitals, so they still read as what they are.
 pub fn symbol_pixels(glyph: &str, size: i32, ink: Rgb) -> Option<Vec<u8>> {
     let engine = engine()?;
+    let fonts = [SymbolFont::Geist, SymbolFont::Text, SymbolFont::Symbol];
     // Keys and arrows come from one font for the whole set, so a row of them is one design.
-    let set = [KEY_SYMBOLS, ARROW_SYMBOLS].into_iter().find(|set| glyph.chars().all(|c| set.contains(c))).unwrap_or(glyph);
-    [SymbolFont::Geist, SymbolFont::Text, SymbolFont::Symbol]
-        .into_iter()
-        .filter(|font| font.has(engine, set))
-        .find_map(|font| symbol_in(engine, font, glyph, set != glyph, size, ink))
+    let set = [KEY_SYMBOLS, ARROW_SYMBOLS].into_iter().find(|set| glyph.chars().all(|c| set.contains(c)));
+    if let Some(set) = set
+        && let Some(font) = fonts.into_iter().find(|font| font.has(engine, set))
+        && let Some(pixels) = symbol_in(engine, font, glyph, true, size, ink)
+    {
+        return Some(pixels);
+    }
+    // Anything else, or a key or arrow when no one font has the whole set, from the first font
+    // that has it.
+    fonts.into_iter().filter(|font| font.has(engine, glyph)).find_map(|font| symbol_in(engine, font, glyph, false, size, ink))
 }
 
 /// The keyboard's symbols, drawn from one font.
@@ -679,13 +685,14 @@ fn symbol_in(engine: &Engine, font: SymbolFont, glyph: &str, in_set: bool, size:
     let keep = !in_set && (ink_box.height() < caps.height() * SHORT_MARK || high || low);
     let x = (centre - ink_box.mid_x()).round();
     let y = (centre - if keep { caps.mid_y() } else { ink_box.mid_y() }).round();
-    let mut plane = Ink::plane(engine, font, glyph, px, weight, size, size, x, y)?;
+    let line = Ink::layout(engine, font, glyph, px, weight)?;
+    let mut plane = Ink::draw(engine, font, &line, size, size, x, y)?;
     // The thickening: drawn again nudged that far each way, and the copies laid together, so its
     // edges stay sharp.
     if grow >= MIN_GROW {
         let slant = grow * std::f32::consts::FRAC_1_SQRT_2;
         for (dx, dy) in [(grow, 0.0), (-grow, 0.0), (0.0, grow), (0.0, -grow), (slant, slant), (-slant, slant), (slant, -slant), (-slant, -slant)] {
-            let nudged = Ink::plane(engine, font, glyph, px, weight, size, size, x + dx, y + dy)?;
+            let nudged = Ink::draw(engine, font, &line, size, size, x + dx, y + dy)?;
             for (pixel, more) in plane.iter_mut().zip(nudged) {
                 *pixel = (*pixel).max(more);
             }
@@ -708,7 +715,7 @@ fn symbol_in(engine: &Engine, font: SymbolFont, glyph: &str, in_set: bool, size:
 /// narrowest run through it, along a row, a column or either diagonal, and of those the middle
 /// one. A shaft is measured as a shaft, rather than thickened by its arrowhead, as an average
 /// over the whole shape would be.
-fn stroke_of(plane: &[u8], room: i32) -> f32 {
+fn stroke_of(plane: &[u8], room: i32, (left, top, right, bottom): (i32, i32, i32, i32)) -> f32 {
     let at = |x: i32, y: i32| if x < 0 || y < 0 || x >= room || y >= room { 0.0 } else { plane[(y * room + x) as usize] as f32 / 255.0 };
     // The ink along a run from (x, y) in one direction and back, until it runs out.
     let run = |x: i32, y: i32, dx: i32, dy: i32| {
@@ -724,8 +731,8 @@ fn stroke_of(plane: &[u8], room: i32) -> f32 {
         total
     };
     let mut local: Vec<f32> = Vec::new();
-    for y in 0..room {
-        for x in 0..room {
+    for y in top..=bottom {
+        for x in left..=right {
             if at(x, y) >= 0.5 {
                 let diagonal = run(x, y, 1, 1).min(run(x, y, 1, -1)) * std::f32::consts::SQRT_2;
                 local.push(run(x, y, 1, 0).min(run(x, y, 0, 1)).min(diagonal));
@@ -875,7 +882,7 @@ impl Ink {
             return None;
         }
         let at = size as f32;
-        let stroke = stroke_of(&plane, room);
+        let stroke = stroke_of(&plane, room, (left, top, right, bottom));
         Some(Ink { left: left as f32 - at, top: top as f32 - at, right: (right + 1) as f32 - at, bottom: (bottom + 1) as f32 - at, stroke })
     }
 
@@ -919,9 +926,19 @@ impl Ink {
     /// In one colour, even where the glyph comes from a colour emoji font.
     #[allow(clippy::too_many_arguments)]
     fn plane(engine: &Engine, font: SymbolFont, glyph: &str, px: f32, weight: f32, width: i32, height: i32, x: f32, y: f32) -> Option<Vec<u8>> {
+        let line = Ink::layout(engine, font, glyph, px, weight)?;
+        Ink::draw(engine, font, &line, width, height, x, y)
+    }
+
+    /// The glyph laid out once, to be drawn as many times as needed.
+    fn layout(engine: &Engine, font: SymbolFont, glyph: &str, px: f32, weight: f32) -> Option<IDWriteTextLayout> {
         let format = font.format(engine, px, weight)?;
         let units: Vec<u16> = glyph.encode_utf16().collect();
-        let line = unsafe { engine.factory.CreateTextLayout(&units, &format, px * 4.0, px * 2.0) }.ok()?;
+        unsafe { engine.factory.CreateTextLayout(&units, &format, px * 4.0, px * 2.0) }.ok()
+    }
+
+    /// [Ink::plane] for a glyph already laid out.
+    fn draw(engine: &Engine, font: SymbolFont, line: &IDWriteTextLayout, width: i32, height: i32, x: f32, y: f32) -> Option<Vec<u8>> {
         let mut unused = 0u32;
         let ink = Rgb(255, 255, 255);
         let mut target = Target {

@@ -70,32 +70,38 @@ pub fn display_name(name: &str) -> String {
     out
 }
 
-/// Which emoji match, best first, as positions in `table`. A word in the name beats a keyword.
+/// Which emoji match, best first, as positions in `table`. The emoji itself, pasted in, comes
+/// first, then a word in the name beats a keyword.
 pub fn search(table: &[Emoji], query: &str) -> Vec<u16> {
-    let needle = fold(query.trim());
+    let query = query.trim();
+    let needle = fold(query);
     if needle.is_empty() {
         return (0..table.len() as u16).collect();
     }
+    let bare = |text: &'static str| text.chars().filter(|c| !matches!(c, '\u{FE0E}' | '\u{FE0F}'));
+    let is_glyph = |glyph: &'static str| bare(glyph).eq(query.chars().filter(|c| !matches!(c, '\u{FE0E}' | '\u{FE0F}')));
     let at_word_start = |text: &str| {
         text.match_indices(needle.as_str()).any(|(at, _)| at == 0 || !text.as_bytes()[at - 1].is_ascii_alphanumeric())
     };
     let mut scored: Vec<(u8, u16)> = Vec::new();
     for (at, emoji) in table.iter().enumerate() {
         let name = fold(emoji.name);
-        let score = if name == needle {
+        let score = if is_glyph(emoji.glyph) {
             0
-        } else if name.starts_with(&needle) {
+        } else if name == needle {
             1
-        } else if at_word_start(&name) {
+        } else if name.starts_with(&needle) {
             2
+        } else if at_word_start(&name) {
+            3
         } else {
             let keywords = fold(emoji.keywords);
             if at_word_start(&keywords) {
-                3
-            } else if name.contains(&needle) {
                 4
-            } else if keywords.contains(&needle) {
+            } else if name.contains(&needle) {
                 5
+            } else if keywords.contains(&needle) {
+                6
             } else {
                 continue;
             }
@@ -133,6 +139,11 @@ mod tests {
         assert!(!table[0].symbol);
         assert!(table.iter().all(|e| e.symbol == (e.group as usize >= groups().iter().position(|g| *g == FIRST_SYMBOL_GROUP).unwrap())));
         assert_eq!(found("cmd")[0], "\u{2318}");
+        // The symbol itself, pasted in, finds its own tile first, with or without VS16.
+        assert_eq!(found("\u{2192}")[0], "\u{2192}");
+        assert_eq!(found("\u{279C}")[0], "\u{279C}");
+        assert_eq!(found("\u{00D7}")[0], "\u{00D7}");
+        assert_eq!(found("\u{2764}\u{FE0F}")[0], found("\u{2764}")[0]);
         assert_eq!(found("command")[0], "\u{2318}");
         assert!(found("multiply").contains(&"\u{00D7}"));
         assert!(found("option").contains(&"\u{2325}"));

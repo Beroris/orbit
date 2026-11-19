@@ -38,6 +38,11 @@ pub fn fold_into(text: &str, out: &mut String) {
         if c.is_ascii() {
             out.push(c.to_ascii_lowercase());
         } else {
+            if c == '\u{00D7}' {
+                // A times sign the search box typed for an x, so "1920×1080" still finds "1920x1080".
+                out.push('x');
+                continue;
+            }
             for lower in c.to_lowercase() {
                 match strip_diacritic(lower) {
                     Some(base) => out.push_str(base),
@@ -105,6 +110,7 @@ mod tests {
         assert_eq!(fold("Résumé"), "resume");
         assert_eq!(fold("ÅNGSTRÖM"), "angstrom");
         assert_eq!(fold("Straße"), "strasse");
+        assert_eq!(fold("1920\u{00D7}1080"), "1920x1080");
         assert_eq!(fold("Œuvre"), "oeuvre");
         assert_eq!(fold("微信 Chat"), "微信 chat");
     }

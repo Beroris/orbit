@@ -59,43 +59,72 @@ pub fn evaluate(query: &str) -> CalcOutcome {
     }
 }
 
-/// "18 x 23", "18X23" and "18 × 23" written as "18*23". Only an x between two numbers counts, so
-/// words with an x in them are left alone.
+/// "18 x 23", "18X23" and "18 × 23" written as "18*23". An x counts only between a number and
+/// what can follow a times sign (a number, a bracket, a sign, or pi, e or a function such as
+/// sqrt), so words with an x in them are left alone. A × always means times.
 fn times_signs(q: &str) -> std::borrow::Cow<'_, str> {
     if !q.contains(['x', 'X', '\u{00D7}']) {
         return q.into();
     }
     let chars: Vec<char> = q.chars().collect();
+    // The next character that isn't a space, for each position, found in one pass from the end.
+    let mut next = vec![None; chars.len() + 1];
+    for at in (0..chars.len()).rev() {
+        next[at] = if chars[at].is_whitespace() { next[at + 1] } else { Some(at) };
+    }
     let mut out = String::with_capacity(q.len());
+    let mut before: Option<char> = None;
     for (at, &c) in chars.iter().enumerate() {
-        let before = chars[..at].iter().rev().find(|c| !c.is_whitespace());
-        let after = chars[at + 1..].iter().find(|c| !c.is_whitespace());
-        let between = before.is_some_and(|c| c.is_ascii_digit() || matches!(c, ')' | '%' | '.'))
-            && after.is_some_and(|c| c.is_ascii_digit() || matches!(c, '(' | '.'));
-        if matches!(c, 'x' | 'X' | '\u{00D7}') && between {
-            out.push('*');
-        } else {
-            out.push(c);
+        let times = c == '\u{00D7}'
+            || matches!(c, 'x' | 'X')
+                && before.is_some_and(|c| c.is_ascii_digit() || matches!(c, ')' | '%' | '.'))
+                && next[at + 1].is_some_and(|after| starts_a_factor(&chars[after..]));
+        out.push(if times { '*' } else { c });
+        if !c.is_whitespace() {
+            before = Some(c);
         }
     }
     out.into()
 }
 
+/// Whether `rest` starts with something a times sign can come before: a number, a bracket, a
+/// sign, or a whole word naming a constant or function, such as "pi" or "sqrt(9)".
+fn starts_a_factor(rest: &[char]) -> bool {
+    match rest.first() {
+        Some(c) if c.is_ascii_digit() || matches!(c, '(' | '.' | '-' | '+') => true,
+        Some(c) if c.is_ascii_alphabetic() => {
+            let word: String = rest.iter().take_while(|c| c.is_ascii_alphabetic()).map(|c| c.to_ascii_lowercase()).collect();
+            matches!(word.as_str(), "pi" | "e") || FUNCTIONS.contains(&word.as_str())
+        }
+        _ => false,
+    }
+}
+
 /// Whether an x typed at the caret should go in as ×: straight after a number in what's so far
-/// a sum, such as "18 " or "(2+3)". Text with letters in it is left alone, so "4x4" in a search
-/// for "4x4 truck" stays as typed once a letter follows (see [typed_letter_undoes_times]).
+/// a sum, such as "18 ", "(2+3)" or "sqrt(9)". Text with other words in it is left alone, so the
+/// x in "4x4 truck" stays as typed (see [times_no_longer_fits]).
 pub fn x_types_times(before: &str, after: &str) -> bool {
     let first = before.trim_start().chars().next();
     let last = before.trim_end().chars().last();
-    first.is_some_and(|c| c.is_ascii_digit() || matches!(c, '(' | '-' | '+' | '.'))
+    first.is_some_and(|c| c.is_ascii_digit() || c.is_ascii_alphabetic() || matches!(c, '(' | '-' | '+' | '.'))
         && last.is_some_and(|c| c.is_ascii_digit() || matches!(c, ')' | '%'))
-        && !before.chars().chain(after.chars()).any(char::is_alphabetic)
+        && words_fit_a_sum(before)
+        && words_fit_a_sum(after)
 }
 
-/// Whether typing `c` into text that has a × in it means it wasn't a sum after all, so each ×
-/// goes back to the x that was typed. True for a letter. A sum still works out with an x in it.
-pub fn typed_letter_undoes_times(text: &str, c: char) -> bool {
-    c.is_alphabetic() && text.contains('\u{00D7}')
+/// Whether text with a typed × in it has stopped being a sum, so each × goes back to the x that
+/// was typed: true once it has a word that isn't, and can't become, a constant or function, such
+/// as "truck". "2 × p" isn't, as the "p" may yet be "pi".
+pub fn times_no_longer_fits(text: &str) -> bool {
+    !words_fit_a_sum(text)
+}
+
+/// True if every word in `text` is a constant or function a sum can use, or the start of one.
+fn words_fit_a_sum(text: &str) -> bool {
+    text.split(|c: char| !c.is_alphabetic()).filter(|word| !word.is_empty()).all(|word| {
+        let word = word.to_ascii_lowercase();
+        word.is_ascii() && ["pi", "e"].iter().chain(FUNCTIONS).any(|name| name.starts_with(word.as_str()))
+    })
 }
 
 /// True if the text ends in letters, like "10-20 things", rather than an unfinished sum.
@@ -688,23 +717,34 @@ mod tests {
         assert_eq!(value("18 X 23"), "414");
         assert_eq!(value("18 \u{00D7} 23"), "414");
         assert_eq!(value("(2+3) x 4"), "20");
+        assert_eq!(value("2x-3"), "-6");
+        assert_eq!(value("2 x pi"), value("2*pi"));
+        assert_eq!(value("2 x sqrt(9)"), "6");
+        assert_eq!(value("2\u{00D7}sqrt(9)"), "6");
+        assert_eq!(value("2 \u{00D7} -3"), "-6");
         assert_eq!(pretty_sum("18 x 23"), "18 \u{00D7} 23");
-        for q in ["xbox", "4x4 truck", "x 2", "2 x"] {
+        for q in ["xbox", "4x4 truck", "x 2", "2 x", "2 x pie", "1x-ray"] {
             assert!(!matches!(evaluate(q), CalcOutcome::Value { .. }), "{q}");
         }
+        // A long paste is read in one pass.
+        let long = "1x".repeat(8000);
+        let _ = evaluate(&long);
     }
 
     #[test]
     fn typing_x_after_a_number_types_times() {
-        for before in ["18", "18 ", "(2+3)", "10%", "-4", "2 \u{00D7} 3"] {
+        for before in ["18", "18 ", "(2+3)", "10%", "-4", "2 \u{00D7} 3", "sqrt(9)", "2 \u{00D7} pi + 1"] {
             assert!(x_types_times(before, ""), "{before}");
         }
         for before in ["", "x", "abc 4", "18x", "pi", "18 ", "box 2"] {
             assert!(!x_types_times(before, if before == "18 " { " km" } else { "" }), "{before}");
         }
-        assert!(typed_letter_undoes_times("4\u{00D7}4 ", 't'));
-        assert!(!typed_letter_undoes_times("4\u{00D7}4 ", '5'));
-        assert!(!typed_letter_undoes_times("4x4 ", 't'));
+        assert!(times_no_longer_fits("4\u{00D7}4 tr"));
+        assert!(times_no_longer_fits("4\u{00D7}4 truck"));
+        assert!(!times_no_longer_fits("4\u{00D7}4 "));
+        assert!(!times_no_longer_fits("2 \u{00D7} p"));
+        assert!(!times_no_longer_fits("2 \u{00D7} sq"));
+        assert!(times_no_longer_fits("2 \u{00D7} pie"));
     }
 
     #[test]
