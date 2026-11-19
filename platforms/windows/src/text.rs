@@ -627,7 +627,7 @@ pub fn symbol_pixels(glyph: &str, size: i32, ink: Rgb) -> Option<Vec<u8>> {
 /// The keyboard's symbols, drawn from one font.
 const KEY_SYMBOLS: &str = "⌘⌥⇧⌃⇪⎋⏎↩⌫⌦⇥⇤␣⏏⏻⇞⇟↖↘⌨⊞";
 /// The arrows, drawn from one font.
-const ARROW_SYMBOLS: &str = "→←↑↓↔↕⇒⇐⇔↗↙↻↺⟶↦⤴⤵➔";
+const ARROW_SYMBOLS: &str = "→←↑↓↔↕⇒⇐⇔↗↙↻↺⟶↦⤴⤵➜";
 
 /// `in_set` is a key or an arrow, drawn as one of a set.
 fn symbol_in(engine: &Engine, font: SymbolFont, glyph: &str, in_set: bool, size: i32, ink: Rgb) -> Option<Vec<u8>> {
@@ -646,7 +646,7 @@ fn symbol_in(engine: &Engine, font: SymbolFont, glyph: &str, in_set: bool, size:
         weight = heavier;
         ink_box = Ink::of(engine, font, glyph, px, weight, size)?;
     }
-    // A key or arrow that's heavy by design, such as ↩ or ➔, stays at the regular weight, so it
+    // A key or arrow that's heavy by design, such as ↩ or ➜, stays at the regular weight, so it
     // doesn't stand out from the rest of its set.
     if in_set && font == SymbolFont::Symbol && ink_box.stroke > geist_caps.stroke * SET_STROKE * TOO_HEAVY {
         weight = font.weight();
