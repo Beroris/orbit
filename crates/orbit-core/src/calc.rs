@@ -39,6 +39,7 @@ pub fn evaluate(query: &str) -> CalcOutcome {
     if let Some(outcome) = try_conversion(q) {
         return outcome;
     }
+    let q = &*times_signs(q);
     if !looks_like_math(q) {
         return CalcOutcome::NotMath;
     }
@@ -56,6 +57,28 @@ pub fn evaluate(query: &str) -> CalcOutcome {
         }
         Err(message) => CalcOutcome::Error(message),
     }
+}
+
+/// "18 x 23", "18X23" and "18 × 23" written as "18*23". Only an x between two numbers counts, so
+/// words with an x in them are left alone.
+fn times_signs(q: &str) -> std::borrow::Cow<'_, str> {
+    if !q.contains(['x', 'X', '\u{00D7}']) {
+        return q.into();
+    }
+    let chars: Vec<char> = q.chars().collect();
+    let mut out = String::with_capacity(q.len());
+    for (at, &c) in chars.iter().enumerate() {
+        let before = chars[..at].iter().rev().find(|c| !c.is_whitespace());
+        let after = chars[at + 1..].iter().find(|c| !c.is_whitespace());
+        let between = before.is_some_and(|c| c.is_ascii_digit() || matches!(c, ')' | '%' | '.'))
+            && after.is_some_and(|c| c.is_ascii_digit() || matches!(c, '(' | '.'));
+        if matches!(c, 'x' | 'X' | '\u{00D7}') && between {
+            out.push('*');
+        } else {
+            out.push(c);
+        }
+    }
+    out.into()
 }
 
 /// True if the text ends in letters, like "10-20 things", rather than an unfinished sum.
@@ -565,7 +588,7 @@ pub fn unit_symbol(unit: &str) -> &str {
 /// word, so "90% of 429" stays as it is.
 pub fn pretty_sum(sum: &str) -> String {
     let mut out = String::with_capacity(sum.len() + 8);
-    let chars: Vec<char> = sum.trim().chars().collect();
+    let chars: Vec<char> = times_signs(sum.trim()).chars().collect();
     for (at, &c) in chars.iter().enumerate() {
         let beside_word = || {
             let before = chars[..at].iter().rev().find(|c| !c.is_whitespace());
@@ -639,6 +662,19 @@ mod tests {
         assert_eq!(value("50%"), "0.5");
         assert_eq!(value("1,000+1"), "1001");
         assert_eq!(value("1e3+1"), "1001");
+    }
+
+    #[test]
+    fn x_means_times_between_numbers() {
+        assert_eq!(value("18 x 23"), "414");
+        assert_eq!(value("18x23"), "414");
+        assert_eq!(value("18 X 23"), "414");
+        assert_eq!(value("18 \u{00D7} 23"), "414");
+        assert_eq!(value("(2+3) x 4"), "20");
+        assert_eq!(pretty_sum("18 x 23"), "18 \u{00D7} 23");
+        for q in ["xbox", "4x4 truck", "x 2", "2 x"] {
+            assert!(!matches!(evaluate(q), CalcOutcome::Value { .. }), "{q}");
+        }
     }
 
     #[test]
