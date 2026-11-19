@@ -833,10 +833,10 @@ unsafe extern "system" fn edit_wndproc(hwnd: HWND, message: u32, wparam: WPARAM,
                 if !new_line && (c == 0x0D || c == 0x0A || c == 0x1B || c == 0x09 || c == 0x0B || c == 0x7F || c == 0x01) {
                     return LRESULT(0);
                 }
-                if hwnd.0 as isize != AREA_HWND.load(Ordering::Relaxed) {
-                    if let Some(times) = times_sign_for(hwnd, c) {
-                        return CallWindowProcW(std::mem::transmute::<isize, WNDPROC>(EDIT_ORIGINAL_PROC.load(Ordering::Relaxed)), hwnd, message, WPARAM(times as usize), lparam);
-                    }
+                if hwnd.0 as isize != AREA_HWND.load(Ordering::Relaxed)
+                    && let Some(times) = times_sign_for(hwnd, c)
+                {
+                    return CallWindowProcW(std::mem::transmute::<isize, WNDPROC>(EDIT_ORIGINAL_PROC.load(Ordering::Relaxed)), hwnd, message, WPARAM(times as usize), lparam);
                 }
             }
             _ => {}

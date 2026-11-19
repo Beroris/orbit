@@ -2674,7 +2674,9 @@ fn draw_grid(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, grid: &Gr
         }
         let Some(entry) = emoji.get(cell.at as usize) else { continue };
         let pixels = cache.entry(cell.at).or_insert_with(|| {
-            if entry.symbol { text::symbol_pixels(entry.glyph, size, theme.text) } else { text::emoji_pixels(entry.glyph, size) }.unwrap_or_default()
+            let symbol = if entry.symbol { text::symbol_pixels(entry.glyph, size, theme.text) } else { None };
+            let fallback = || if entry.symbol { text::emoji_pixels_in(entry.glyph, size, theme.text) } else { text::emoji_pixels(entry.glyph, size) };
+            symbol.or_else(fallback).unwrap_or_default()
         });
         let RECT { left, top, right, bottom } = cell.rect;
         buffer.blit_premultiplied(left + (right - left - size) / 2, top + (bottom - top - size) / 2, size, pixels);
