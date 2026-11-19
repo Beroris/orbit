@@ -5,6 +5,9 @@
 use crate::text::fold;
 
 const TABLE: &str = include_str!("../data/emoji.tsv");
+/// Orbit's own groups of symbols, from keyboard keys to currency, come after Unicode's emoji, from this
+/// group on.
+const FIRST_SYMBOL_GROUP: &str = "Keyboard";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Emoji {
@@ -13,6 +16,8 @@ pub struct Emoji {
     pub keywords: &'static str,
     /// Which of `groups()` it's in.
     pub group: u8,
+    /// A plain symbol such as ⌘ or ×, drawn in the text colour rather than as a colour emoji.
+    pub symbol: bool,
 }
 
 /// A group's title line starts with `#` and has no tab. Keycap # starts with one too, but has tabs.
@@ -31,8 +36,10 @@ pub fn table() -> Vec<Emoji> {
     let mut out = Vec::with_capacity(1700);
     let mut group = 0u8;
     let mut seen_group = false;
+    let mut symbol = false;
     for line in TABLE.lines() {
-        if group_title(line).is_some() {
+        if let Some(title) = group_title(line) {
+            symbol |= title == FIRST_SYMBOL_GROUP;
             if seen_group {
                 group += 1;
             }
@@ -43,7 +50,7 @@ pub fn table() -> Vec<Emoji> {
         let (Some(glyph), Some(name)) = (parts.next(), parts.next()) else {
             continue;
         };
-        out.push(Emoji { glyph, name, keywords: parts.next().unwrap_or(""), group });
+        out.push(Emoji { glyph, name, keywords: parts.next().unwrap_or(""), group, symbol });
     }
     out
 }
@@ -113,11 +120,23 @@ mod tests {
         let table = table();
         assert!(table.len() > 1500, "{}", table.len());
         let groups = groups();
-        assert_eq!(groups.len(), 8);
+        assert_eq!(groups.len(), 13);
         assert_eq!(groups[0], "Smileys & People");
         assert!(table.iter().all(|e| (e.group as usize) < groups.len()));
         assert!(table.iter().all(|e| !e.glyph.is_empty() && !e.name.is_empty()));
         assert_eq!(table[0].glyph, "😀");
+    }
+
+    #[test]
+    fn symbols_come_after_the_emoji_and_are_found_by_what_they_are() {
+        let table = table();
+        assert!(!table[0].symbol);
+        assert!(table.iter().all(|e| e.symbol == (e.group as usize >= groups().iter().position(|g| *g == FIRST_SYMBOL_GROUP).unwrap())));
+        assert_eq!(found("cmd")[0], "\u{2318}");
+        assert_eq!(found("command")[0], "\u{2318}");
+        assert!(found("multiply").contains(&"\u{00D7}"));
+        assert!(found("option").contains(&"\u{2325}"));
+        assert!(found("euro").contains(&"\u{20AC}"));
     }
 
     #[test]

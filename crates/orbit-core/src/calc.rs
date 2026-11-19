@@ -81,6 +81,23 @@ fn times_signs(q: &str) -> std::borrow::Cow<'_, str> {
     out.into()
 }
 
+/// Whether an x typed at the caret should go in as ×: straight after a number in what's so far
+/// a sum, such as "18 " or "(2+3)". Text with letters in it is left alone, so "4x4" in a search
+/// for "4x4 truck" stays as typed once a letter follows (see [typed_letter_undoes_times]).
+pub fn x_types_times(before: &str, after: &str) -> bool {
+    let first = before.trim_start().chars().next();
+    let last = before.trim_end().chars().last();
+    first.is_some_and(|c| c.is_ascii_digit() || matches!(c, '(' | '-' | '+' | '.'))
+        && last.is_some_and(|c| c.is_ascii_digit() || matches!(c, ')' | '%'))
+        && !before.chars().chain(after.chars()).any(char::is_alphabetic)
+}
+
+/// Whether typing `c` into text that has a × in it means it wasn't a sum after all, so each ×
+/// goes back to the x that was typed. True for a letter. A sum still works out with an x in it.
+pub fn typed_letter_undoes_times(text: &str, c: char) -> bool {
+    c.is_alphabetic() && text.contains('\u{00D7}')
+}
+
 /// True if the text ends in letters, like "10-20 things", rather than an unfinished sum.
 fn trailing_words(q: &str) -> bool {
     q.split_ascii_whitespace().last().is_some_and(|word| {
@@ -675,6 +692,19 @@ mod tests {
         for q in ["xbox", "4x4 truck", "x 2", "2 x"] {
             assert!(!matches!(evaluate(q), CalcOutcome::Value { .. }), "{q}");
         }
+    }
+
+    #[test]
+    fn typing_x_after_a_number_types_times() {
+        for before in ["18", "18 ", "(2+3)", "10%", "-4", "2 \u{00D7} 3"] {
+            assert!(x_types_times(before, ""), "{before}");
+        }
+        for before in ["", "x", "abc 4", "18x", "pi", "18 ", "box 2"] {
+            assert!(!x_types_times(before, if before == "18 " { " km" } else { "" }), "{before}");
+        }
+        assert!(typed_letter_undoes_times("4\u{00D7}4 ", 't'));
+        assert!(!typed_letter_undoes_times("4\u{00D7}4 ", '5'));
+        assert!(!typed_letter_undoes_times("4x4 ", 't'));
     }
 
     #[test]

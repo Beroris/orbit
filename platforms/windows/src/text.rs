@@ -18,6 +18,7 @@ const VARIABLE_UI: PCWSTR = w!("Segoe UI Variable");
 const VARIABLE_UI_TEXT: PCWSTR = w!("Segoe UI Variable Text");
 const OLDER_UI: PCWSTR = w!("Segoe UI");
 const EMOJI_FONT: PCWSTR = w!("Segoe UI Emoji");
+const SYMBOL_FONT: PCWSTR = w!("Segoe UI Symbol");
 const LOCALE: PCWSTR = w!("en-us");
 
 /// Where a line of text sits in its box, across. It's always centred down.
@@ -592,10 +593,20 @@ fn render(engine: &Engine, buffer: &Backbuffer, line: &IDWriteTextLayout, ink: R
 /// One emoji in its own colours, as premultiplied BGRA in a `size` by `size` square. Kept apart from
 /// the frame so that each one is only worked out once, however often the list is drawn.
 pub fn emoji_pixels(glyph: &str, size: i32) -> Option<Vec<u8>> {
+    glyph_pixels(glyph, size, EMOJI_FONT, 0.76, Rgb(128, 128, 136))
+}
+
+/// A plain symbol such as ⌘ or ×, in `ink`, from the symbol font rather than as a colour emoji,
+/// the same way as [emoji_pixels].
+pub fn symbol_pixels(glyph: &str, size: i32, ink: Rgb) -> Option<Vec<u8>> {
+    glyph_pixels(glyph, size, SYMBOL_FONT, 0.84, ink)
+}
+
+fn glyph_pixels(glyph: &str, size: i32, font: PCWSTR, scale: f32, ink: Rgb) -> Option<Vec<u8>> {
     let engine = engine()?;
     let system = system_fonts(engine)?;
-    let px = size as f32 * 0.76;
-    let format = unsafe { engine.factory.CreateTextFormat(EMOJI_FONT, &system, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px, LOCALE) }.ok()?;
+    let px = size as f32 * scale;
+    let format = unsafe { engine.factory.CreateTextFormat(font, &system, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px, LOCALE) }.ok()?;
     unsafe {
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP).ok()?;
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER).ok()?;
@@ -604,7 +615,6 @@ pub fn emoji_pixels(glyph: &str, size: i32) -> Option<Vec<u8>> {
     let units: Vec<u16> = glyph.encode_utf16().collect();
     let line = unsafe { engine.factory.CreateTextLayout(&units, &format, size as f32, size as f32) }.ok()?;
     let mut pixels = vec![0u32; (size * size) as usize];
-    let ink = Rgb(128, 128, 136);
     let mut target = Target {
         factory: engine.factory.clone(),
         bits: pixels.as_mut_ptr(),

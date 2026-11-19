@@ -833,11 +833,51 @@ unsafe extern "system" fn edit_wndproc(hwnd: HWND, message: u32, wparam: WPARAM,
                 if !new_line && (c == 0x0D || c == 0x0A || c == 0x1B || c == 0x09 || c == 0x0B || c == 0x7F || c == 0x01) {
                     return LRESULT(0);
                 }
+                if hwnd.0 as isize != AREA_HWND.load(Ordering::Relaxed) {
+                    if let Some(times) = times_sign_for(hwnd, c) {
+                        return CallWindowProcW(std::mem::transmute::<isize, WNDPROC>(EDIT_ORIGINAL_PROC.load(Ordering::Relaxed)), hwnd, message, WPARAM(times as usize), lparam);
+                    }
+                }
             }
             _ => {}
         }
         call_original()
     }
+}
+
+/// In the search box, an x typed after a number in a sum goes in as ×, which is returned for the
+/// box to type instead. A letter typed after that turns each × back into an x first, as the text
+/// wasn't a sum after all.
+unsafe fn times_sign_for(edit: HWND, c: u32) -> Option<u32> {
+    let at_root = APP.with(|cell| cell.try_borrow().ok().is_some_and(|guard| guard.as_ref().is_some_and(|app| app.view.scope == Scope::Root)));
+    let typed = char::from_u32(c)?;
+    if !at_root || !(typed.is_alphabetic()) {
+        return None;
+    }
+    unsafe {
+        let len = GetWindowTextLengthW(edit).max(0) as usize;
+        let mut units = vec![0u16; len + 1];
+        let copied = GetWindowTextW(edit, &mut units) as usize;
+        units.truncate(copied);
+        let (mut start, mut end) = (0u32, 0u32);
+        SendMessageW(edit, EM_GETSEL, Some(WPARAM(&mut start as *mut u32 as usize)), Some(LPARAM(&mut end as *mut u32 as isize)));
+        let (start, end) = ((start as usize).min(units.len()), (end as usize).min(units.len()));
+        let before = String::from_utf16_lossy(&units[..start]);
+        let after = String::from_utf16_lossy(&units[end..]);
+        if matches!(typed, 'x' | 'X') && orbit_core::calc::x_types_times(&before, &after) {
+            return Some(0xD7);
+        }
+        let kept = format!("{before}{after}");
+        if orbit_core::calc::typed_letter_undoes_times(&kept, typed) {
+            let x = [u16::from(b'x'), 0];
+            for at in (0..units.len()).filter(|&at| units[at] == 0xD7 && (at < start || at >= end)) {
+                SendMessageW(edit, EM_SETSEL, Some(WPARAM(at)), Some(LPARAM(at as isize + 1)));
+                SendMessageW(edit, EM_REPLACESEL, Some(WPARAM(1)), Some(LPARAM(x.as_ptr() as isize)));
+            }
+            SendMessageW(edit, EM_SETSEL, Some(WPARAM(start)), Some(LPARAM(end as isize)));
+        }
+    }
+    None
 }
 
 fn load_settings(dir: &std::path::Path) -> (Settings, bool, Option<String>) {
@@ -1927,6 +1967,8 @@ impl App {
         self.apply_glass();
         if changed {
             ui::publish_edit_colors(&theme);
+            // Symbols in the emoji grid are drawn in the text colour.
+            self.emoji_cache.clear();
         }
         if self.visible {
             self.redraw();

@@ -200,7 +200,7 @@ Why Orbit is built the way it is. Figures come from the Windows reference machin
 
 ## The emoji list comes from Unicode's data
 
-**Decision.** The list is `crates/orbit-core/data/emoji.tsv`, 1,609 emoji generated from Unicode's `emoji-test.txt` (Emoji 15.1) and the English keywords in CLDR's `en.xml`. Skin tone variants are left out to keep the grid short. Country flags are left out because Windows draws them as two plain letters. Both are Unicode-3.0 licensed: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Windows' colour font draws the glyphs, so newer emoji can show as empty boxes on older Windows versions.
+**Decision.** The list is `crates/orbit-core/data/emoji.tsv`, 1,609 emoji generated from Unicode's `emoji-test.txt` (Emoji 15.1) and the English keywords in CLDR's `en.xml`. Skin tone variants are left out to keep the grid short. Country flags are left out because Windows draws them as two plain letters. Both are Unicode-3.0 licensed: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Windows' colour font draws the glyphs, so newer emoji can show as empty boxes on older Windows versions. After the emoji come five groups of plain symbols Orbit adds by hand: Keyboard (⌘ ⌥ ⇧ and the rest of the Mac keys), Maths, Arrows, Currency and Punctuation. They are drawn from Segoe UI Symbol in the text colour, so × looks like a multiplication sign rather than a purple emoji tile.
 
 **Why.** It's a fixed table with no network access or extra font, read only while the list is open.
 
