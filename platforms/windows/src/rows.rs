@@ -380,6 +380,10 @@ pub enum Op {
     EmojiPaste(u16),
     EmojiCopy(u16),
     EmojiPin(u16, bool),
+    /// Copy an emoji or symbol's code point, such as U+2318.
+    EmojiCopyCode(u16),
+    /// Show only some of the emoji and symbols.
+    EmojiFilter(EmojiFilter),
     /// A new quicklink, with this address filled in.
     NewLinkFor(String),
     EditLink(String),
@@ -471,6 +475,8 @@ pub fn primary_label(op: &Op) -> &'static str {
         Op::PasteSecret { field: Field::OneTimeCode, .. } => "Paste code",
         Op::EmojiPaste(_) => "Paste",
         Op::EmojiCopy(_) => "Copy",
+        Op::EmojiCopyCode(_) => "Copy",
+        Op::EmojiFilter(_) => "Show",
         Op::NewLinkFor(_) => "Save",
         Op::LinkArgs { .. } | Op::LinkArgsNext => "Fill in",
         Op::Weather(_) => "Show weather",
@@ -520,7 +526,7 @@ pub fn op_glyph(op: &Op) -> char {
         Op::RunItem { .. } | Op::OpenUrl(_) | Op::OpenLink { .. } | Op::ClipOpen(_) | Op::OpenVault(_) | Op::OpenFile(_) => GLYPH_OPEN,
         Op::AskConfirm(_) | Op::Confirmed(_) | Op::SaveAlias { .. } | Op::NewLinkFor(_) => GLYPH_CHECK,
         Op::Back => GLYPH_BACK,
-        Op::Copy(_) | Op::NoteCopy(_) | Op::SnippetCopy(_) | Op::ClipCopy(_) | Op::EmojiCopy(_) | Op::CopyFile(_) => GLYPH_COPY,
+        Op::Copy(_) | Op::NoteCopy(_) | Op::SnippetCopy(_) | Op::ClipCopy(_) | Op::EmojiCopy(_) | Op::EmojiCopyCode(_) | Op::CopyFile(_) => GLYPH_COPY,
         Op::FormOpenWith(_) | Op::OpenFileWith(_) => GLYPH_OPEN_WITH,
         Op::NoteOpen(_) => GLYPH_NOTE,
         Op::SnippetInsert(_) | Op::ClipPaste(_) | Op::EmojiPaste(_) | Op::PasteText(_) | Op::InsertPending | Op::PasteSecret { .. } => GLYPH_PASTE,
@@ -763,6 +769,7 @@ pub fn menu_for(row: &Row, app_item_id: Option<&str>, is_pinned: bool, hotkey: O
             out.push(Row::op("Copy", "", GLYPH_COPY, Op::EmojiCopy(*at)).with_keys("Ctrl+Enter"));
             let label = if *pinned { "Unpin" } else { "Pin to the top" };
             out.push(Row::op(label, "", GLYPH_PIN, Op::EmojiPin(*at, !*pinned)).with_keys("Ctrl+Shift+P"));
+            out.push(Row::op("Copy code point", "", GLYPH_COPY, Op::EmojiCopyCode(*at)).with_keys("Ctrl+Shift+C"));
         }
         RowSource::Answer { other, other_formatted, reverse, .. } => {
             if let Some(Op::Copy(answer)) = &row.primary {
@@ -1148,4 +1155,17 @@ mod tests {
         assert_eq!(Row::info("t", "", GLYPH_INFO).primary, None);
         assert_eq!(secondary_for(&Row::info("t", "", GLYPH_INFO), None), None);
     }
+}
+
+/// Which of the emoji and symbols the Emoji & Symbols list shows, as its filter drop-down sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum EmojiFilter {
+    #[default]
+    All,
+    /// Every group of colour emoji.
+    Emoji,
+    /// Every group of plain symbols: Keyboard, Maths, Arrows and so on.
+    Symbols,
+    /// One group, by its place in `orbit_core::emoji::groups`.
+    Group(u8),
 }

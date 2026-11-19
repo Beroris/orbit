@@ -1669,17 +1669,17 @@ _	underscore	low line underline
 #Maths
 ×	multiplication sign	multiply times x product
 ÷	division sign	divide obelus
-±	plus-minus sign	plus minus plusminus tolerance
-∓	minus-plus sign	minus plus
+±	plus-minus sign	plus minus plusminus tolerance +- +/-
+∓	minus-plus sign	minus plus -+
 −	minus sign	subtract negative
-≠	not equal to	unequal different
-≈	almost equal to	approximately approx about
-≡	identical to	equivalent congruent triple bar
-≤	less-than or equal to	lte at most
-≥	greater-than or equal to	gte at least
+≠	not equal to	unequal different != =/=
+≈	almost equal to	approximately approx about ~= ~~
+≡	identical to	equivalent congruent triple bar ===
+≤	less-than or equal to	lte at most <=
+≥	greater-than or equal to	gte at least >=
 ≪	much less than	
 ≫	much greater than	
-∞	infinity	infinite forever lemniscate
+∞	infinity	infinite forever lemniscate oo
 √	square root	radical root sqrt
 ∛	cube root	radical root
 ∑	sum	sigma summation total
@@ -1712,31 +1712,31 @@ _	underscore	low line underline
 ∴	therefore	so hence
 ∵	because	since
 ·	middle dot	dot product times interpunct
-¹	superscript one	power exponent
-²	superscript two	squared power exponent
-³	superscript three	cubed power exponent
+¹	superscript one	power exponent ^1
+²	superscript two	squared power exponent ^2
+³	superscript three	cubed power exponent ^3
 ⁿ	superscript n	power exponent
-½	one half	fraction half
-⅓	one third	fraction third
-⅔	two thirds	fraction
-¼	one quarter	fraction quarter
-¾	three quarters	fraction
+½	one half	fraction half 1/2
+⅓	one third	fraction third 1/3
+⅔	two thirds	fraction 2/3
+¼	one quarter	fraction quarter 1/4
+¾	three quarters	fraction 3/4
 #Arrows
-→	rightwards arrow	right arrow next
-←	leftwards arrow	left arrow back
+→	rightwards arrow	right arrow next ->
+←	leftwards arrow	left arrow back <-
 ↑	upwards arrow	up arrow
 ↓	downwards arrow	down arrow
-↔	left right arrow	both ways
+↔	left right arrow	both ways <->
 ↕	up down arrow	both ways
-⇒	rightwards double arrow	implies then
+⇒	rightwards double arrow	implies then =>
 ⇐	leftwards double arrow	implied by
-⇔	left right double arrow	if and only if iff equivalent
+⇔	left right double arrow	if and only if iff equivalent <=>
 ↗	north east arrow	up right
 ↙	south west arrow	down left
 ↻	clockwise arrow	refresh reload redo rotate
 ↺	anticlockwise arrow	counterclockwise undo rotate
-⟶	long rightwards arrow	maps to
-↦	maps to	mapsto function
+⟶	long rightwards arrow	maps to -->
+↦	maps to	mapsto function |->
 ⤴	arrow curving up	
 ⤵	arrow curving down	
 ➜	heavy round-tipped arrow	right
@@ -1762,24 +1762,24 @@ $	dollar	usd money currency
 ₦	naira	ngn nigerian money currency
 ฿	baht	thb thai money currency
 #Punctuation
-—	em dash	dash long
-–	en dash	dash range
-…	ellipsis	dots three
+—	em dash	dash long ---
+–	en dash	dash range --
+…	ellipsis	dots three ...
 •	bullet	dot list point
 “	left double quote	quotation mark curly smart
 ”	right double quote	quotation mark curly smart
 ‘	left single quote	quotation mark curly smart apostrophe
 ’	right single quote	apostrophe curly smart
-«	left guillemet	angle quote
-»	right guillemet	angle quote
+«	left guillemet	angle quote <<
+»	right guillemet	angle quote >>
 †	dagger	obelisk footnote
 ‡	double dagger	footnote
 §	section sign	section law
 ¶	pilcrow	paragraph
-©	copyright	c
-®	registered	r trademark
-™	trade mark	tm trademark
-℗	sound recording copyright	p phonogram
+©	copyright	c (c)
+®	registered	r trademark (r)
+™	trade mark	tm trademark (tm)
+℗	sound recording copyright	p phonogram (p)
 №	numero	number no
 ¿	inverted question mark	spanish
 ¡	inverted exclamation mark	spanish

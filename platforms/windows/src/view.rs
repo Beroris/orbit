@@ -263,6 +263,27 @@ impl View {
         forward.or(back).unwrap_or(index)
     }
 
+    /// Ctrl+Up and Ctrl+Down in a grid: to the first tile of the section before or after, with
+    /// its title at the top. Up from inside a section goes to that section's start first.
+    pub fn move_section(&mut self, delta: i32) {
+        let titles: Vec<usize> = self.rows.iter().enumerate().filter(|(_, row)| row.is_header()).map(|(at, _)| at).collect();
+        let current = titles.iter().rposition(|&title| title < self.selected);
+        let to = match (delta > 0, current) {
+            (true, Some(current)) => titles.get(current + 1),
+            (true, None) => titles.first(),
+            (false, Some(current)) if self.selected > titles[current] + 1 => titles.get(current),
+            (false, Some(current)) => current.checked_sub(1).and_then(|before| titles.get(before)),
+            (false, None) => None,
+        };
+        let Some(&title) = to else { return };
+        self.select(title + 1);
+        if let Some(grid) = &self.grid
+            && let Some(line) = grid.line_of(title)
+        {
+            self.scroll = line.min(grid.last_first());
+        }
+    }
+
     /// Left and right in a grid: along the rows, stepping over section titles.
     pub fn move_along(&mut self, delta: i32) {
         if self.rows.is_empty() {
@@ -663,6 +684,23 @@ mod tests {
         assert_eq!(v.scroll, 0, "with the title back in view");
         v.select(3);
         assert_eq!(v.selected, 4);
+    }
+
+    #[test]
+    fn ctrl_up_and_down_jump_a_section() {
+        let mut v = with_sections();
+        v.select(1);
+        v.move_section(1);
+        assert_eq!(v.selected, 4, "the next section's first row");
+        v.move_section(1);
+        assert_eq!(v.selected, 4, "nothing after the last section");
+        v.select(5);
+        v.move_section(-1);
+        assert_eq!(v.selected, 4, "this section's start first");
+        v.move_section(-1);
+        assert_eq!(v.selected, 1, "then the section before");
+        v.move_section(-1);
+        assert_eq!(v.selected, 1, "nothing before the first");
     }
 
     #[test]

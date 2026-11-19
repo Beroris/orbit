@@ -44,8 +44,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 static CARET_PENDING: AtomicBool = AtomicBool::new(false);
-/// Where the search box is about to type a × for an x, picked up by `on_query_changed`. -1 if none.
+/// Where the search box is about to type a × for an x or *, picked up by `on_query_changed`, -1 if
+/// none, and which of the two was typed.
 static PENDING_TIMES: AtomicIsize = AtomicIsize::new(-1);
+static PENDING_TIMES_KEY: AtomicIsize = AtomicIsize::new(0);
 /// The snippet's box in a form, which wants Enter for new lines.
 static AREA_HWND: AtomicIsize = AtomicIsize::new(0);
 /// A form left open when the launcher hid comes back if it's shown again this soon.
@@ -310,6 +312,8 @@ pub struct App {
     pub emoji_cache: HashMap<u16, Vec<u8>>,
     /// Where in the search box Orbit typed a × for an x, in UTF-16 units. Only these go back to x.
     typed_times: TypedTimes,
+    /// Which emoji and symbols the Emoji & Symbols list shows. Kept while Orbit runs.
+    emoji_filter: crate::rows::EmojiFilter,
     pub icons: IconCache,
     /// What the clipboard's side panel shows, for the clip last asked for.
     pub clip_preview: Option<Box<ClipPreview>>,
@@ -849,12 +853,12 @@ unsafe extern "system" fn edit_wndproc(hwnd: HWND, message: u32, wparam: WPARAM,
     }
 }
 
-/// In the search box, an x typed after a number in a sum goes in as ×, which is returned for the
+/// In the search box, an x or * typed after a number in a sum goes in as ×, which is returned for the
 /// box to type instead. `on_query_changed` keeps track of it, and turns it back into an x if the
 /// text stops being a sum.
 unsafe fn times_sign_for(edit: HWND, c: u32) -> Option<u32> {
-    // Only a lowercase x: a capital X is kept as typed, so it can't come back changed.
-    if c != u32::from(b'x') {
+    // Only a lowercase x, or a *: a capital X is kept as typed, so it can't come back changed.
+    if c != u32::from(b'x') && c != u32::from(b'*') {
         return None;
     }
     let at_root = APP.with(|cell| cell.try_borrow().ok().is_some_and(|guard| guard.as_ref().is_some_and(|app| app.view.scope == Scope::Root)));
@@ -872,6 +876,7 @@ unsafe fn times_sign_for(edit: HWND, c: u32) -> Option<u32> {
         let before = String::from_utf16_lossy(&units[..start]);
         let after = String::from_utf16_lossy(&units[end..]);
         if orbit_core::calc::x_types_times(&before, &after) {
+            PENDING_TIMES_KEY.store(c as isize, Ordering::Relaxed);
             PENDING_TIMES.store(start as isize, Ordering::Relaxed);
             return Some(0xD7);
         }
@@ -1049,6 +1054,7 @@ pub fn startup(options: Options) -> windows::core::Result<()> {
             emoji_table: Vec::new(),
             emoji_cache: HashMap::new(),
             typed_times: TypedTimes::default(),
+            emoji_filter: Default::default(),
             icons: IconCache::new(icon_capacity),
             clip_preview: None,
             clip_preview_wanted: None,
@@ -3104,6 +3110,13 @@ impl App {
             self.toggle_filter_menu();
             return true;
         }
+        // Ctrl+Up and Ctrl+Down in a grid jump a whole section, such as from Smileys to Animals.
+        if ctrl && self.view.grid.is_some() && (vk == VK_UP.0 || vk == VK_DOWN.0) && unsafe { GetKeyState(0x10) } >= 0 {
+            self.view.move_section(if vk == VK_UP.0 { -1 } else { 1 });
+            self.after_selection_change();
+            self.redraw();
+            return true;
+        }
         // The keys an action menu shows next to its entries work without opening it.
         if ctrl {
             let shift = unsafe { GetKeyState(0x10) } < 0;
@@ -4383,11 +4396,12 @@ impl App {
         }
     }
 
-    /// Keeps track of the × signs typed for an x, and turns them all back into x in one step,
+    /// Keeps track of the × signs typed for an x or *, and turns them all back in one step,
     /// one undo, once the text can't be a sum, as when a letter makes "4×4" into "4×4 truck".
     /// The swap happens before the text is searched, so the search only runs once, on the result.
     fn untype_times(&mut self) {
-        let typed = usize::try_from(PENDING_TIMES.swap(-1, Ordering::Relaxed)).ok();
+        let key = PENDING_TIMES_KEY.load(Ordering::Relaxed) as u16;
+        let typed = usize::try_from(PENDING_TIMES.swap(-1, Ordering::Relaxed)).ok().map(|at| (at, key));
         if self.view.scope != Scope::Root {
             self.typed_times = TypedTimes::default();
             return;
@@ -4395,13 +4409,13 @@ impl App {
         let mut units = wide(&self.read_query());
         units.pop(); // the terminating nul
         self.typed_times.follow(&units, typed);
-        let (Some(&first), Some(&last)) = (self.typed_times.at.first(), self.typed_times.at.last()) else { return };
+        let (Some(&(first, _)), Some(&(last, _))) = (self.typed_times.at.first(), self.typed_times.at.last()) else { return };
         if !orbit_core::calc::times_no_longer_fits(&String::from_utf16_lossy(&units)) {
             return;
         }
         let mut span = units[first..=last].to_vec();
-        for &at in &self.typed_times.at {
-            span[at - first] = u16::from(b'x');
+        for &(at, key) in &self.typed_times.at {
+            span[at - first] = key;
         }
         span.push(0);
         unsafe {
@@ -4548,11 +4562,22 @@ impl App {
                 accessory: None,
             }
         };
+        // The filter drop-down's choice, such as only Arrows, applies to everything below.
+        let filter = self.emoji_filter;
+        let shown = |at: u16| {
+            let entry = &table[at as usize];
+            match filter {
+                EmojiFilter::All => true,
+                EmojiFilter::Emoji => !entry.symbol,
+                EmojiFilter::Symbols => entry.symbol,
+                EmojiFilter::Group(group) => entry.group as usize == group as usize,
+            }
+        };
         let place_of = |glyph: &str| table.iter().position(|entry| entry.glyph == glyph).map(|at| at as u16);
         let mut rows = Vec::with_capacity(table.len() + 16);
         if query.trim().is_empty() {
             let mut section = |title: &str, glyphs: &[String]| {
-                let places: Vec<u16> = glyphs.iter().filter_map(|glyph| place_of(glyph)).collect();
+                let places: Vec<u16> = glyphs.iter().filter_map(|glyph| place_of(glyph)).filter(|&at| shown(at)).collect();
                 if !places.is_empty() {
                     rows.push(Row::header(title));
                     rows.extend(places.into_iter().map(tile));
@@ -4562,7 +4587,7 @@ impl App {
             section("Recently Used", &self.settings.emoji.recent);
             let groups = emoji::groups();
             let mut group = None;
-            for (at, entry) in table.iter().enumerate() {
+            for (at, entry) in table.iter().enumerate().filter(|&(at, _)| shown(at as u16)) {
                 if group != Some(entry.group) {
                     group = Some(entry.group);
                     rows.push(Row::header(groups.get(entry.group as usize).copied().unwrap_or("")));
@@ -4570,7 +4595,7 @@ impl App {
                 rows.push(tile(at as u16));
             }
         } else {
-            rows.extend(emoji::search(&table, query).into_iter().map(tile));
+            rows.extend(emoji::search(&table, query).into_iter().filter(|&at| shown(at)).map(tile));
         }
         self.emoji_table = table;
         let room = ui::ROW_HEIGHT * self.full_rows() as i32;
@@ -5735,6 +5760,14 @@ impl App {
                     self.report("Couldn't reach the clipboard");
                 }
             }
+            Op::EmojiCopyCode(at) => {
+                let Some(code) = self.emoji_table.get(at as usize).map(|entry| orbit_core::emoji::code_points(entry.glyph)) else { return };
+                self.hide(true);
+                if !clipboard::write_text(&code) {
+                    self.report("Couldn't reach the clipboard");
+                }
+            }
+            Op::EmojiFilter(filter) => self.choose_emoji_filter(filter),
             Op::EmojiPin(at, pinned) => {
                 let Some(glyph) = self.emoji_table.get(at as usize).map(|entry| entry.glyph) else { return };
                 self.settings.emoji.pinned.retain(|other| other != glyph);
@@ -7607,20 +7640,20 @@ mod frost_tests {
     }
 }
 
-/// The × signs Orbit typed for an x in the search box, kept in step as the text changes, so
-/// only those go back to x and a × that was pasted or picked from the grid stays.
+/// The × signs Orbit typed for an x or * in the search box, kept in step as the text changes, so
+/// only those go back to what was typed, and a × that was pasted or picked from the grid stays.
 #[derive(Default)]
 struct TypedTimes {
     /// The text as last seen, in UTF-16 units.
     text: Vec<u16>,
-    /// Where each typed × is in `text`.
-    at: Vec<usize>,
+    /// Where each typed × is in `text`, and the x or * it was typed as.
+    at: Vec<(usize, u16)>,
 }
 
 impl TypedTimes {
     /// Moves the positions along for the change from the last text to `text`, adds a × that was
     /// just typed at `typed`, and drops any that were deleted or typed over.
-    fn follow(&mut self, text: &[u16], typed: Option<usize>) {
+    fn follow(&mut self, text: &[u16], typed: Option<(usize, u16)>) {
         let old = &self.text;
         let prefix = old.iter().zip(text).take_while(|(a, b)| a == b).count();
         let room = old.len().min(text.len()) - prefix;
@@ -7629,12 +7662,12 @@ impl TypedTimes {
         self.at = self
             .at
             .iter()
-            .filter_map(|&at| if at < prefix { Some(at) } else if at >= old_end { Some(at - old_end + new_end) } else { None })
+            .filter_map(|&(at, key)| if at < prefix { Some((at, key)) } else if at >= old_end { Some((at - old_end + new_end, key)) } else { None })
             .chain(typed)
-            .filter(|&at| text.get(at) == Some(&0xD7))
+            .filter(|&(at, _)| text.get(at) == Some(&0xD7))
             .collect();
         self.at.sort_unstable();
-        self.at.dedup();
+        self.at.dedup_by_key(|&mut (at, _)| at);
         self.text = text.to_vec();
     }
 }

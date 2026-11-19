@@ -1331,7 +1331,19 @@ pub fn render(app: &mut App) {
             (Some(status), _) => status.as_str().into(),
             // The name of what's selected, since tiles have nowhere else to show it.
             (None, true) => match list.rows.get(list.selected) {
-                Some(row) if !row.is_header() => format!("{} · {}", list.scope.label(), row.title).into(),
+                // An emoji or symbol shows its code point, such as U+2318, in place of the list's
+                // name, so a long name still fits. Not for a long sequence, such as a family.
+                Some(row) if !row.is_header() => match row.icon {
+                    RowIcon::Emoji(at) => {
+                        let code = app.emoji_table.get(at as usize).map(|entry| orbit_core::emoji::code_points(entry.glyph)).unwrap_or_default();
+                        if code.is_empty() || code.matches(' ').count() > 1 {
+                            format!("{} · {}", list.scope.label(), row.title).into()
+                        } else {
+                            format!("{} · {code}", row.title).into()
+                        }
+                    }
+                    _ => format!("{} · {}", list.scope.label(), row.title).into(),
+                },
                 _ => list.scope.label().into(),
             },
             (None, false) => list.scope.label().into(),
