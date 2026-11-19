@@ -2670,7 +2670,8 @@ fn draw_grid(buffer: &mut Backbuffer, paint: &Paint, list: &ListState, grid: &Gr
     }
     for cell in cells {
         if cache.len() >= EMOJI_CACHE_MAX && !cache.contains_key(&cell.at) {
-            cache.clear();
+            // Room is made from tiles off screen, so the ones already drawn this frame stay.
+            cache.retain(|at, _| cells.iter().any(|cell| cell.at == *at));
         }
         let Some(entry) = emoji.get(cell.at as usize) else { continue };
         let pixels = cache.entry(cell.at).or_insert_with(|| {
